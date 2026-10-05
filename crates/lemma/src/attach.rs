@@ -1,12 +1,19 @@
-use crate::claims::{lines_of, parse, Claim, Receipt};
+use crate::claims::{is_behaviour_part, lines_of, parse, Claim, Receipt};
 use crate::outcome::Outcome;
 use crate::payload::Finding;
-use crate::receipt::{is_dirty, rewrite_body, Checker};
+use crate::receipt::{is_dirty, Checker};
 use crate::repin::repinned_line;
 use anyhow::Result;
+use lazyspec::engine::document::Part;
 use lazyspec::engine::fs::RealFileSystem;
 use lazyspec::engine::store::Store;
 use std::path::Path;
+
+struct Located<'a> {
+    part: &'a Part,
+    body: String,
+    claim: Claim,
+}
 
 pub fn run(store: &Store, root: &Path, id: &str, claim_id: &str, target: &str) -> Result<Outcome> {
     let Ok(doc) = store.resolve_shorthand(id) else {
@@ -25,9 +32,19 @@ pub fn run(store: &Store, root: &Path, id: &str, claim_id: &str, target: &str) -
     else {
         return refuse(format!("{target} is not <path>#<symbol>"));
     };
-    let body = store.get_body_raw(&doc.path, &RealFileSystem)?;
-    let Some(claim) = parse(&body).claims.into_iter().find(|c| c.id == claim_id) else {
-        return refuse(format!("no claim {claim_id} in {}", doc.id));
+    let mut found = locate(store, &doc.parts, claim_id)?;
+    if found.len() > 1 {
+        let names: Vec<&str> = found.iter().map(|l| l.part.name.as_str()).collect();
+        return refuse(format!(
+            "claim {claim_id} is live in more than one part ({}); strike it in all but one",
+            names.join(", ")
+        ));
+    }
+    let Some(Located { part, body, claim }) = found.pop() else {
+        return refuse(format!(
+            "no live claim {claim_id} in any behaviour part of {}",
+            doc.id
+        ));
     };
     let checker = Checker::new(root);
     if let Err(why) = checker.symbol_resolves(path, Some(symbol)) {
@@ -60,8 +77,23 @@ pub fn run(store: &Store, root: &Path, id: &str, claim_id: &str, target: &str) -
             );
         }
     }
-    rewrite_body(root, &doc.path, &body, &lines.join("\n"))?;
+    std::fs::write(root.join(&part.path), lines.join("\n"))?;
     Ok(Outcome::done(Vec::new()))
+}
+
+fn locate<'a>(store: &Store, parts: &'a [Part], claim_id: &str) -> Result<Vec<Located<'a>>> {
+    let mut found = Vec::new();
+    for part in parts.iter().filter(|p| is_behaviour_part(&p.name)) {
+        let body = store.get_part_body_raw(&part.path, &RealFileSystem)?;
+        let live = parse(&body)
+            .claims
+            .into_iter()
+            .find(|c| c.id == claim_id && !c.struck);
+        if let Some(claim) = live {
+            found.push(Located { part, body, claim });
+        }
+    }
+    Ok(found)
 }
 
 fn existing_receipt<'a>(claim: &'a Claim, path: &str, symbol: &str) -> Option<&'a Receipt> {

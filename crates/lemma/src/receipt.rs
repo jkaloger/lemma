@@ -1,5 +1,4 @@
 use crate::claims::Receipt;
-use anyhow::{anyhow, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use lazyspec::engine::symbols::{RustSymbolExtractor, SymbolExtractor, TypeScriptSymbolExtractor};
 use regex::Regex;
@@ -35,24 +34,6 @@ pub fn git_lines(root: &Path, args: &[&str]) -> Option<Vec<String>> {
 
 pub fn is_dirty(root: &Path, file: &str) -> bool {
     git_output(root, &["status", "--porcelain", "--", file]).is_some_and(|s| !s.trim().is_empty())
-}
-
-pub fn rewrite_body(root: &Path, doc_path: &Path, body: &str, rewritten: &str) -> Result<()> {
-    let file = root.join(doc_path);
-    let text = std::fs::read_to_string(&file)?;
-    let prefix = body_prefix(&text, body)?;
-    std::fs::write(file, format!("{prefix}{rewritten}"))?;
-    Ok(())
-}
-
-pub fn body_line_offset(root: &Path, doc_path: &Path, body: &str) -> Result<usize> {
-    let text = std::fs::read_to_string(root.join(doc_path))?;
-    Ok(body_prefix(&text, body)?.matches('\n').count())
-}
-
-fn body_prefix<'a>(text: &'a str, body: &str) -> Result<&'a str> {
-    text.strip_suffix(body)
-        .ok_or_else(|| anyhow!("document body does not end the file"))
 }
 
 fn glob_set(patterns: &[String]) -> GlobSet {
@@ -140,7 +121,9 @@ impl Checker {
         if !self.commit_exists(sha) {
             return Err(format!("commit {sha} does not exist"));
         }
-        self.symbol_resolves(&receipt.path, receipt.symbol.as_deref())?;
+        if receipt.checked_by.is_none() {
+            self.symbol_resolves(&receipt.path, receipt.symbol.as_deref())?;
+        }
         Ok(sha.to_string())
     }
 
@@ -158,7 +141,7 @@ impl Checker {
             return Verdict::Unresolved(format!("cannot diff {sha} against HEAD"));
         };
         let test_path = receipt.path.trim_start_matches("./");
-        if changed.iter().any(|f| f == test_path) {
+        if receipt.checked_by.is_none() && changed.iter().any(|f| f == test_path) {
             return Verdict::Stale(format!("{test_path} changed since {sha}"));
         }
         let governed = glob_set(governs);

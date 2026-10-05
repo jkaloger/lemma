@@ -31,7 +31,23 @@ pub fn specs_from_store(root: &Path, names: &[&str]) -> Vec<Doc> {
         .filter_map(|meta| {
             let mut json = doc_to_json(meta);
             json["body"] = store.get_body_raw(&meta.path, &RealFileSystem).ok()?.into();
-            serde_json::from_value::<Doc>(json).ok()
+            json["parts"] = meta
+                .parts
+                .iter()
+                .map(|part| {
+                    let body = store.get_part_body_raw(&part.path, &RealFileSystem).ok()?;
+                    Some(serde_json::json!({
+                        "name": part.name,
+                        "path": part.path.to_string_lossy(),
+                        "body": body,
+                    }))
+                })
+                .collect::<Option<Vec<_>>>()?
+                .into();
+            serde_json::from_value::<Doc>(json).ok().map(|doc| Doc {
+                from_store: true,
+                ..doc
+            })
         })
         .filter(|doc| doc.doc_type == "spec")
         .collect()

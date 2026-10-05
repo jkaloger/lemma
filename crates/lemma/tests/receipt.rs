@@ -1,14 +1,15 @@
 mod common;
 use common::*;
 
-const DELTA: &str = "docs/deltas/DELTA-001-d.md";
+const INDEX: &str = "docs/deltas/DELTA-001-d/index.md";
+const DELTA: &str = "docs/deltas/DELTA-001-d/behaviour.SPEC-001.md";
 
 fn delta_with_bare_claims(repo: &Repo) {
-    repo.delta_file(
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(
         1,
-        "in-progress",
-        &["SPEC-001"],
-        &delta_body("- [AC-D1-1] first\n- [AC-D1-2] second\n  note\n"),
+        "SPEC-001",
+        "- [AC-D1-1] first\n- [AC-D1-2] second\n  note\n",
     );
     repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
     repo.commit("delta");
@@ -23,6 +24,7 @@ fn receipt_pins_head_as_the_first_line_under_the_claim() {
     let repo = Repo::new();
     delta_with_bare_claims(&repo);
     let head = repo.head();
+    let index_before = repo.read(INDEX);
 
     let run = repo.run(&["receipt", "DELTA-001", "AC-D1-2", &target()], "");
 
@@ -35,7 +37,28 @@ fn receipt_pins_head_as_the_first_line_under_the_claim() {
         "{text}"
     );
     assert!(text.contains("- [AC-D1-1] first\n- [AC-D1-2]"));
-    assert!(text.starts_with("---\n"));
+    assert!(!text.starts_with("---"));
+    assert_eq!(repo.read(INDEX), index_before);
+}
+
+#[test]
+fn receipt_lands_in_the_part_holding_the_claim() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    repo.delta_part(1, "SPEC-002", "- [AC-D1-7] elsewhere\n");
+    repo.commit("second part");
+    let other_part = delta_part_path(1, "SPEC-002");
+    let first_before = repo.read(DELTA);
+    let head = repo.head();
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-7", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert_eq!(
+        repo.read(&other_part),
+        format!("- [AC-D1-7] elsewhere\n  @ref {TEST_FILE}#reopen_keeps_prior@{head}\n")
+    );
+    assert_eq!(repo.read(DELTA), first_before);
 }
 
 fn refused(repo: &Repo, args: &[&str]) -> Run {
@@ -54,7 +77,19 @@ fn receipt_refuses_an_unknown_claim() {
 
     let run = refused(&repo, &["receipt", "DELTA-001", "AC-D1-9", &target()]);
 
-    assert!(run.has_message("AC-D1-9"));
+    assert!(run.has_message("no live claim AC-D1-9 in any behaviour part"));
+}
+
+#[test]
+fn receipt_refuses_a_claim_that_only_sits_in_a_non_behaviour_part() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    repo.write("docs/deltas/DELTA-001-d/tasks.md", "- [AC-D1-5] a task\n");
+    repo.commit("tasks part");
+
+    let run = refused(&repo, &["receipt", "DELTA-001", "AC-D1-5", &target()]);
+
+    assert!(run.has_message("AC-D1-5"));
 }
 
 #[test]
@@ -148,11 +183,11 @@ fn receipt_for_a_different_target_adds_another_ref() {
 #[test]
 fn receipt_keeps_crlf_line_endings() {
     let repo = Repo::new();
-    repo.delta_file(
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(
         1,
-        "in-progress",
-        &["SPEC-001"],
-        &delta_body("- [AC-D1-1] first\r\n- [AC-D1-2] second\r\n  note\r\n"),
+        "SPEC-001",
+        "- [AC-D1-1] first\r\n- [AC-D1-2] second\r\n  note\r\n",
     );
     repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
     let head = repo.commit("delta");
@@ -167,4 +202,41 @@ fn receipt_keeps_crlf_line_endings() {
         )),
         "{text:?}"
     );
+}
+
+#[test]
+fn receipt_ignores_a_struck_claim_and_lands_on_the_live_one() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    repo.delta_part(1, "SPEC-002", "- ~~[AC-D1-2]~~ moved away\n");
+    repo.commit("struck copy in another part");
+    let struck_before = repo.read(&delta_part_path(1, "SPEC-002"));
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-2", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(repo.read(DELTA).contains("@ref"));
+    assert_eq!(repo.read(&delta_part_path(1, "SPEC-002")), struck_before);
+}
+
+#[test]
+fn receipt_refuses_a_claim_that_is_only_struck() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    repo.delta_part(1, "SPEC-002", "- ~~[AC-D1-8]~~ gone\n");
+    repo.commit("struck only");
+
+    refused(&repo, &["receipt", "DELTA-001", "AC-D1-8", &target()]);
+}
+
+#[test]
+fn receipt_refuses_a_claim_live_in_two_parts() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    repo.delta_part(1, "SPEC-002", "- [AC-D1-2] twice\n");
+    repo.commit("duplicate");
+
+    let run = refused(&repo, &["receipt", "DELTA-001", "AC-D1-2", &target()]);
+
+    assert!(run.has_message("more than one part"));
 }

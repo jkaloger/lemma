@@ -1,4 +1,4 @@
-use crate::claims::{parse, Behaviour};
+use crate::claims::{is_behaviour_part, parse, target_of, Claim, BEHAVIOUR_PART};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -7,6 +7,19 @@ pub struct Relation {
     #[serde(rename = "type")]
     pub rel_type: String,
     pub target: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Part {
+    pub name: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+pub struct BehaviourPart<'a> {
+    pub name: &'a str,
+    pub target: Option<&'a str>,
+    pub claims: Vec<Claim>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -25,7 +38,11 @@ pub struct Doc {
     #[serde(default)]
     pub body: String,
     #[serde(default)]
+    pub parts: Vec<Part>,
+    #[serde(default)]
     pub content_hash: String,
+    #[serde(skip)]
+    pub from_store: bool,
 }
 
 impl Doc {
@@ -37,8 +54,21 @@ impl Doc {
             .collect()
     }
 
-    pub fn behaviour(&self, root: &Path) -> Behaviour {
-        parse(&self.body).at_file_line(self.body_line_offset(root))
+    pub fn part(&self, name: &str) -> Option<&Part> {
+        self.parts.iter().find(|p| p.name == name)
+    }
+
+    pub fn spec_claims(&self) -> Vec<Claim> {
+        self.part(BEHAVIOUR_PART)
+            .map(|p| parse(&p.body).claims)
+            .unwrap_or_default()
+    }
+
+    pub fn index_claims(&self, root: &Path) -> Vec<Claim> {
+        let offset = self.body_line_offset(root);
+        let mut claims = parse(&self.body).claims;
+        claims.iter_mut().for_each(|c| c.line += offset);
+        claims
     }
 
     fn body_line_offset(&self, root: &Path) -> usize {
@@ -55,6 +85,18 @@ impl Doc {
         };
         let newlines_before = text[..frontmatter_end + at].matches('\n').count();
         newlines_before.saturating_sub(leading)
+    }
+
+    pub fn behaviour_parts(&self) -> Vec<BehaviourPart<'_>> {
+        self.parts
+            .iter()
+            .filter(|p| is_behaviour_part(&p.name))
+            .map(|p| BehaviourPart {
+                name: &p.name,
+                target: target_of(&p.name),
+                claims: parse(&p.body).claims,
+            })
+            .collect()
     }
 
     pub fn is_named(&self, reference: &str) -> bool {
@@ -84,6 +126,8 @@ pub struct Finding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     pub message: String,
 }
@@ -106,6 +150,7 @@ impl Finding {
         Self {
             severity,
             id: Some(id.to_string()),
+            part: None,
             line,
             message: message.into(),
         }
@@ -115,15 +160,23 @@ impl Finding {
         Self {
             severity: "error",
             id: None,
+            part: None,
             line: None,
             message: message.into(),
         }
+    }
+
+    pub fn in_part(mut self, part: &str) -> Self {
+        self.part = Some(part.to_string());
+        self
     }
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Update {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
     pub hash: String,
     pub body: String,
 }

@@ -196,3 +196,51 @@ fn ignore_attribute_must_start_the_line_in_rust() {
 
     assert_eq!(stop(&repo, false).code, 0);
 }
+
+fn complete_delta_setup(repo: &Repo, status: &str) {
+    repo.spec_file(1, "active", &["a/**"], "## Intent\n\nA.\n");
+    repo.delta_file(1, status, &["SPEC-001"], "## Intent\n\nOne.\n");
+    repo.commit("delta");
+}
+
+fn set_status(repo: &Repo, from: &str, to: &str) {
+    let rel = "docs/deltas/DELTA-001-d/index.md";
+    let text = repo
+        .read(rel)
+        .replace(&format!("status: {from}"), &format!("status: {to}"));
+    repo.write(rel, &text);
+}
+
+#[test]
+fn working_tree_complete_over_head_in_progress_errors() {
+    let repo = Repo::new();
+    complete_delta_setup(&repo, "in-progress");
+    set_status(&repo, "in-progress", "complete");
+
+    let run = stop(&repo, false);
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stderr.contains("DELTA-001 is complete"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_delta_already_complete_at_head_passes() {
+    let repo = Repo::new();
+    complete_delta_setup(&repo, "complete");
+
+    assert_eq!(stop(&repo, false).code, 0);
+}
+
+#[test]
+fn a_new_delta_already_complete_in_the_working_tree_errors() {
+    let repo = Repo::new();
+    repo.spec_file(1, "active", &["a/**"], "## Intent\n\nA.\n");
+    repo.commit("spec");
+    repo.delta_file(1, "complete", &["SPEC-001"], "## Intent\n\nOne.\n");
+
+    assert_eq!(stop(&repo, false).code, 2);
+}

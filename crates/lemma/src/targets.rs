@@ -1,5 +1,5 @@
-use crate::claims::Claim;
-use crate::payload::Doc;
+use crate::claims::{part_for, Claim};
+use crate::payload::{BehaviourPart, Doc, Finding};
 
 pub struct Targets<'a> {
     pub declared: Vec<&'a str>,
@@ -24,28 +24,58 @@ impl<'a> Targets<'a> {
             .collect()
     }
 
-    pub fn is_multi(&self) -> bool {
-        self.declared.len() > 1
+    pub fn names(&self, target: &str) -> bool {
+        self.declared.contains(&target) || self.resolved.iter().any(|s| s.is_named(target))
     }
 
-    pub fn names(&self, partition: &str) -> bool {
-        self.declared.contains(&partition) || self.resolved.iter().any(|s| s.is_named(partition))
+    pub fn spec_named(&self, target: &str) -> Option<&'a Doc> {
+        self.resolved.iter().copied().find(|s| s.is_named(target))
     }
 
-    pub fn spec_for(&self, claim: &Claim) -> Option<&'a Doc> {
-        match &claim.partition {
-            Some(name) => self.resolved.iter().copied().find(|s| s.is_named(name)),
-            None if !self.is_multi() => self.resolved.first().copied(),
-            None => None,
-        }
+    pub fn governs_of(&self, part: &BehaviourPart) -> Vec<String> {
+        part.target
+            .and_then(|t| self.spec_named(t))
+            .map(|s| s.governs.clone())
+            .unwrap_or_default()
     }
 
-    pub fn claims_for<'c>(&self, spec: &Doc, claims: &'c [Claim]) -> Vec<&'c Claim> {
-        claims
+    pub fn claims_for<'c>(&self, spec: &Doc, parts: &'c [BehaviourPart]) -> Vec<&'c Claim> {
+        parts
             .iter()
-            .filter(|c| match &c.partition {
-                Some(name) => spec.is_named(name),
-                None => !self.is_multi(),
+            .filter(|p| p.target.is_some_and(|t| spec.is_named(t)))
+            .flat_map(|p| &p.claims)
+            .collect()
+    }
+
+    pub fn missing_parts(&self, delta: &Doc, blocking: bool) -> Vec<Finding> {
+        self.resolved
+            .iter()
+            .map(|spec| spec.id.as_str())
+            .filter(|id| delta.part(&part_for(id)).is_none())
+            .map(|id| {
+                let message = format!("fold target {id} has no `{}` part", part_for(id));
+                match blocking {
+                    true => Finding::error(&delta.id, None, message),
+                    false => Finding::warning(&delta.id, None, message),
+                }
+            })
+            .collect()
+    }
+
+    pub fn orphan_parts(&self, parts: &[BehaviourPart], delta: &Doc) -> Vec<Finding> {
+        parts
+            .iter()
+            .filter(|p| !p.target.is_some_and(|t| self.names(t)))
+            .map(|p| {
+                Finding::error(
+                    &delta.id,
+                    None,
+                    format!(
+                        "part {} does not name one of this delta's folds-into targets (expected behaviour.<target-id>); its claims would not fold",
+                        p.name
+                    ),
+                )
+                .in_part(p.name)
             })
             .collect()
     }

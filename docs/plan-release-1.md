@@ -63,3 +63,78 @@ Deferred: 4 (report scope globs matching nothing).
 - [x] W11 docs: README install (`claude plugin install lemma@lemma`, restart before delta work), `reviewed:` (decision 15), intent count move, `receipt` and by-hand dry-run usage.
 - [x] W12 skills: delta step 5 adds "test already at HEAD: `lemma receipt …`, no commit"; step 5 uses `lemma receipt` over hand edits; entry setup runs version check and ends with restart note when plugin just installed.
 - [ ] W13 acceptance: re-run hydra steps 1–3 against 1.1, then steps 4–5 (needs second spec, e.g. `src/store.rs`). Feed back into decisions on friction 1 and 2.
+
+# Plan: release 1.2
+
+Specs and deltas become lazyspec bundles. Claims move out of `## Behaviour` sections into `behaviour` parts.
+
+## Scope
+
+In: spec and delta templates as directory templates; claim parsing, validate, transition, fold, receipt and re-pin read and write parts; README and skills.
+Out: back-compat with flat spec/delta files. The only adopter is the hydra acceptance clone; it is re-created at W13.
+
+## Decisions
+
+18. **Spec bundle.** `.lazyspec/templates/spec/` holds `index.md` (frontmatter, `## Intent`) and `behaviour.md` (empty). Spec claims live only in part `behaviour`. The part is the section: no `## Behaviour` heading inside it. A claim-shaped item in a spec's `index.md` is a warning. The empty part ships with the template because lazyspec refuses hook updates to a part a document lacks.
+19. **Delta bundle.** `.lazyspec/templates/delta/` holds `index.md` (frontmatter, `## Intent`). Claims go in one part per fold target, named `behaviour.<target-id>` (file `behaviour.<target-id>.md`). `tasks` stays an optional, unread part. `### <spec-id>` partitions are gone. Gate `draft`→`in-progress`: every fold target has its part, every `behaviour.*` part names a fold target, at least one claim across them. Validate reports the same mismatches: a missing part is a warning at `draft` and an error from `in-progress` on; an orphan part is an error.
+20. **Fold writes a part.** One update per target: `{id, part: "behaviour", hash, body}`. The body is the merged claim list. A target with no `behaviour` part is an error finding and nothing is written.
+21. **Finding locations.** Findings on claims carry `part` and the line in the part file. Part files have no frontmatter, so the offset is zero. Findings on `index.md` keep decision 12.
+22. **Governing spec.** For a delta claim it is the target named by its part. For a spec claim it is the spec. Replaces the partition rule in decision 5.
+23. **receipt and re-pin edit part files.** `lemma receipt` finds the claim id across the delta's `behaviour.*` parts and edits that file. `re-pin` rewrites receipts in every `behaviour*` part of the document. The re-pin flag compares each part's claim lines at the old sha.
+
+## Work
+
+- [x] W14 `payload`: `Doc.parts` (`name`, `body`); `Finding.part`; `Update.part`. Behaviour comes from parts, not body.
+- [x] W15 `claims`/`validate`/`transition`: part-scoped parsing, decisions 18, 19, 21, 22. Tests: claim in spec index errors; target without part errors; orphan part errors; finding carries part and part-file line.
+- [x] W16 `fold`: decision 20. Tests: update targets part `behaviour`; missing part errors with no updates; append, replace and strike per target from separate parts.
+- [x] W17 `receipt`/`repin`: decision 23. Tests: receipt lands in the right part file; refusal when the claim is in no part; re-pin flag per part.
+- [x] W18 pack: directory templates for spec and delta; remove flat `spec.md` and `delta.md`.
+- [x] W19 docs and skills: README (Document types, Claims and receipts, Fold, Files), RFC-001 untouched, entry and delta skills say where claims go.
+- [x] Review fixes: `receipt` matches only live claims and refuses ambiguity; store-loaded fold targets error instead of writing; index claim-shaped items warn; `missing_parts` only over resolved targets, warning at draft; `claim_end`/`Section`/`BEHAVIOUR_PART` tidy.
+
+# Plan: release 1.3
+
+Cuts the sign-off vocabulary to claims, receipts and `[intent]`. Starts after 1.2 lands.
+
+## Scope
+
+In: approval by transition, human-checked receipts, merged `complete`/`archived`, README type list.
+Out: removing `waived:` and `verified-by` needs no code (both were release 2); README only.
+
+## Decisions
+
+24. **Approval is the transition.** `approved-by` is removed. A human moving a delta `in-progress`→`complete` approves it; lazyspec's `reviewed: <sha>` stamp records where. Stop reports an error when a delta whose status at HEAD is not `complete` is `complete` in the working tree. A commit made inside the session escapes this, as it escaped the `approved-by` check. Contract mutation no longer invalidates anything; it stays a validate finding.
+25. **Human-checked receipt.** `@checked <name>@<sha>` under a claim is a receipt. Fresh when nothing under the governing spec's `governs` changed since `<sha>`. `lemma receipt` does not write it; humans do. `re-pin` leaves it alone; only a human re-dates it. Replaces `verified-by`.
+26. **No waivers.** `waived:` is dropped. A claim that should not be machine-checked is `[intent]`.
+27. **`complete` folds.** Delta lifecycle is `draft`→`in-progress`→`complete`. The `in-progress`→`complete` gate checks receipts and, when clean, returns the fold updates in the same response. `archived` and the `complete`→`archived` dispatch are removed. By-hand dry-run at `in-progress` reports gate findings plus the `would fold` preview, no write. Amends decisions 6, 7, 14.
+28. **Five types.** README drops `bug` and `idea`. A bug is a draft delta whose first claim reproduces the defect. An idea is a draft spec with `Intent` only. Release 2 types are `convention` and `dictum`.
+## Work
+
+- [x] W20 `.lazyspec.toml`: delta lifecycle without `archived`. `transition`: decision 27. Tests: clean `in-progress`→`complete` returns fold updates; gate error returns none; `complete` by hand is a no-op.
+- [x] W21 `claims`/`receipt`: `@checked` (decision 25). Tests: parsed as receipt; stale on governs change; satisfies the gate; `re-pin` rewrites its sha.
+- [x] W22 `stop`: decision 24. Test: working-tree `complete` over HEAD `in-progress` errors; HEAD already `complete` passes.
+- [x] W23 docs and skills: README (approval, receipts, statuses, types, Hooks binary, Status), delta skill (agent stops at review-ready, never moves to `complete`).
+# Plan: release 1.4
+
+Closes the gaps from the 2026-10-05 review: the gate and fold trust state they never checked, and validate cannot fail CI. Starts after 1.3 lands.
+
+## Scope
+
+In: clean tree at `complete`, fold base check, validate error severities, per-claim re-pin, test-path receipts, README ordering and trust model.
+Out: test execution in lemma (receipts stay symbol resolution; the trust model is stated, not changed). Retrospective reconciliation of human edits: hydra interview first, release 2.
+
+## Decisions
+
+29. **Clean tree at `complete`.** The `in-progress`→`complete` gate errors when any receipt file or any file under a target's `governs` has uncommitted changes (`git status --porcelain` on those paths). Same rule `lemma receipt` applies in decision 16: the working tree the symbols resolved against must be the commit the pin names. Amends decision 5's "Stop concern" split: Stop still owns ungoverned drift.
+30. **Fold checks the base.** A delta claim that replaces or strikes a spec claim carries `@base <hash>`, the hash of the spec claim's block (text and receipts, not the id line's indentation) at the time the delta claim was written. `lemma receipt` and the delta skill write it; `draft`→`in-progress` errors on a replace or strike without one. The fold errors when the spec's current block hash differs from `@base`, naming both. A delta claim whose id already exists in the spec and has no `@base` is an error, so an accidental id collision cannot overwrite. Replaces the "two in-flight deltas touching one claim id" warning, which stays as a warning. Amends decision 7 and 20.
+31. **Validate severities.** Invariants are errors; drift is a warning. Errors: claim without receipt on an in-progress delta; receipt does not resolve; fold target does not resolve; part/target mismatch (decision 19); claim in `index.md` (decision 18); replace without `@base`. Warnings: receipt stale; `@base` mismatch on a draft; intent count; two in-flight deltas on one id. The CI template keeps `lazyspec validate --warnings` and now fails on the error set. Amends decision 13's note: drift is advisory per RFC §7.7, invariants are not.
+32. **re-pin per claim.** `lemma re-pin <id> [claim-id ...]` re-pins the named claims, or every claim when none are named. Decision 9's flag becomes a refusal: a receipt whose file changed between the old sha and HEAD while that claim's block is unchanged is not re-pinned (exit 2, nothing written) unless `--force` is passed, which writes and emits the warning. The comparison is per claim block, not per part. Amends decision 9 and 23.
+33. **Receipts name tests.** `@ref` paths must match the governing spec's `tests` glob list, a new frontmatter key beside `governs` (default: `**/tests/**`, `**/*_test.*`, `**/*.test.*`, `**/*.spec.*`). A production symbol is not a receipt. `lemma receipt` refuses, validate and the gate error. README states the trust model in one paragraph: a receipt is a resolving symbol in a test file at a commit, not evidence the test ran or passed; the project's runner and the human reviewer own those.
+
+## Work
+
+- [ ] W24 `transition`: decision 29. Tests: dirty governed file blocks `complete`; dirty ungoverned file passes; dirty receipt file blocks.
+- [ ] W25 `claims`/`fold`/`transition`/`receipt`: decision 30. Tests: `@base` parsed; replace without `@base` fails `draft`→`in-progress`; fold with matching base replaces; fold with changed base errors naming both hashes; new id colliding with existing spec id errors; strike with stale base errors.
+- [ ] W26 `validate` and `docs/ci/lemma-validate.yml`: decision 31. Tests: each error-set finding is severity error; stale receipt stays warning; CI job exits non-zero on an unreceipted in-progress claim.
+- [ ] W27 `repin`: decision 32. Tests: named claims only are rewritten; changed-file-unchanged-claim refuses with nothing written; `--force` writes and warns; per-claim comparison when a sibling claim changed.
+- [ ] W28 `receipt`/`validate`/`transition` and README: decision 33. Tests: production path refused by `lemma receipt`; default globs accept `tests/foo.rs` and `foo.test.ts`; spec-level `tests` overrides default. README: shipped behaviour first, release 2+ fenced in Status only, trust-model paragraph under Receipts.

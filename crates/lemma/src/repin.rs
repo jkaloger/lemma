@@ -1,13 +1,20 @@
-use crate::claims::{lines_of, parse, Claim, Receipt};
+use crate::claims::{is_behaviour_part, lines_of, parse, Claim, Receipt};
 use crate::outcome::Outcome;
 use crate::payload::Finding;
-use crate::receipt::{body_line_offset, git_lines, git_output, is_dirty, rewrite_body, Checker};
+use crate::receipt::{git_lines, git_output, is_dirty, Checker};
 use anyhow::Result;
+use lazyspec::engine::document::Part;
 use lazyspec::engine::fs::RealFileSystem;
 use lazyspec::engine::store::Store;
 use regex::Regex;
 use std::path::Path;
 use std::sync::OnceLock;
+
+struct Loaded<'a> {
+    part: &'a Part,
+    body: String,
+    claims: Vec<Claim>,
+}
 
 pub fn run(store: &Store, root: &Path, id: &str) -> Result<Outcome> {
     let Ok(doc) = store.resolve_shorthand(id) else {
@@ -15,8 +22,16 @@ pub fn run(store: &Store, root: &Path, id: &str) -> Result<Outcome> {
             "no document matches {id}"
         ))]));
     };
-    let body = store.get_body_raw(&doc.path, &RealFileSystem)?;
-    let claims = parse(&body).claims;
+    let loaded = doc
+        .parts
+        .iter()
+        .filter(|p| is_behaviour_part(&p.name))
+        .map(|part| {
+            let body = store.get_part_body_raw(&part.path, &RealFileSystem)?;
+            let claims = parse(&body).claims;
+            Ok(Loaded { part, body, claims })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let checker = Checker::new(root);
     let Some(head) = checker.head_short() else {
         return Ok(Outcome::refuse(vec![Finding::error(
@@ -26,40 +41,49 @@ pub fn run(store: &Store, root: &Path, id: &str) -> Result<Outcome> {
         )]));
     };
 
-    let offset = body_line_offset(root, &doc.path, &body)?;
-    let broken = unresolved_symbols(&doc.id, &claims, &checker, offset);
+    let broken: Vec<Finding> = loaded
+        .iter()
+        .flat_map(|l| unresolved_symbols(&doc.id, l, &checker))
+        .collect();
     if !broken.is_empty() {
         return Ok(Outcome::refuse(broken));
     }
 
-    let flags = contract_flags(&doc.id, &doc.path, &claims, root, offset);
-    rewrite_body(
-        root,
-        &doc.path,
-        &body,
-        &repinned_body(&body, &claims, &head),
-    )?;
+    let flags = loaded
+        .iter()
+        .flat_map(|l| contract_flags(&doc.id, l, root))
+        .collect();
+    for l in &loaded {
+        std::fs::write(
+            root.join(&l.part.path),
+            repinned_body(&l.body, &l.claims, &head),
+        )?;
+    }
     Ok(Outcome::done(flags))
 }
 
-fn unresolved_symbols(
-    doc_id: &str,
-    claims: &[Claim],
-    checker: &Checker,
-    offset: usize,
-) -> Vec<Finding> {
-    claims
+fn receipts_of<'a>(loaded: &'a Loaded) -> impl Iterator<Item = (&'a Claim, &'a Receipt)> {
+    loaded
+        .claims
         .iter()
         .flat_map(|claim| claim.receipts.iter().map(move |r| (claim, r)))
+}
+
+fn unresolved_symbols(doc_id: &str, loaded: &Loaded, checker: &Checker) -> Vec<Finding> {
+    receipts_of(loaded)
+        .filter(|(_, receipt)| receipt.checked_by.is_none())
         .filter_map(|(claim, receipt)| {
             let err = checker
                 .symbol_resolves(&receipt.path, receipt.symbol.as_deref())
                 .err()?;
-            Some(Finding::error(
-                doc_id,
-                Some(receipt.line + offset),
-                format!("{}: cannot re-pin, {err}", claim.id),
-            ))
+            Some(
+                Finding::error(
+                    doc_id,
+                    Some(receipt.line),
+                    format!("{}: cannot re-pin, {err}", claim.id),
+                )
+                .in_part(&loaded.part.name),
+            )
         })
         .collect()
 }
@@ -91,27 +115,19 @@ fn commits_touching(root: &Path, sha: &str, file: &str) -> Vec<String> {
     git_lines(root, &["log", "--format=%H", &range, "--", file]).unwrap_or_default()
 }
 
-fn contract_flags(
-    doc_id: &str,
-    doc_path: &Path,
-    claims: &[Claim],
-    root: &Path,
-    offset: usize,
-) -> Vec<Finding> {
-    claims
-        .iter()
-        .flat_map(|claim| claim.receipts.iter().map(move |r| (claim, r)))
-        .filter_map(|(claim, receipt)| flag(doc_id, doc_path, claim, receipt, root, offset))
+fn contract_flags(doc_id: &str, loaded: &Loaded, root: &Path) -> Vec<Finding> {
+    receipts_of(loaded)
+        .filter(|(_, receipt)| receipt.checked_by.is_none())
+        .filter_map(|(claim, receipt)| flag(doc_id, loaded.part, claim, receipt, root))
         .collect()
 }
 
 fn flag(
     doc_id: &str,
-    doc_path: &Path,
+    part: &Part,
     claim: &Claim,
     receipt: &Receipt,
     root: &Path,
-    offset: usize,
 ) -> Option<Finding> {
     let sha = receipt.sha.as_deref()?;
     let file = receipt.path.trim_start_matches("./");
@@ -122,21 +138,24 @@ fn flag(
     }
     let claim_moved_in_commit = committed
         .iter()
-        .any(|c| diff_changes_claim(doc_diff_in_commit(root, c, doc_path)));
+        .any(|c| diff_changes_claim(doc_diff_in_commit(root, c, &part.path)));
     if claim_moved_in_commit {
         return None;
     }
-    if dirty && diff_changes_claim(doc_diff_in_worktree(root, doc_path)) {
+    if dirty && diff_changes_claim(doc_diff_in_worktree(root, &part.path)) {
         return None;
     }
-    Some(Finding::warning(
-        doc_id,
-        Some(receipt.line + offset),
-        format!(
-            "{}: {} changed since {sha} but the claim did not; re-pin is flagged for review",
-            claim.id, receipt.path
-        ),
-    ))
+    Some(
+        Finding::warning(
+            doc_id,
+            Some(receipt.line),
+            format!(
+                "{}: {} changed since {sha} but the claim did not; re-pin is flagged for review",
+                claim.id, receipt.path
+            ),
+        )
+        .in_part(&part.name),
+    )
 }
 
 pub fn repinned_line(line: &str, head: &str) -> String {

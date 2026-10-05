@@ -1,5 +1,6 @@
 use crate::payload::Finding;
-use crate::receipt::git_lines;
+use crate::receipt::{git_lines, git_output};
+use lazyspec::engine::document::DocMeta;
 use lazyspec::engine::store::Store;
 use regex::Regex;
 use std::collections::BTreeSet;
@@ -10,7 +11,30 @@ pub fn run(store: &Store, root: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.extend(cross_governs(store, root, &touched));
     findings.extend(pending_tests(root, &touched));
+    findings.extend(unapproved_completions(store, root, &touched));
     findings
+}
+
+fn status_at_head(root: &Path, doc_path: &Path) -> Option<String> {
+    let spec = format!("HEAD:./{}", doc_path.to_string_lossy());
+    let text = git_output(root, &["show", &spec])?;
+    Some(DocMeta::parse(&text).ok()?.status.to_string())
+}
+
+fn unapproved_completions(store: &Store, root: &Path, touched: &[String]) -> Vec<Finding> {
+    store
+        .all_docs()
+        .into_iter()
+        .filter(|d| d.doc_type.to_string() == "delta" && d.status.to_string() == "complete")
+        .filter(|d| touched.iter().any(|f| Path::new(f) == d.path))
+        .filter(|d| status_at_head(root, &d.path).as_deref() != Some("complete"))
+        .map(|d| {
+            Finding::bare_error(format!(
+                "{} is complete in the working tree but not at HEAD. If a human moved it, leave it and ask them to commit; never change the status back",
+                d.id
+            ))
+        })
+        .collect()
 }
 
 fn touched_files(root: &Path) -> Vec<String> {

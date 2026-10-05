@@ -16,8 +16,16 @@ fn spec(body: &str) -> serde_json::Value {
     doc("SPEC-001", "spec", "active", &["src/**"], &[], body)
 }
 
-fn delta(id: &str, status: &str, folds: &[&str], behaviour: &str) -> serde_json::Value {
-    doc(id, "delta", status, &[], folds, &delta_body(behaviour))
+fn spec_with_claims(claims: &str) -> serde_json::Value {
+    with_parts(spec(""), &[("behaviour", claims)])
+}
+
+fn delta_in(id: &str, status: &str, folds: &[&str], parts: &[(&str, &str)]) -> serde_json::Value {
+    with_parts(doc(id, "delta", status, &[], folds, INTENT), parts)
+}
+
+fn delta(id: &str, status: &str, folds: &[&str], claims: &str) -> serde_json::Value {
+    delta_in(id, status, folds, &[("behaviour.SPEC-001", claims)])
 }
 
 #[test]
@@ -56,7 +64,8 @@ fn receipt_goes_stale_after_a_governed_change() {
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["severity"], "warning");
     assert_eq!(findings[0]["id"], "DELTA-001");
-    assert_eq!(findings[0]["line"], 8);
+    assert_eq!(findings[0]["part"], "behaviour.SPEC-001");
+    assert_eq!(findings[0]["line"], 2);
     assert!(run.has_message("stale"));
 }
 
@@ -71,7 +80,7 @@ fn receipt_goes_stale_after_the_test_file_changes() {
     repo.commit("edit test");
     let d = delta(
         "DELTA-001",
-        "complete",
+        "in-progress",
         &["SPEC-001"],
         &claim("AC-D1-1", "works", Some(&sha)),
     );
@@ -130,7 +139,8 @@ fn claim_without_receipt_is_flagged_but_intent_is_skipped() {
     let findings = findings_besides_intent_counts(&run);
     assert_eq!(findings.len(), 1);
     assert!(run.has_message("AC-D1-1: claim has no receipt"));
-    assert_eq!(findings[0]["line"], 7);
+    assert_eq!(findings[0]["part"], "behaviour.SPEC-001");
+    assert_eq!(findings[0]["line"], 1);
 }
 
 #[test]
@@ -147,54 +157,150 @@ fn stale_receipt_in_an_active_spec_is_flagged() {
     let sha = repo.head();
     repo.write("src/lib.rs", "pub fn b() {}\n");
     repo.commit("change");
-    let s = spec(&format!(
-        "## Behaviour\n\n{}",
-        claim("AC-S-1", "holds", Some(&sha))
-    ));
+    let s = spec_with_claims(&claim("AC-S-1", "holds", Some(&sha)));
 
     let run = validate(&repo, vec![s]);
 
     assert_eq!(run.findings()[0]["id"], "SPEC-001");
+    assert_eq!(run.findings()[0]["part"], "behaviour");
     assert!(run.has_message("stale"));
 }
 
 #[test]
-fn partition_naming_a_spec_outside_folds_into_is_flagged() {
+fn claim_in_a_spec_index_is_an_error() {
     let repo = Repo::new();
-    let body = "### SPEC-001\n\n- [AC-D1-1] [intent] a\n\n### SPEC-009\n\n- [AC-D1-2] [intent] b\n";
-    let d = delta("DELTA-001", "draft", &["SPEC-001", "SPEC-002"], body);
-    let s2 = doc("SPEC-002", "spec", "active", &[], &[], "");
+    let s = spec("## Intent\n\nx\n\n- [AC-S-1] [intent] stray\n");
 
-    let run = validate(&repo, vec![spec(""), s2, d]);
+    let run = validate(&repo, vec![s]);
 
-    assert_eq!(findings_besides_intent_counts(&run).len(), 1);
-    assert!(run.has_message("partition SPEC-009"));
+    let findings = findings_besides_intent_counts(&run);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["severity"], "warning");
+    assert!(run.has_message("AC-S-1: claim-shaped item is in index.md"));
 }
 
 #[test]
-fn unpartitioned_claims_in_a_multi_target_delta_are_flagged() {
+fn claim_in_a_delta_index_gets_the_finding() {
     let repo = Repo::new();
-    let d = delta(
+    let d = doc(
+        "DELTA-001",
+        "delta",
+        "draft",
+        &[],
+        &["SPEC-001"],
+        "## Intent\n\nx\n\n- [AC-D1-1] [intent] stray\n",
+    );
+    let d = with_parts(d, &[("behaviour.SPEC-001", "- [AC-D1-2] [intent] a\n")]);
+
+    let run = validate(&repo, vec![spec(""), d]);
+
+    let findings = findings_besides_intent_counts(&run);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["severity"], "warning");
+    assert!(run.has_message("AC-D1-1: claim-shaped item is in index.md"));
+}
+
+#[test]
+fn a_fold_target_without_its_part_is_an_error() {
+    let repo = Repo::new();
+    for (status, severity) in [("draft", "warning"), ("in-progress", "error")] {
+        let d = delta_in("DELTA-001", status, &["SPEC-001"], &[]);
+
+        let run = validate(&repo, vec![spec(""), d]);
+
+        let findings = run.findings();
+        assert_eq!(findings.len(), 1, "{status}");
+        assert_eq!(findings[0]["severity"], severity, "{status}");
+        assert!(run.has_message("fold target SPEC-001 has no `behaviour.SPEC-001` part"));
+    }
+}
+
+#[test]
+fn an_unresolved_target_is_not_also_reported_as_a_missing_part() {
+    let repo = Repo::new();
+    let d = delta_in("DELTA-001", "in-progress", &["docs/specs/x.md"], &[]);
+
+    let run = validate(&repo, vec![d]);
+
+    assert_eq!(run.findings().len(), 1);
+    assert!(run.has_message("does not resolve to a spec"));
+}
+
+#[test]
+fn a_part_naming_no_fold_target_is_an_error_carrying_the_part() {
+    let repo = Repo::new();
+    let d = delta_in(
+        "DELTA-001",
+        "draft",
+        &["SPEC-001"],
+        &[
+            ("behaviour.SPEC-001", "- [AC-D1-1] [intent] a\n"),
+            ("behaviour.SPEC-009", "- [AC-D1-2] [intent] b\n"),
+            ("behaviour", "- [AC-D1-3] [intent] c\n"),
+            ("tasks", "- [AC-D1-4] not read\n"),
+        ],
+    );
+
+    let run = validate(&repo, vec![spec(""), d]);
+
+    let errors: Vec<_> = findings_besides_intent_counts(&run);
+    let parts: Vec<&str> = errors.iter().map(|f| f["part"].as_str().unwrap()).collect();
+    assert_eq!(parts, ["behaviour.SPEC-009", "behaviour"]);
+    assert!(errors.iter().all(|f| f["severity"] == "error"));
+    assert!(run.has_message("part behaviour.SPEC-009 does not name"));
+}
+
+#[test]
+fn a_multi_target_delta_with_a_part_per_target_is_clean() {
+    let repo = Repo::new();
+    let d = delta_in(
         "DELTA-001",
         "draft",
         &["SPEC-001", "SPEC-002"],
-        "- [AC-D1-1] [intent] loose\n",
+        &[
+            ("behaviour.SPEC-001", "- [AC-D1-1] [intent] a\n"),
+            ("behaviour.SPEC-002", "- [AC-D1-2] [intent] b\n"),
+        ],
     );
     let s2 = doc("SPEC-002", "spec", "active", &[], &[], "");
 
     let run = validate(&repo, vec![spec(""), s2, d]);
 
-    assert!(run.has_message("not under a spec partition"));
+    assert!(findings_besides_intent_counts(&run).is_empty());
+}
+
+#[test]
+fn receipts_are_judged_against_the_spec_named_by_the_part() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    repo.write("lib2/x.rs", "fn x() {}\n");
+    repo.commit("spec 2 territory");
+    let s2 = doc("SPEC-002", "spec", "active", &["lib2/**"], &[], "");
+    let d = delta_in(
+        "DELTA-001",
+        "in-progress",
+        &["SPEC-001", "SPEC-002"],
+        &[
+            ("behaviour.SPEC-001", &claim("AC-D1-1", "a", Some(&sha))),
+            ("behaviour.SPEC-002", &claim("AC-D1-2", "b", Some(&sha))),
+        ],
+    );
+
+    let run = validate(&repo, vec![spec(""), s2, d]);
+
+    let findings = run.findings();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["part"], "behaviour.SPEC-002");
 }
 
 #[test]
 fn fold_target_missing_from_the_payload_is_flagged() {
     let repo = Repo::new();
-    let d = delta(
+    let d = delta_in(
         "DELTA-001",
         "draft",
         &["SPEC-404"],
-        "- [AC-D1-1] [intent] x\n",
+        &[("behaviour.SPEC-404", "- [AC-D1-1] [intent] x\n")],
     );
 
     let run = validate(&repo, vec![d]);
@@ -225,6 +331,9 @@ fn two_in_progress_deltas_touching_one_claim_id_are_both_flagged() {
         .map(|f| f["id"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(ids, vec!["DELTA-001", "DELTA-002"]);
+    assert!(findings_besides_intent_counts(&run)
+        .iter()
+        .all(|f| f["part"] == "behaviour.SPEC-001" && f["line"] == 1));
     assert!(run.has_message("AC-X-1 is touched by in-progress deltas DELTA-001, DELTA-002"));
 }
 
@@ -320,32 +429,53 @@ fn spec_missing_from_payload_is_loaded_from_the_store() {
 }
 
 #[test]
-fn finding_lines_are_file_lines_not_body_lines() {
+fn index_finding_lines_are_file_lines_not_body_lines() {
     let repo = Repo::new();
-    repo.delta_file(
+    repo.spec_file(
         1,
-        "in-progress",
-        &["SPEC-001"],
-        &delta_body("- [AC-D1-1] bare\n"),
+        "active",
+        &["src/**"],
+        "## Intent\n\nx\n\n- [AC-S-1] [intent] stray\n",
     );
-    let rel = "docs/deltas/DELTA-001-d.md";
+    let rel = "docs/specs/SPEC-001-s/index.md";
     let file = repo.read(rel);
     for body in [
         raw_body_of(&file),
         raw_body_of(&file).trim_start_matches('\n'),
     ] {
-        let mut d = delta("DELTA-001", "in-progress", &["SPEC-001"], "");
-        d["path"] = rel.into();
-        d["body"] = body.into();
+        let mut s = spec(body);
+        s["path"] = rel.into();
 
-        let run = validate(&repo, vec![spec(""), d]);
+        let run = validate(&repo, vec![s]);
 
         assert_eq!(
-            run.findings()[0]["line"],
-            repo.claim_line(rel, "AC-D1-1"),
+            findings_besides_intent_counts(&run)[0]["line"],
+            repo.claim_line(rel, "AC-S-1"),
             "{body:?}"
         );
     }
+}
+
+#[test]
+fn part_findings_carry_the_part_file_line() {
+    let repo = Repo::new();
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", "- [AC-D1-1] [intent] a\n- [AC-D1-2] bare\n");
+    let rel = delta_part_path(1, "SPEC-001");
+    let body = repo.read(&rel);
+    let mut d = delta_in(
+        "DELTA-001",
+        "in-progress",
+        &["SPEC-001"],
+        &[("behaviour.SPEC-001", &body)],
+    );
+    d["parts"][0]["path"] = rel.as_str().into();
+
+    let run = validate(&repo, vec![spec(""), d]);
+
+    let finding = &findings_besides_intent_counts(&run)[0];
+    assert_eq!(finding["part"], "behaviour.SPEC-001");
+    assert_eq!(finding["line"], repo.claim_line(&rel, "AC-D1-2"));
 }
 
 #[test]
@@ -371,11 +501,64 @@ fn no_intent_claims_means_no_intent_warning() {
     assert!(validate(&repo, vec![spec(""), d]).findings().is_empty());
 }
 
-#[test]
-fn archived_deltas_get_no_intent_warning() {
-    let repo = Repo::new();
-    let body = "- [AC-D1-1] works\n- [AC-D1-2] [intent] feels right\n";
-    let d = delta("DELTA-001", "archived", &["SPEC-001"], body);
+fn checked_claim(id: &str, sha: &str) -> String {
+    format!("- [{id}] verified by hand\n  @checked jack@{sha}\n")
+}
 
-    assert!(validate(&repo, vec![spec(""), d]).findings().is_empty());
+#[test]
+fn a_checked_receipt_is_fresh_until_governed_code_changes() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    let d = || {
+        delta(
+            "DELTA-001",
+            "in-progress",
+            &["SPEC-001"],
+            &checked_claim("AC-D1-1", &sha),
+        )
+    };
+    assert!(validate(&repo, vec![spec(""), d()]).findings().is_empty());
+
+    repo.write(TEST_FILE, &format!("{TEST_SRC}\n// edit\n"));
+    repo.commit("test file is not governed");
+    assert!(validate(&repo, vec![spec(""), d()]).findings().is_empty());
+
+    repo.write("src/lib.rs", "pub fn a() { /* changed */ }\n");
+    repo.commit("governed change");
+    let run = validate(&repo, vec![spec(""), d()]);
+    assert!(run.has_message("receipt is stale"), "{:?}", run.messages());
+}
+
+#[test]
+fn a_checked_receipt_with_an_unknown_commit_does_not_resolve() {
+    let repo = Repo::new();
+    let d = delta(
+        "DELTA-001",
+        "in-progress",
+        &["SPEC-001"],
+        &checked_claim("AC-D1-1", "deadbee"),
+    );
+
+    assert!(validate(&repo, vec![spec(""), d]).has_message("commit deadbee does not exist"));
+}
+
+#[test]
+fn a_governed_change_after_completion_stales_the_spec_only() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    repo.write("src/lib.rs", "pub fn a() { /* changed */ }\n");
+    repo.commit("governed change after completion");
+    let s = spec_with_claims(&claim("AC-S-1", "holds", Some(&sha)));
+    let d = delta(
+        "DELTA-001",
+        "complete",
+        &["SPEC-001"],
+        &claim("AC-D1-1", "works", Some(&sha)),
+    );
+
+    let run = validate(&repo, vec![s, d]);
+
+    let findings = run.findings();
+    let ids: Vec<&str> = findings.iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["SPEC-001"], "{:?}", run.messages());
 }

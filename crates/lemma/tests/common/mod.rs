@@ -12,6 +12,7 @@ name = "spec"
 plural = "specs"
 dir = "docs/specs"
 prefix = "SPEC"
+subdirectory = true
 authorship = "generated"
 staleness = "drift"
 lifecycle = { states = ["draft", "active"], edges = [{ from = "draft", to = "active" }] }
@@ -21,8 +22,9 @@ name = "delta"
 plural = "deltas"
 dir = "docs/deltas"
 prefix = "DELTA"
+subdirectory = true
 authorship = "generated"
-lifecycle = { states = ["draft", "in-progress", "complete", "archived"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }, { from = "complete", to = "archived" }] }
+lifecycle = { states = ["draft", "in-progress", "complete"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }] }
 
 [[relationships]]
 name = "folds-into"
@@ -181,7 +183,12 @@ impl Repo {
         let content = format!(
             "---\ntitle: \"Spec {n}\"\ntype: spec\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n---\n\n{body}"
         );
-        self.write(&format!("docs/specs/SPEC-00{n}-s.md"), &content);
+        self.write(&format!("{}/index.md", spec_dir(n)), &content);
+        self.spec_behaviour(n, "");
+    }
+
+    pub fn spec_behaviour(&self, n: u32, body: &str) {
+        self.write(&spec_part_path(n), body);
     }
 
     pub fn delta_file(&self, n: u32, status: &str, folds: &[&str], body: &str) {
@@ -197,8 +204,28 @@ impl Repo {
         let content = format!(
             "---\ntitle: \"Delta {n}\"\ntype: delta\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\n{related}---\n\n{body}"
         );
-        self.write(&format!("docs/deltas/DELTA-00{n}-d.md"), &content);
+        self.write(&format!("{}/index.md", delta_dir(n)), &content);
     }
+
+    pub fn delta_part(&self, n: u32, target: &str, body: &str) {
+        self.write(&delta_part_path(n, target), body);
+    }
+}
+
+pub fn spec_dir(n: u32) -> String {
+    format!("docs/specs/SPEC-00{n}-s")
+}
+
+pub fn spec_part_path(n: u32) -> String {
+    format!("{}/behaviour.md", spec_dir(n))
+}
+
+pub fn delta_dir(n: u32) -> String {
+    format!("docs/deltas/DELTA-00{n}-d")
+}
+
+pub fn delta_part_path(n: u32, target: &str) -> String {
+    format!("{}/behaviour.{target}.md", delta_dir(n))
 }
 
 pub fn doc(
@@ -215,7 +242,7 @@ pub fn doc(
         .collect();
     json!({
         "id": id,
-        "path": format!("docs/{doc_type}s/{id}-x.md"),
+        "path": format!("docs/{doc_type}s/{id}-x/index.md"),
         "title": id,
         "type": doc_type,
         "status": status,
@@ -224,6 +251,19 @@ pub fn doc(
         "body": body,
         "content_hash": format!("hash-{id}"),
     })
+}
+
+pub fn with_parts(mut doc: Value, parts: &[(&str, &str)]) -> Value {
+    let dir = doc["path"]
+        .as_str()
+        .unwrap()
+        .trim_end_matches("/index.md")
+        .to_string();
+    doc["parts"] = parts
+        .iter()
+        .map(|(name, body)| json!({"name": name, "path": format!("{dir}/{name}.md"), "body": body}))
+        .collect();
+    doc
 }
 
 pub fn validate_payload(docs: Vec<Value>) -> String {
@@ -248,9 +288,7 @@ pub fn claim(id: &str, text: &str, sha: Option<&str>) -> String {
     }
 }
 
-pub fn delta_body(behaviour: &str) -> String {
-    format!("## Intent\n\nBecause.\n\n## Behaviour\n\n{behaviour}")
-}
+pub const INTENT: &str = "## Intent\n\nBecause.\n";
 
 impl Repo {
     pub fn claim_line(&self, rel: &str, id: &str) -> usize {

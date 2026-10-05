@@ -3,6 +3,7 @@ name = "spec"
 plural = "specs"
 dir = "docs/specs"
 prefix = "SPEC"
+subdirectory = true
 staleness = "drift"
 lifecycle = { states = ["draft", "active"], edges = [{ from = "draft", to = "active" }] }
 
@@ -11,8 +12,9 @@ name = "delta"
 plural = "deltas"
 dir = "docs/deltas"
 prefix = "DELTA"
+subdirectory = true
 staleness = "age"
-lifecycle = { states = ["draft", "in-progress", "complete", "archived"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }, { from = "complete", to = "archived" }] }
+lifecycle = { states = ["draft", "in-progress", "complete"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }] }
 
 [[types]]
 name = "decision"
