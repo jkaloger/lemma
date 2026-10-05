@@ -32,7 +32,7 @@ Supersedes RFC-001 §1's thesis ("hooks are how 'no unverified completion' becom
 
 **Connected** means four checks, all mechanical:
 
-1. Every changed governed file has an in-flight delta covering its spec.
+1. A change spanning more than one spec's `governs` has an in-flight delta covering each touched spec. One area alone needs no delta, so chores stay free.
 2. Every changed piece of evidence for a landed claim has a delta that changes that claim.
 3. Every live claim has evidence, unless marked `[intent]`.
 4. Every delta edit is based on the claim version it replaces; `apply` fails rather than overwrite.
