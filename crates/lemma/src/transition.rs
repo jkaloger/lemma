@@ -18,14 +18,45 @@ pub fn run(payload: &Payload, root: &Path) -> Output {
     let supplied = specs_in(payload.context.iter().chain(&payload.documents));
     let stored = specs_from_store(root, &Targets::of(delta, &supplied).unresolved());
     let specs: Vec<&Doc> = supplied.into_iter().chain(specs_in(&stored)).collect();
+    if transition.from == transition.to {
+        return by_hand(&transition.from, delta, &specs, root);
+    }
     match (transition.from.as_str(), transition.to.as_str()) {
-        ("draft", "in-progress") | ("draft", "draft") => Output::findings(start(delta, &specs)),
-        ("in-progress", "complete") | ("in-progress", "in-progress") => {
-            Output::findings(complete(delta, &specs, root))
-        }
-        ("complete", "archived") => archive(delta, &specs),
+        ("draft", "in-progress") => Output::findings(start(delta, &specs, root)),
+        ("in-progress", "complete") => Output::findings(complete(delta, &specs, root)),
+        ("complete", "archived") => archive(delta, &specs, root),
         _ => Output::default(),
     }
+}
+
+fn by_hand(status: &str, delta: &Doc, specs: &[&Doc], root: &Path) -> Output {
+    let (next, findings) = match status {
+        "draft" => ("in-progress", start(delta, specs, root)),
+        "in-progress" => ("complete", complete(delta, specs, root)),
+        "complete" => ("archived", archive_preview(delta, specs, root)),
+        _ => return Output::default(),
+    };
+    if findings.iter().any(|f| f.severity == "error") {
+        return Output::findings(findings);
+    }
+    let mut findings = findings;
+    findings.push(Finding::warning(
+        &delta.id,
+        None,
+        format!("checked {status} → {next}: ready"),
+    ));
+    Output::findings(findings)
+}
+
+fn archive_preview(delta: &Doc, specs: &[&Doc], root: &Path) -> Vec<Finding> {
+    let mut findings = archive_findings(delta, specs, root);
+    let targets = Targets::of(delta, specs);
+    let behaviour = delta.behaviour(root);
+    findings.extend(targets.resolved.iter().filter_map(|spec| {
+        let message = fold_summary(spec, &targets, &behaviour.claims)?;
+        Some(Finding::warning(&delta.id, None, message))
+    }));
+    findings
 }
 
 fn unresolved_targets(delta: &Doc, targets: &Targets) -> Vec<Finding> {
@@ -49,8 +80,8 @@ fn unresolved_targets(delta: &Doc, targets: &Targets) -> Vec<Finding> {
         .collect()
 }
 
-fn dropped_claims(delta: &Doc, targets: &Targets) -> Vec<Finding> {
-    let behaviour = parse(&delta.body);
+fn dropped_claims(delta: &Doc, targets: &Targets, root: &Path) -> Vec<Finding> {
+    let behaviour = delta.behaviour(root);
     let partitions = behaviour
         .partitions
         .iter()
@@ -92,7 +123,7 @@ fn awaits_target(claim: &Claim, targets: &Targets) -> bool {
             .is_some_and(|p| targets.declared.contains(&p))
 }
 
-fn start(delta: &Doc, specs: &[&Doc]) -> Vec<Finding> {
+fn start(delta: &Doc, specs: &[&Doc], root: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
     if !has_intent(&delta.body) {
         findings.push(Finding::error(
@@ -101,7 +132,7 @@ fn start(delta: &Doc, specs: &[&Doc]) -> Vec<Finding> {
             "missing or empty `## Intent` section",
         ));
     }
-    if parse(&delta.body).claims.is_empty() {
+    if delta.behaviour(root).claims.is_empty() {
         findings.push(Finding::error(
             &delta.id,
             None,
@@ -110,16 +141,17 @@ fn start(delta: &Doc, specs: &[&Doc]) -> Vec<Finding> {
     }
     let targets = Targets::of(delta, specs);
     findings.extend(unresolved_targets(delta, &targets));
-    findings.extend(dropped_claims(delta, &targets));
+    findings.extend(dropped_claims(delta, &targets, root));
     findings
 }
 
 fn complete(delta: &Doc, specs: &[&Doc], root: &Path) -> Vec<Finding> {
     let checker = Checker::new(root);
     let targets = Targets::of(delta, specs);
-    let mut findings = dropped_claims(delta, &targets);
+    let mut findings = dropped_claims(delta, &targets, root);
     findings.extend(
-        parse(&delta.body)
+        delta
+            .behaviour(root)
             .claims
             .iter()
             .filter(|c| !c.struck && !c.intent)
@@ -159,14 +191,20 @@ fn unsettled(delta: &Doc, claim: &Claim, targets: &Targets, checker: &Checker) -
         .collect()
 }
 
-fn archive(delta: &Doc, specs: &[&Doc]) -> Output {
+fn archive_findings(delta: &Doc, specs: &[&Doc], root: &Path) -> Vec<Finding> {
     let targets = Targets::of(delta, specs);
     let mut findings = unresolved_targets(delta, &targets);
-    findings.extend(dropped_claims(delta, &targets));
+    findings.extend(dropped_claims(delta, &targets, root));
+    findings
+}
+
+fn archive(delta: &Doc, specs: &[&Doc], root: &Path) -> Output {
+    let findings = archive_findings(delta, specs, root);
     if !findings.is_empty() {
         return Output::findings(findings);
     }
-    let behaviour = parse(&delta.body);
+    let targets = Targets::of(delta, specs);
+    let behaviour = delta.behaviour(root);
     let updates = targets
         .resolved
         .iter()
@@ -176,6 +214,28 @@ fn archive(delta: &Doc, specs: &[&Doc]) -> Output {
         findings: Vec::new(),
         updates,
     }
+}
+
+fn fold_summary(spec: &Doc, targets: &Targets, claims: &[Claim]) -> Option<String> {
+    let mine = targets.claims_for(spec, claims);
+    if mine.is_empty() {
+        return None;
+    }
+    let existing = parse(&spec.body).claims;
+    let strikes = mine
+        .iter()
+        .filter(|c| c.struck && existing.iter().any(|e| e.id == c.id))
+        .count();
+    let folded = mine.iter().filter(|c| !c.struck).count();
+    let strike_note = if strikes > 0 {
+        format!(", strike {strikes}")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "would fold {folded} claims into {}{strike_note}",
+        spec.id
+    ))
 }
 
 fn fold_into(spec: &Doc, targets: &Targets, claims: &[Claim]) -> Option<Update> {

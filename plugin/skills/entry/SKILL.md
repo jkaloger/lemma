@@ -9,9 +9,11 @@ Dispatch only. Do not classify the work as fix, chore or refactor; that is the d
 
 ## Setup (once per project)
 
-1. `command -v lemma`. If missing, tell the user to run `cargo install lemma` and stop. Hooks silently do nothing without it.
-2. If `.lazyspec/dictums/` is missing, copy it from `.lazyspec/cache/config/.lazyspec/dictums/`.
-3. `lazyspec hook trust`.
+1. `lazyspec --version`. If below 0.15 or missing, tell the user to install lazyspec 0.15 or later (`cargo install lazyspec`) and stop.
+2. `command -v lemma`. If missing, tell the user to run `cargo install lemma` and stop. Hooks silently do nothing without it.
+3. If `.lazyspec/dictums/` is missing, copy it from `.lazyspec/cache/config/.lazyspec/dictums/`.
+4. `lazyspec hook trust`.
+5. If the plugin was installed this session, end setup by telling the user to restart the Claude Code session; skills and the Stop hook load only after restart. Do no delta work before then.
 
 ## Route
 

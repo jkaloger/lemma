@@ -1,4 +1,4 @@
-use crate::claims::{parse, Claim};
+use crate::claims::Claim;
 use crate::payload::{Doc, Finding, Output, Payload};
 use crate::project::specs_from_store;
 use crate::receipt::{Checker, Verdict};
@@ -13,12 +13,20 @@ pub fn run(payload: &Payload, root: &Path) -> Output {
     let mut findings = Vec::new();
     for doc in &payload.documents {
         match doc.doc_type.as_str() {
-            "delta" => findings.extend(check_delta(doc, &specs, &checker)),
-            "spec" => findings.extend(check_spec(doc, &checker)),
+            "delta" => {
+                findings.extend(check_delta(doc, &specs, &checker, root));
+                if doc.status != "archived" {
+                    findings.extend(intent_count(doc, root));
+                }
+            }
+            "spec" => {
+                findings.extend(check_spec(doc, &checker, root));
+                findings.extend(intent_count(doc, root));
+            }
             _ => {}
         }
     }
-    findings.extend(overlapping_claims(&payload.documents));
+    findings.extend(overlapping_claims(&payload.documents, root));
     Output::findings(findings)
 }
 
@@ -63,19 +71,33 @@ fn receipt_findings(
         .collect()
 }
 
-fn check_spec(spec: &Doc, checker: &Checker) -> Vec<Finding> {
+fn intent_count(doc: &Doc, root: &Path) -> Option<Finding> {
+    let behaviour = doc.behaviour(root);
+    let live: Vec<&Claim> = behaviour.claims.iter().filter(|c| !c.struck).collect();
+    let intent = live.iter().filter(|c| c.intent).count();
+    if intent == 0 {
+        return None;
+    }
+    Some(Finding::warning(
+        &doc.id,
+        None,
+        format!("{intent} of {} claims are [intent]", live.len()),
+    ))
+}
+
+fn check_spec(spec: &Doc, checker: &Checker, root: &Path) -> Vec<Finding> {
     if !receipts_apply(spec) {
         return Vec::new();
     }
-    parse(&spec.body)
+    spec.behaviour(root)
         .claims
         .iter()
         .flat_map(|claim| receipt_findings(spec, claim, &spec.governs, checker))
         .collect()
 }
 
-fn check_delta(delta: &Doc, specs: &[&Doc], checker: &Checker) -> Vec<Finding> {
-    let behaviour = parse(&delta.body);
+fn check_delta(delta: &Doc, specs: &[&Doc], checker: &Checker, root: &Path) -> Vec<Finding> {
+    let behaviour = delta.behaviour(root);
     let targets = Targets::of(delta, specs);
     let mut findings: Vec<Finding> = targets
         .unresolved()
@@ -144,13 +166,13 @@ fn check_delta(delta: &Doc, specs: &[&Doc], checker: &Checker) -> Vec<Finding> {
     findings
 }
 
-fn overlapping_claims(docs: &[Doc]) -> Vec<Finding> {
+fn overlapping_claims(docs: &[Doc], root: &Path) -> Vec<Finding> {
     let mut by_claim: BTreeMap<String, Vec<(&Doc, usize)>> = BTreeMap::new();
     for delta in docs
         .iter()
         .filter(|d| d.doc_type == "delta" && d.status == "in-progress")
     {
-        for claim in parse(&delta.body).claims {
+        for claim in delta.behaviour(root).claims {
             let holders = by_claim.entry(claim.id).or_default();
             if holders.iter().any(|(d, _)| d.id == delta.id) {
                 continue;

@@ -1,4 +1,6 @@
+use crate::claims::{parse, Behaviour};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Relation {
@@ -33,6 +35,26 @@ impl Doc {
             .filter(|r| r.rel_type == "folds-into")
             .map(|r| r.target.as_str())
             .collect()
+    }
+
+    pub fn behaviour(&self, root: &Path) -> Behaviour {
+        parse(&self.body).at_file_line(self.body_line_offset(root))
+    }
+
+    fn body_line_offset(&self, root: &Path) -> usize {
+        let Ok(text) = std::fs::read_to_string(root.join(&self.path)) else {
+            return 0;
+        };
+        let first = self.body.trim_start_matches('\n');
+        let leading = self.body.len() - first.len();
+        let Some(frontmatter_end) = text.find("\n---").map(|i| i + 4) else {
+            return 0;
+        };
+        let Some(at) = text[frontmatter_end..].find(first) else {
+            return 0;
+        };
+        let newlines_before = text[..frontmatter_end + at].matches('\n').count();
+        newlines_before.saturating_sub(leading)
     }
 
     pub fn is_named(&self, reference: &str) -> bool {

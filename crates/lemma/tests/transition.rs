@@ -310,19 +310,17 @@ fn by_hand_draft_to_draft_runs_the_start_gate() {
 }
 
 #[test]
-fn same_status_complete_and_archived_never_fold() {
+fn same_status_archived_returns_nothing() {
     let repo = Repo::new();
-    let body = delta_body(&fresh_claim(&repo, "AC-D1-1"));
-    for status in ["complete", "archived"] {
-        let d = delta(status, &["SPEC-001"], &body);
+    let d = delta(
+        "archived",
+        &["SPEC-001"],
+        &delta_body(&fresh_claim(&repo, "AC-D1-1")),
+    );
 
-        let run = pre(&repo, status, status, d, vec![spec(1, "")]);
+    let run = pre(&repo, "archived", "archived", d, vec![spec(1, "")]);
 
-        assert!(run.findings().is_empty());
-        assert!(run.json()["updates"]
-            .as_array()
-            .is_none_or(|u| u.is_empty()));
-    }
+    assert_eq!(run.json(), serde_json::json!({"findings": []}));
 }
 
 #[test]
@@ -338,5 +336,104 @@ fn missing_context_specs_are_loaded_from_the_store() {
 
     let run = pre(&repo, "in-progress", "in-progress", d, vec![]);
 
-    assert!(run.findings().is_empty(), "{:?}", run.messages());
+    assert_eq!(run.messages(), ["checked in-progress → complete: ready"]);
+}
+
+fn by_hand(repo: &Repo, status: &str, d: Value, context: Vec<Value>) -> Run {
+    pre(repo, status, status, d, context)
+}
+
+#[test]
+fn by_hand_clean_run_says_what_was_checked() {
+    let repo = Repo::new();
+    let cases = [
+        ("draft", "draft → in-progress"),
+        ("in-progress", "in-progress → complete"),
+        ("complete", "complete → archived"),
+    ];
+    for (status, edge) in cases {
+        let body = delta_body(&fresh_claim(&repo, "AC-D1-1"));
+        let d = delta(status, &["SPEC-001"], &body);
+
+        let run = by_hand(&repo, status, d, vec![spec(1, "")]);
+
+        let findings = run.findings();
+        let expected = if status == "complete" { 2 } else { 1 };
+        assert_eq!(findings.len(), expected, "{status}: {:?}", run.messages());
+        assert!(findings.iter().all(|f| f["severity"] == "warning"));
+        assert_eq!(
+            findings.last().unwrap()["message"],
+            format!("checked {edge}: ready").as_str()
+        );
+        assert!(run.json().get("updates").is_none());
+    }
+}
+
+#[test]
+fn by_hand_with_problems_reports_them_without_the_ready_line() {
+    let repo = Repo::new();
+    let d = delta(
+        "in-progress",
+        &["SPEC-001"],
+        &delta_body(&claim("AC-D1-1", "bare", None)),
+    );
+
+    let run = by_hand(&repo, "in-progress", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("AC-D1-1: claim has no receipt"));
+    assert!(!run.has_message("ready"));
+}
+
+#[test]
+fn by_hand_complete_previews_the_fold_as_findings_only() {
+    let repo = Repo::new();
+    let d = delta(
+        "complete",
+        &["SPEC-001"],
+        &delta_body(&fresh_claim(&repo, "AC-D1-1")),
+    );
+
+    let run = by_hand(&repo, "complete", d, vec![spec(1, "")]);
+
+    assert_eq!(
+        run.messages(),
+        [
+            "would fold 1 claims into SPEC-001",
+            "checked complete → archived: ready"
+        ]
+    );
+    assert!(run.findings().iter().all(|f| f["severity"] == "warning"));
+    assert!(run.json().get("updates").is_none());
+}
+
+#[test]
+fn by_hand_complete_preview_counts_replaces_and_strikes() {
+    let repo = Repo::new();
+    let spec_body = "## Behaviour\n\n- [AC-D1-1] old\n- [AC-D1-2] doomed\n";
+    let body = delta_body(&format!(
+        "{}- ~~[AC-D1-2]~~ doomed\n- [AC-D1-3] new\n",
+        fresh_claim(&repo, "AC-D1-1")
+    ));
+    let d = delta("complete", &["SPEC-001"], &body);
+
+    let run = by_hand(&repo, "complete", d, vec![spec(1, spec_body)]);
+
+    assert!(run.has_message("would fold 2 claims into SPEC-001, strike 1"));
+    assert!(run.json().get("updates").is_none());
+}
+
+#[test]
+fn by_hand_complete_with_an_unresolved_target_reports_the_gate_error() {
+    let repo = Repo::new();
+    let d = delta(
+        "complete",
+        &["SPEC-009"],
+        &delta_body(&fresh_claim(&repo, "AC-D1-1")),
+    );
+
+    let run = by_hand(&repo, "complete", d, vec![]);
+
+    assert!(run.has_message("SPEC-009 does not resolve"));
+    assert!(!run.has_message("ready"));
+    assert!(run.json().get("updates").is_none());
 }

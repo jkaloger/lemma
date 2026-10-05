@@ -117,6 +117,21 @@ fn find_section(lines: &[&str], live: &[bool], names: &[&str]) -> Option<Section
     Some(Section { heading, end })
 }
 
+impl Behaviour {
+    pub fn at_file_line(mut self, offset: usize) -> Self {
+        if let Some(section) = &mut self.section {
+            section.heading += offset;
+            section.end += offset;
+        }
+        self.partitions.iter_mut().for_each(|p| p.line += offset);
+        for claim in &mut self.claims {
+            claim.line += offset;
+            claim.receipts.iter_mut().for_each(|r| r.line += offset);
+        }
+        self
+    }
+}
+
 pub fn has_intent(body: &str) -> bool {
     let lines = lines_of(body);
     let live = outside_fences(&lines);
@@ -236,6 +251,17 @@ Why.
 
 - [AC-NOT-1] outside behaviour
 ";
+
+    #[test]
+    fn at_file_line_shifts_the_section_with_the_lines() {
+        let plain = parse(DELTA);
+        let shifted = parse(DELTA).at_file_line(10);
+
+        let (before, after) = (plain.section.unwrap(), shifted.section.unwrap());
+        assert_eq!(after.heading, before.heading + 10);
+        assert_eq!(after.end, before.end + 10);
+        assert_eq!(shifted.claims[0].line, plain.claims[0].line + 10);
+    }
 
     #[test]
     fn parses_claims_with_receipts_and_lines() {

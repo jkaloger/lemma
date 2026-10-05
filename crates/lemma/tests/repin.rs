@@ -174,3 +174,21 @@ fn repin_flags_a_dirty_test_file_and_clears_when_the_claim_is_dirty_too() {
 
     assert!(repo.run(&["re-pin", "DELTA-001"], "").findings().is_empty());
 }
+
+#[test]
+fn repin_findings_carry_file_lines() {
+    let repo = Repo::new();
+    let old = repo.head();
+    let path = delta_with_receipt(&repo, &old, "works");
+    let receipt_line = repo.claim_line(&path, "AC-D1-1") + 1;
+
+    repo.write(TEST_FILE, EDITED_TEST);
+    repo.commit("weaken test");
+    let flagged = repo.run(&["re-pin", "DELTA-001"], "");
+    assert_eq!(flagged.findings()[0]["line"], receipt_line);
+
+    repo.write(TEST_FILE, "#[test]\nfn renamed() {}\n");
+    repo.commit("rename test");
+    let refused = repo.run(&["re-pin", "DELTA-001"], "");
+    assert_eq!(refused.findings()[0]["line"], receipt_line);
+}

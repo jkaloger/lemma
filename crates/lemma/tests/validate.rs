@@ -5,6 +5,13 @@ fn validate(repo: &Repo, docs: Vec<serde_json::Value>) -> Run {
     repo.run(&["validate"], &validate_payload(docs))
 }
 
+fn findings_besides_intent_counts(run: &Run) -> Vec<serde_json::Value> {
+    run.findings()
+        .into_iter()
+        .filter(|f| !f["message"].as_str().unwrap().ends_with("[intent]"))
+        .collect()
+}
+
 fn spec(body: &str) -> serde_json::Value {
     doc("SPEC-001", "spec", "active", &["src/**"], &[], body)
 }
@@ -120,7 +127,7 @@ fn claim_without_receipt_is_flagged_but_intent_is_skipped() {
 
     let run = validate(&repo, vec![spec(""), d]);
 
-    let findings = run.findings();
+    let findings = findings_besides_intent_counts(&run);
     assert_eq!(findings.len(), 1);
     assert!(run.has_message("AC-D1-1: claim has no receipt"));
     assert_eq!(findings[0]["line"], 7);
@@ -160,7 +167,7 @@ fn partition_naming_a_spec_outside_folds_into_is_flagged() {
 
     let run = validate(&repo, vec![spec(""), s2, d]);
 
-    assert_eq!(run.findings().len(), 1);
+    assert_eq!(findings_besides_intent_counts(&run).len(), 1);
     assert!(run.has_message("partition SPEC-009"));
 }
 
@@ -213,8 +220,7 @@ fn two_in_progress_deltas_touching_one_claim_id_are_both_flagged() {
 
     let run = validate(&repo, vec![spec(""), a, b]);
 
-    let ids: Vec<String> = run
-        .findings()
+    let ids: Vec<String> = findings_besides_intent_counts(&run)
         .iter()
         .map(|f| f["id"].as_str().unwrap().to_string())
         .collect();
@@ -238,7 +244,9 @@ fn a_draft_and_an_in_progress_delta_sharing_an_id_are_not_flagged() {
         "- [AC-X-1] [intent] two\n",
     );
 
-    assert!(validate(&repo, vec![spec(""), a, b]).findings().is_empty());
+    let run = validate(&repo, vec![spec(""), a, b]);
+
+    assert!(findings_besides_intent_counts(&run).is_empty());
 }
 
 #[test]
@@ -309,4 +317,65 @@ fn spec_missing_from_payload_is_loaded_from_the_store() {
         "{:?}",
         run.messages()
     );
+}
+
+#[test]
+fn finding_lines_are_file_lines_not_body_lines() {
+    let repo = Repo::new();
+    repo.delta_file(
+        1,
+        "in-progress",
+        &["SPEC-001"],
+        &delta_body("- [AC-D1-1] bare\n"),
+    );
+    let rel = "docs/deltas/DELTA-001-d.md";
+    let file = repo.read(rel);
+    for body in [
+        raw_body_of(&file),
+        raw_body_of(&file).trim_start_matches('\n'),
+    ] {
+        let mut d = delta("DELTA-001", "in-progress", &["SPEC-001"], "");
+        d["path"] = rel.into();
+        d["body"] = body.into();
+
+        let run = validate(&repo, vec![spec(""), d]);
+
+        assert_eq!(
+            run.findings()[0]["line"],
+            repo.claim_line(rel, "AC-D1-1"),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn one_of_two_intent_claims_gets_one_warning() {
+    let repo = Repo::new();
+    let body = "- [AC-D1-1] works\n- [AC-D1-2] [intent] feels right\n";
+    let d = delta("DELTA-001", "draft", &["SPEC-001"], body);
+
+    let run = validate(&repo, vec![spec(""), d]);
+
+    let findings = run.findings();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["severity"], "warning");
+    assert_eq!(findings[0]["id"], "DELTA-001");
+    assert_eq!(findings[0]["message"], "1 of 2 claims are [intent]");
+}
+
+#[test]
+fn no_intent_claims_means_no_intent_warning() {
+    let repo = Repo::new();
+    let d = delta("DELTA-001", "draft", &["SPEC-001"], "- [AC-D1-1] works\n");
+
+    assert!(validate(&repo, vec![spec(""), d]).findings().is_empty());
+}
+
+#[test]
+fn archived_deltas_get_no_intent_warning() {
+    let repo = Repo::new();
+    let body = "- [AC-D1-1] works\n- [AC-D1-2] [intent] feels right\n";
+    let d = delta("DELTA-001", "archived", &["SPEC-001"], body);
+
+    assert!(validate(&repo, vec![spec(""), d]).findings().is_empty());
 }

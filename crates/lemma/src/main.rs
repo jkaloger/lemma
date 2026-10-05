@@ -1,5 +1,7 @@
+mod attach;
 mod claims;
 mod fold;
+mod outcome;
 mod payload;
 mod project;
 mod receipt;
@@ -8,11 +10,15 @@ mod stop;
 mod targets;
 mod transition;
 mod validate;
+mod version;
 
+use anyhow::Result;
 use clap::{Parser, Subcommand};
+use lazyspec::engine::store::Store;
+use outcome::Outcome;
 use payload::{Finding, Output, Payload, StopInput};
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -36,6 +42,13 @@ enum Command {
     Stop,
     /// Update the receipt commits on one document
     RePin { id: String },
+    /// Pin a test as a claim's receipt at the current HEAD
+    Receipt {
+        delta: String,
+        claim: String,
+        /// <path>#<symbol>
+        target: String,
+    },
 }
 
 fn read_stdin() -> String {
@@ -75,6 +88,10 @@ fn stop_command() -> ExitCode {
     let Some(root) = project::find_root(&start) else {
         return ExitCode::SUCCESS;
     };
+    if let Err(message) = version::require_lazyspec() {
+        eprintln!("lemma stop: {message}");
+        return ExitCode::SUCCESS;
+    }
     let store = match project::load_store(&root) {
         Ok(store) => store,
         Err(e) => {
@@ -92,15 +109,19 @@ fn stop_command() -> ExitCode {
     ExitCode::from(2)
 }
 
-fn repin_command(id: &str) -> ExitCode {
+fn refuse_with(message: String) -> ExitCode {
+    print(&Output::findings(vec![Finding::bare_error(message)]));
+    ExitCode::from(2)
+}
+
+fn store_command(run: impl FnOnce(&Store, &Path) -> Result<Outcome>) -> ExitCode {
     let Some(root) = project::find_root(&current_dir()) else {
-        print(&Output::findings(vec![Finding::bare_error(
-            "no .lazyspec.toml found",
-        )]));
-        return ExitCode::from(2);
+        return refuse_with("no .lazyspec.toml found".to_string());
     };
-    let outcome = project::load_store(&root).and_then(|store| repin::run(&store, &root, id));
-    match outcome {
+    if let Err(message) = version::require_lazyspec() {
+        return refuse_with(message);
+    }
+    match project::load_store(&root).and_then(|store| run(&store, &root)) {
         Ok(outcome) => {
             print(&Output::findings(outcome.findings));
             if outcome.refused {
@@ -109,12 +130,7 @@ fn repin_command(id: &str) -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Err(e) => {
-            print(&Output::findings(vec![Finding::bare_error(format!(
-                "{e:#}"
-            ))]));
-            ExitCode::from(2)
-        }
+        Err(e) => refuse_with(format!("{e:#}")),
     }
 }
 
@@ -123,6 +139,11 @@ fn main() -> ExitCode {
         Command::Validate => with_payload(|p| validate::run(p, &current_dir())),
         Command::PreTransition => with_payload(|p| transition::run(p, &current_dir())),
         Command::Stop => stop_command(),
-        Command::RePin { id } => repin_command(&id),
+        Command::RePin { id } => store_command(|store, root| repin::run(store, root, &id)),
+        Command::Receipt {
+            delta,
+            claim,
+            target,
+        } => store_command(|store, root| attach::run(store, root, &delta, &claim, &target)),
     }
 }

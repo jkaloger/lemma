@@ -65,12 +65,29 @@ impl Run {
 
 pub struct Repo {
     dir: TempDir,
+    fake_bin: TempDir,
+}
+
+pub fn install_fake_lazyspec(dir: &Path, version_output: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("lazyspec");
+    std::fs::write(&script, format!("#!/bin/sh\necho '{version_output}'\n")).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+pub fn path_with_prepended(dir: &Path) -> std::ffi::OsString {
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&existing)))
+        .unwrap()
 }
 
 impl Repo {
     pub fn new() -> Self {
+        let fake_bin = tempfile::tempdir().unwrap();
+        install_fake_lazyspec(fake_bin.path(), "lazyspec 0.15.0");
         let repo = Self {
             dir: tempfile::tempdir().unwrap(),
+            fake_bin,
         };
         repo.git(&["init", "-q"]);
         repo.write(".lazyspec.toml", CONFIG);
@@ -134,6 +151,7 @@ impl Repo {
     pub fn run(&self, args: &[&str], stdin: &str) -> Run {
         let mut child = Command::new(env!("CARGO_BIN_EXE_lemma"))
             .args(args)
+            .env("PATH", path_with_prepended(self.fake_bin.path()))
             .current_dir(self.root())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -232,4 +250,20 @@ pub fn claim(id: &str, text: &str, sha: Option<&str>) -> String {
 
 pub fn delta_body(behaviour: &str) -> String {
     format!("## Intent\n\nBecause.\n\n## Behaviour\n\n{behaviour}")
+}
+
+impl Repo {
+    pub fn claim_line(&self, rel: &str, id: &str) -> usize {
+        let needle = format!("- [{id}]");
+        self.read(rel)
+            .lines()
+            .position(|l| l.starts_with(&needle))
+            .map(|i| i + 1)
+            .unwrap_or_else(|| panic!("{id} not in {rel}"))
+    }
+}
+
+pub fn raw_body_of(file: &str) -> &str {
+    let closing = file[3..].find("\n---").unwrap() + 3 + 4;
+    &file[closing..]
 }
