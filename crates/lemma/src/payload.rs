@@ -13,6 +13,8 @@ pub struct Relation {
 pub struct Part {
     pub name: String,
     #[serde(default)]
+    pub path: String,
+    #[serde(default)]
     pub body: String,
 }
 
@@ -77,6 +79,16 @@ impl Doc {
 
     pub fn part(&self, name: &str) -> Option<&Part> {
         self.parts.iter().find(|p| p.name == name)
+    }
+
+    pub fn part_path(&self, name: &str) -> String {
+        match self.part(name).filter(|p| !p.path.is_empty()) {
+            Some(part) => part.path.clone(),
+            None => Path::new(&self.path)
+                .with_file_name(format!("{name}.md"))
+                .to_string_lossy()
+                .into_owned(),
+        }
     }
 
     pub fn spec_claims(&self) -> Vec<Claim> {
