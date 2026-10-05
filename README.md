@@ -64,7 +64,7 @@ A **claim** is a tagged list item with a stable id inside a `behaviour` part. Th
   @ref src/store.rs#reopen_keeps_prior
 ```
 
-Ids are namespaced by the delta that introduced them. The spec governing a delta claim is the target its part names; for a spec claim it is the spec. A claim carrying the marker `[intent]` is excluded from check 3. lemma reports the count per document as `<n> of <m> claims are [intent]`.
+Ids are namespaced by the delta that introduced them. The spec governing a delta claim is the target its part names; for a spec claim it is the spec. A claim carrying the marker `[intent]` is excluded from check 3. lemma reports the count per document as `<n> of <m> claims are [intent]`, in `--json` and `--hook` output only; text mode is silent when clean.
 
 A **ref** is an `@ref <path>#<symbol>` line indented under a claim. It carries no commit and no hash. The path must match the `tests` globs of the governing spec, and the symbol must resolve in that file. A symbol in production code is not a ref. Code carries no spec ids. A ref is not evidence that the test ran or passed.
 
@@ -90,7 +90,7 @@ The fold writes the merged claim list to the spec's `behaviour` part through the
 
 | Check        | Reports                                                                                                                                                                                                   |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Coverage  | The changed governed files in the range span more than one spec's `governs`, and a touched spec has no in-flight delta folding into it. A change inside one area needs no delta.                           |
+| 1. Coverage  | The changed governed files in the range are not all within one area, and a touched spec has no in-flight delta folding into it. A change is within one area when some spec governs every changed governed file, so overlapping globs do not count as two areas; a change inside one area needs no delta.                           |
 | 2. Evidence  | For a claim present in a spec's `behaviour` part at the base, a ref whose evidence region differs between the base and the working tree, with no in-flight delta striking that claim. A region absent at the base counts as changed. |
 | 3. Claims have evidence | A live claim, not marked `[intent]`, with no ref that resolves to a symbol in a file matching the governing spec's `tests` globs.                                                              |
 | 4. Integrity | A delta claim reusing a spec claim id without a strike; a struck id the spec lacks; a fold target that does not resolve; a fold target without its part; a part naming no fold target; a claim-shaped item in `index.md`; an invalid glob; a pinned ref. |
@@ -127,14 +127,14 @@ CI passes `--base` explicitly: the pull request base ref, or the push's `before`
 | `lemma apply`                | lazyspec `pre-transition` event, `in-progress` → `complete` | Folds each target and returns `updates`. Errors on check 4 and on a target with no `behaviour` part. |
 | `lemma apply <delta>`        | agents                                             | Prints, per target, the ids it would add and delete. Writes nothing.   |
 | `lemma refs <claim>`         | agents                                             | Prints `<claim> <path>#<symbol> ok\|unresolved\|not-a-test` per ref, across specs and in-flight deltas. |
-| `lemma stop`                 | Claude Code `Stop` hook                            | Runs checks 1 to 3 against the session base. Exits 2 on error, diagnostics on stderr. |
+| `lemma stop`                 | Claude Code `Stop` hook                            | Runs checks 1 to 3 against the session base, check 3 scoped to session-touched documents. Reports errors only. Exits 2 on error, diagnostics on stderr. |
 | `lemma session-start`        | Claude Code `SessionStart` hook                    | Records the session base. Always exits 0.                              |
 | `lemma signal`               | Claude Code `PostToolUse` hook                     | Returns per-edit context and findings. Never blocks.                   |
 | `lemma migrate`              | humans, once                                       | Rewrites 1.x documents to 2.0 syntax.                                  |
 
 ### stop
 
-`lemma stop` reads the base for its `session_id` as described under base resolution. Without a base file, or when the base is not an ancestor of HEAD, it diffs against HEAD. Its diff includes commits made in the session, tracked working-tree changes and untracked files. It reports checks 1 to 3 and an error when a delta is `complete` in the working tree and was not `complete` at HEAD, including a delta new since then. The completion rule runs against HEAD, so a human who completes and commits mid-session is not flagged on later Stops. When `stop_hook_active` is set, it exits 0.
+`lemma stop` reads the base for its `session_id` as described under base resolution. Without a base file, or when the base is not an ancestor of HEAD, it diffs against HEAD. Its diff includes commits made in the session, tracked working-tree changes and untracked files. It reports errors only: checks 1 and 2 as in `lemma check`, check 3 scoped to the documents touched in the range (spec and delta files changed since the base, untracked included) and to specs whose `governs` cover a touched file, so a pre-existing unresolved ref in an untouched spec does not block a session. It also reports an error when a delta is `complete` in the working tree and was not `complete` at HEAD, including a delta new since then. The completion rule runs against HEAD, so a human who completes and commits mid-session is not flagged on later Stops. When `stop_hook_active` is set, it exits 0.
 
 ### session-start
 
@@ -146,12 +146,12 @@ CI passes `--base` explicitly: the pull request base ref, or the push's `before`
 
 | Condition                                               | Output                                                                                   |
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| First touch of a governed area in the session           | One line of pointers from the lazyspec graph: `<path> → SPEC-003 store · DECISION-004`. Spec, dictum and decision ids only, no content. |
+| First touch of a governed area in the session           | One line of pointers from the lazyspec graph: `<path> → SPEC-001 <title> · DECISION-001 <title>`. Ids and titles, no content. Deduped once per governed area per session. Dictums appear only when lazyspec `governing()` returns them (dictums with `governs`). |
 | The file is referenced by a ref                         | Check 2 finding, naming the claim.                                                       |
 | The file adds an uncovered area                         | Check 1 finding.                                                                         |
 | The file is a spec or delta part                        | Check 3 and 4 findings.                                                                  |
 
-Each message is said once per session. Its hash is kept in `<git-dir>/lemma/sessions/<session_id>.said`. A clean edit produces no output. `lemma signal` exits 0.
+Each message is said once per session. Its hash is kept in `<git-dir>/lemma/sessions/<session_id>.said`. A clean edit produces no output. `lemma signal` exits 0 silently on any failure, including lazyspec missing or too old.
 
 ### migrate
 
@@ -177,7 +177,7 @@ The plugin's `hooks.json` registers three Claude Code hooks, each a no-op when `
 | `PostToolUse`  | `Edit\|Write\|MultiEdit` | `lemma signal`        |
 | `Stop`         |                          | `lemma stop`          |
 
-Signals escalate: the same checks run per edit (said once, never blocking), at Stop (error), and at the transition gate and in CI (error).
+Signals escalate: the same checks run per edit (said once, never blocking), at Stop (error, scoped to the session), and at the transition gate and in CI (error).
 
 ## Skills
 
@@ -209,7 +209,7 @@ The human decision point is the transition `in-progress` → `complete`. The age
 
 ## Exit status
 
-`lemma check` exits 2 when any finding has error severity, and 0 otherwise. With `--hook` it exits 0 and lazyspec applies severity. `lemma apply` without an argument prints `updates` and findings as JSON and exits 0; with an argument it exits 2 on error. `lemma refs` exits 2 when a ref is `unresolved` or `not-a-test`. `lemma stop` exits 2 on an error finding and writes diagnostics to stderr. `lemma session-start`, `lemma signal` and `lemma migrate` exit 0 on success. `lemma stop` and `lemma signal` print a hint to stderr and exit 0 when `lazyspec --version` is missing or older than 0.15; the other commands exit 2.
+`lemma check` exits 2 when any finding has error severity, and 0 otherwise. With `--hook` it exits 0 and lazyspec applies severity. `lemma apply` without an argument prints `updates` and findings as JSON and exits 0; with an argument it exits 2 on error. `lemma refs` exits 2 when a ref is `unresolved` or `not-a-test`. `lemma stop` exits 2 on an error finding and writes diagnostics to stderr. `lemma session-start`, `lemma signal` and `lemma migrate` exit 0 on success. `lemma stop` prints a hint to stderr and exits 0 when `lazyspec --version` is missing or older than 0.15; `lemma signal` exits 0 silently; the other commands exit 2.
 
 ## Examples
 

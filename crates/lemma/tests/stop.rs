@@ -162,6 +162,54 @@ mod on_a_branch {
     }
 
     #[test]
+    fn a_broken_ref_in_an_untouched_spec_is_silent() {
+        let repo = two_specs();
+        repo.spec_behaviour(2, "- [AC-S2-1] Gone.\n  @ref b/y.rs#y\n");
+        repo.commit("pre-existing broken ref");
+        branch(&repo);
+        repo.write("a/x.rs", "fn x() { 1; }\n");
+
+        let run = stop(&repo);
+
+        assert_eq!((run.code, run.stderr.as_str()), (0, ""));
+    }
+
+    #[test]
+    fn a_broken_ref_in_a_touched_delta_is_an_error() {
+        let repo = two_specs();
+        branch(&repo);
+        repo.delta_file(1, "in-progress", &["SPEC-001"], "## Intent\n\nOne.\n");
+        repo.delta_part(
+            1,
+            "SPEC-001",
+            "- [AC-D1-1] Gone.\n  @ref tests/store_test.rs#missing\n",
+        );
+
+        let run = stop(&repo);
+
+        assert_eq!(run.code, 2);
+        assert!(run.stderr.contains("does not resolve"), "{}", run.stderr);
+    }
+
+    #[test]
+    fn a_broken_ref_in_a_spec_governing_a_touched_file_is_an_error() {
+        let repo = two_specs();
+        repo.spec_behaviour(2, "- [AC-S2-1] Gone.\n  @ref b/y.rs#y\n");
+        repo.commit("pre-existing broken ref");
+        branch(&repo);
+        repo.write("b/y.rs", "fn y() { 2; }\n");
+
+        let run = stop(&repo);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            run.stderr.contains("is not in the governing spec"),
+            "{}",
+            run.stderr
+        );
+    }
+
+    #[test]
     fn integrity_findings_are_left_to_check() {
         let repo = two_specs();
         branch(&repo);

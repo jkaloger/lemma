@@ -45,7 +45,7 @@ Supersedes RFC-001 §1's thesis ("hooks are how 'no unverified completion' becom
 
 **Output is diagnostics.** `file:line: message` plus a next command, exit 2 on error, silent when clean. Same shape as compiler and linter output so agents treat lemma like the rest of the stack.
 
-**Signals escalate.** The same checks run per edit (Claude Code `PostToolUse`, scoped to the touched file, said once per session), at Stop (warning), and at the gate and in CI (block).
+**Signals escalate.** The same checks run per edit (Claude Code `PostToolUse`, scoped to the touched file, said once per session), at Stop (error, the agent keeps working), and at the gate and in CI (block).
 
 **Context is a signal too.** First touch of a governed area in a session emits one line of pointers from lazyspec's graph (spec, dictums, decisions), not their content.
 

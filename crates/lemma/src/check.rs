@@ -158,15 +158,24 @@ pub fn run(
     payload: Option<&Payload>,
 ) -> Vec<Finding> {
     let world = World::load(store, payload);
-    let scope = scope_of(&world, payload);
+    let mut scope = scope_of(&world, payload);
     let full = options.suite == Suite::Full;
     let mut findings = match resolve_base(root, options, payload) {
         Ok(base) => {
-            let mut found = coverage(store, root, &world, &changed_since(root, &base));
+            let files = changed_since(root, &base);
+            let mut found = coverage(store, root, &world, &files);
             found.extend(evidence_changes(root, &world, &base, None));
+            if !full {
+                scope.retain(|doc| touched_by(doc, &files));
+            }
             found
         }
-        Err(message) => vec![Finding::bare_error(message)],
+        Err(message) => {
+            if !full {
+                scope.clear();
+            }
+            vec![Finding::bare_error(message)]
+        }
     };
     for doc in &scope {
         if full {
@@ -186,6 +195,15 @@ pub fn run(
     findings.sort();
     findings.dedup();
     findings
+}
+
+fn touched_by(doc: &Doc, files: &[String]) -> bool {
+    let dir = Path::new(&doc.path).parent().unwrap_or(Path::new(""));
+    let governed = glob_set(&doc.governs);
+    let governs = doc.doc_type == "spec" && !doc.governs.is_empty();
+    files
+        .iter()
+        .any(|f| Path::new(f).starts_with(dir) || (governs && governed.is_match(f.as_str())))
 }
 
 fn scope_of<'a>(world: &'a World, payload: Option<&Payload>) -> Vec<&'a Doc> {
