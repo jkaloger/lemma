@@ -1,6 +1,8 @@
-use crate::check::{self, Finding, Options, Suite};
-use crate::git::{git_output, touched_files};
-use lazyspec::engine::document::DocMeta;
+use crate::check::{self, Finding, Options, Span, Suite};
+use crate::folded::completed_since;
+use crate::git::changed_since;
+use crate::session::{recorded_base, say_once};
+use crate::world::World;
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
 use std::path::Path;
@@ -21,39 +23,58 @@ pub fn run(store: &Store, root: &Path, session_id: Option<&str>) -> Vec<Finding>
         suite: Suite::Session,
         ..Options::default()
     };
-    let mut findings: Vec<Finding> = check::run(store, root, &options, None)
+    let span = check::resolve_span(root, &options, None);
+    let mut findings: Vec<Finding> = check::run_with(store, root, &options, None, Some(&span))
         .into_iter()
         .filter(Finding::is_error)
         .collect();
-    findings.extend(unapproved_completions(store, root));
+    findings.extend(unapproved_completions(store, root, session_id, &span));
     findings
 }
 
-fn complete_at_head(root: &Path, doc_path: &Path) -> bool {
-    let spec = format!("HEAD:./{}", doc_path.to_string_lossy());
-    git_output(root, &["show", &spec])
-        .and_then(|text| DocMeta::parse(&text).ok())
-        .is_some_and(|meta| meta.status.to_string() == "complete")
-}
-
-fn unapproved_completions(store: &Store, root: &Path) -> Vec<Finding> {
-    let touched = touched_files(root);
-    store
-        .all_docs()
+fn unapproved_completions(
+    store: &Store,
+    root: &Path,
+    session_id: Option<&str>,
+    span: &Result<Span, String>,
+) -> Vec<Finding> {
+    let world = World::load(store, None);
+    let any_complete = world
+        .docs()
+        .iter()
+        .any(|d| d.doc_type == "delta" && d.status == "complete");
+    if !any_complete {
+        return Vec::new();
+    }
+    let base = session_id
+        .and_then(|id| recorded_base(root, id))
+        .unwrap_or_else(|| "HEAD".to_string());
+    let files = match span {
+        Ok(span) if span.base == base => span.files.clone(),
+        _ => changed_since(root, &base),
+    };
+    let found: Vec<Finding> = completed_since(root, &world, &base, &files)
         .into_iter()
-        .filter(|d| d.doc_type.to_string() == "delta" && d.status.to_string() == "complete")
-        .filter(|d| touched.iter().any(|f| Path::new(f) == d.path))
-        .filter(|d| !complete_at_head(root, &d.path))
-        .map(|d| Finding {
-            path: Some(d.path.to_string_lossy().into_owned()),
-            line: None,
-            severity: "error",
-            id: Some(d.id.clone()),
-            part: None,
-            message: format!(
-                "{} is complete in the working tree but not at HEAD; if a human moved it, leave it and ask them to commit; never change the status back",
-                d.id
-            ),
+        .map(|d| {
+            Finding::error(
+                d,
+                &d.path,
+                None,
+                format!(
+                    "{} is complete but was not when the session started; if a human moved it, leave it and ask them to commit; never change the status back",
+                    d.id
+                ),
+            )
+            .keyed(format!("complete:{}", d.id))
         })
-        .collect()
+        .collect();
+    let Some(session) = session_id else {
+        return found;
+    };
+    let keyed = found
+        .iter()
+        .cloned()
+        .map(|f| (f.key.clone().unwrap_or_default(), f))
+        .collect();
+    say_once(root, session, keyed).unwrap_or(found)
 }

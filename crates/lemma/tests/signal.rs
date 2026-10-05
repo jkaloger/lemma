@@ -206,6 +206,47 @@ fn the_file_that_makes_the_change_span_two_areas_is_flagged() {
 }
 
 #[test]
+fn coverage_is_said_once_per_spec_even_when_more_files_change() {
+    let repo = project();
+    repo.write("c/z.rs", "fn z() {}\n");
+    repo.spec_file(3, "active", &["c/**"], INTENT);
+    repo.commit("third area");
+    repo.write("a/x.rs", "fn x() { 1; }\n");
+    edit(&repo, "a/x.rs");
+    repo.write("b/y.rs", "fn y() { 1; }\n");
+    let second = context_of(&edit(&repo, "b/y.rs"));
+    assert!(second.contains("create a delta that folds into SPEC-002"));
+    repo.write("c/z.rs", "fn z() { 1; }\n");
+    edit(&repo, "c/z.rs");
+
+    repo.write("b/y.rs", "fn y() { 2; }\n");
+
+    assert!(silent(&edit(&repo, "b/y.rs")));
+}
+
+#[test]
+fn a_hand_edit_of_a_spec_part_is_reported_when_that_spec_is_edited() {
+    let repo = project();
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.spec_behaviour(1, &format!("{CLAIM}- [AC-S1-2] [intent] By hand.\n"));
+    repo.write(
+        "docs/specs/SPEC-002-s/behaviour.md",
+        "- [AC-S2-1] [intent] Elsewhere.\n",
+    );
+
+    let said = context_of(&edit(&repo, SPEC_PART));
+
+    assert!(
+        said.contains(&format!(
+            "{SPEC_PART}:3: error: spec behaviour edited outside a fold; change it through a delta"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("SPEC-002"), "{said}");
+    assert!(silent(&edit(&repo, SPEC_PART)));
+}
+
+#[test]
 fn a_covering_delta_silences_the_coverage_finding() {
     let repo = project();
     repo.delta_file(1, "draft", &["SPEC-001", "SPEC-002"], INTENT);

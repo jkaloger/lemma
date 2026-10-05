@@ -373,14 +373,67 @@ mod completion {
     }
 
     #[test]
-    fn a_delta_completed_and_committed_in_the_session_passes() {
+    fn a_delta_completed_and_committed_in_the_session_errors_once() {
         let repo = two_specs();
         complete_delta_setup(&repo, "in-progress");
         session_start(&repo, "s");
         set_status(&repo, "in-progress", "complete");
         repo.commit("complete it");
 
+        let first = stop(&repo);
+        let second = stop(&repo);
+
+        assert_eq!(first.code, 2);
+        assert!(
+            first.stderr.contains("DELTA-001 is complete"),
+            "{}",
+            first.stderr
+        );
+        assert_eq!((second.code, second.stderr.as_str()), (0, ""));
+    }
+
+    #[test]
+    fn another_session_hears_the_completion_again() {
+        let repo = two_specs();
+        complete_delta_setup(&repo, "in-progress");
+        session_start(&repo, "s");
+        session_start(&repo, "t");
+        set_status(&repo, "in-progress", "complete");
+        repo.commit("complete it");
+
+        stop(&repo);
+        let other = stop_with(&repo, json!({ "session_id": "t", "cwd": repo.root() }));
+
+        assert_eq!(other.code, 2);
+    }
+
+    #[test]
+    fn a_delta_already_complete_at_the_session_base_passes() {
+        let repo = two_specs();
+        complete_delta_setup(&repo, "complete");
+        session_start(&repo, "s");
+        repo.write("a/x.rs", "fn x() { 1; }\n");
+        repo.commit("unrelated");
+
         assert_eq!(stop(&repo).code, 0);
+    }
+
+    #[test]
+    fn a_delta_completed_within_a_branch_covers_a_multi_area_change() {
+        let repo = two_specs();
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.delta_file(
+            1,
+            "complete",
+            &["SPEC-001", "SPEC-002"],
+            "## Intent\n\nBoth.\n",
+        );
+        touch_both(&repo);
+        repo.commit("both areas under a completed delta");
+
+        let run = stop(&repo);
+
+        assert_eq!((run.code, run.stderr.as_str()), (0, ""));
     }
 }
 

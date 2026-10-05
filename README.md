@@ -68,13 +68,13 @@ Ids are namespaced by the delta that introduced them. The spec governing a delta
 
 A **ref** is an `@ref <path>#<symbol>` line indented under a claim. It carries no commit and no hash. The path must match the `tests` globs of the governing spec, and the symbol must resolve in that file. A symbol in production code is not a ref. Code carries no spec ids. A ref is not evidence that the test ran or passed.
 
-The **evidence region** of a ref is the referenced symbol, attributes included. A `.rs`, `.ts` or `.tsx` file uses the lazyspec extractors. A file with no extractor is compared whole.
+The **evidence region** of a ref is the referenced symbol, attributes included. A `.rs` file uses the Rust extractor; `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` files use the TypeScript extractor and grammar. A file with no extractor is compared whole.
 
 A **claim is immutable**: its text never changes in a spec. A delta changes behaviour by striking an id, written `- ~~[ID]~~`, and adding a new id. A new claim that replaces a struck one carries its `@ref` lines. A delta claim whose id already exists in the target spec and is not struck is an error: `claims are immutable; strike <id> and add a new id`.
 
 A claim that no test can settle is marked `[intent]`. Adequacy of a test against its claim is judged by the human at `complete`.
 
-A pinned ref (`@<sha>`, `@{blob:…}`), a ` [forced]` marker, an `@base` line and an `@checked` line are 1.x syntax. The first three are errors that print `pinned ref; run lemma migrate`; an `@base` line prints the same hint.
+A pinned ref (`@<sha>`, `@{blob:…}`), a ` [forced]` marker, an `@base` line and an `@checked` line are 1.x syntax. All four are errors. A pinned ref or ` [forced]` marker prints `pinned ref; run lemma migrate`, an `@base` line prints `` `@base` line; run lemma migrate``, and an `@checked` line prints `` `@checked` line; run lemma migrate``.
 
 A human moving a delta `in-progress` → `complete` approves it. lazyspec writes a `reviewed: <sha>` stamp on every status change. Agents do not write it, and it does not record approval.
 
@@ -90,10 +90,12 @@ The fold writes the merged claim list to the spec's `behaviour` part through the
 
 | Check        | Reports                                                                                                                                                                                                   |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Coverage  | The changed governed files in the range are not all within one area, and a touched spec has no in-flight delta folding into it. A change is within one area when some spec governs every changed governed file, so overlapping globs do not count as two areas; a change inside one area needs no delta.                           |
-| 2. Evidence  | For a claim present in a spec's `behaviour` part at the base, a ref whose evidence region differs between the base and the working tree, with no in-flight delta striking that claim. A region absent at the base counts as changed. |
+| 1. Coverage  | The changed governed files in the range are not all within one area, and a touched spec is not covered. A spec is covered when an in-flight (`draft` or `in-progress`) delta folds into it, or a delta folding into it became `complete` within the range (its `index.md` changed in the range and was not `complete` at the base). A change is within one area when some spec governs every changed governed file, so overlapping globs do not count as two areas; a change inside one area needs no delta.                           |
+| 2. Evidence  | For a claim present in a spec's `behaviour` part at the base, a ref whose evidence region was present at the base and is now absent or differs, unless a delta strikes that claim. Only a delta that folds into the claim's spec, in its `behaviour.<spec-id>` part, and is `in-progress` or became `complete` in the range, counts; a `draft` delta does not. A region absent at the base is not a change, so a ref that was already broken on trunk is left to check 3. Formatting and comments are normalised away. |
 | 3. Claims have evidence | A live claim, not marked `[intent]`, with no ref that resolves to a symbol in a file matching the governing spec's `tests` globs.                                                              |
-| 4. Integrity | A delta claim reusing a spec claim id without a strike; a struck id the spec lacks; a fold target that does not resolve; a fold target without its part; a part naming no fold target; a claim-shaped item in `index.md`; an invalid glob; a pinned ref. |
+| 4. Integrity | A delta claim reusing a spec claim id without a strike; a struck id the spec lacks; a fold target that does not resolve; a fold target without its part; a part naming no fold target; a claim-shaped item in `index.md`; an invalid glob; a pinned ref; a spec's `behaviour` part edited outside a fold (below). |
+
+Check 4 also compares each spec's `behaviour` part with the base. The claims in the working tree must equal the base claims folded with every delta that became `complete` in the range (folded in id order, compared as claim id and first-line text, ignoring `[intent]` markers). Any other difference is an error on the spec part: `spec behaviour edited outside a fold; change it through a delta`. A change in the range to a spec's `governs` or `tests` frontmatter is a warning: `governs/tests changed in this range; review`. A spec that did not exist at the base is not compared.
 
 Two in-flight deltas striking one id produce a warning. Checks 2 and 4 and refs that do not resolve are errors. Check 3 is a warning unless required.
 
@@ -107,16 +109,18 @@ Two in-flight deltas striking one id produce a warning. Checks 2 and 4 and refs 
 
 Output is `path:line: severity: message` lines, one per finding, with the next command where one applies. Output is empty when clean. `--json` prints `{"findings": [...]}`. `--hook` reads a lazyspec payload on stdin, prints findings JSON, exits 0 and is scoped to the payload's documents.
 
+Hook mode and the range. The `validate` event has no transition and no range, so checks 1 and 2 are skipped; CI runs `lemma check --base` for them. A pre-transition gate (a payload with a transition) runs checks 1, 2 and the spec-edit rule of check 4 against the range for the moved delta, and limits their findings to the specs that delta folds into.
+
 ### Base resolution
 
 The base is the revision that check 2 diffs against and that bounds the range for check 1.
 
 1. `--base <rev>` is used when given.
-2. Otherwise, with trunk `main` (`--trunk <name>` overrides it), if `git merge-base HEAD <trunk>` is not HEAD, the merge-base is used.
-3. Otherwise HEAD is on trunk (direct-to-main). `lemma stop` and `lemma signal` use the session base recorded by `lemma session-start`. The transition gate uses the parent of the commit that first added the delta's `index.md`, or HEAD when the delta is uncommitted.
+2. Otherwise, with the trunk (`--trunk <name>`; by default `main` if it exists, else `master`, else the target of `origin/HEAD`, else none), if `git merge-base HEAD <trunk>` is not HEAD, the merge-base is used.
+3. Otherwise HEAD is on trunk (direct-to-main). `lemma stop` and `lemma signal` use the session base recorded by `lemma session-start`. The transition gate (a payload with a transition) uses the parent of the commit that first added the moved delta's `index.md`, or HEAD when the delta is uncommitted. The `validate` event uses no base.
 4. Otherwise HEAD.
 
-CI passes `--base` explicitly: the pull request base ref, or the push's `before` sha. Check 2 needs the base reachable, so CI fetches full history. Local signals resolve against the local trunk.
+CI passes `--base` explicitly: the pull request base ref, or the push's `before` sha. A push that creates a branch passes `--trunk origin/<default-branch>`, and a `before` sha that is no longer reachable after a force-push falls back to the same trunk. Check 2 needs the base reachable, so CI fetches full history. Local signals resolve against the local trunk.
 
 ## Commands
 
@@ -134,7 +138,7 @@ CI passes `--base` explicitly: the pull request base ref, or the push's `before`
 
 ### stop
 
-`lemma stop` reads the base for its `session_id` as described under base resolution. Without a base file, or when the base is not an ancestor of HEAD, it diffs against HEAD. Its diff includes commits made in the session, tracked working-tree changes and untracked files. It reports errors only: checks 1 and 2 as in `lemma check`, check 3 scoped to the documents touched in the range (spec and delta files changed since the base, untracked included) and to specs whose `governs` cover a touched file, so a pre-existing unresolved ref in an untouched spec does not block a session. It also reports an error when a delta is `complete` in the working tree and was not `complete` at HEAD, including a delta new since then. The completion rule runs against HEAD, so a human who completes and commits mid-session is not flagged on later Stops. When `stop_hook_active` is set, it exits 0.
+`lemma stop` reads the base for its `session_id` as described under base resolution. Without a base file, or when the base is not an ancestor of HEAD, it diffs against HEAD. Its diff includes commits made in the session, tracked working-tree changes and untracked files. It reports errors only: checks 1 and 2 as in `lemma check`, check 3 scoped to the documents touched in the range (spec and delta files changed since the base, untracked included) and to specs whose `governs` cover a touched file, so a pre-existing unresolved ref in an untouched spec does not block a session. It also reports an error when a delta is `complete` in the working tree and was not `complete` at the session base (HEAD when there is no session base), including a delta new since then and one completed and committed in the session. The completion error is said once per session, recorded in the session's `.said` file, so a human who completes mid-session blocks only the first Stop after it. When `stop_hook_active` is set, it exits 0.
 
 ### session-start
 
@@ -149,13 +153,13 @@ CI passes `--base` explicitly: the pull request base ref, or the push's `before`
 | First touch of a governed area in the session           | One line of pointers from the lazyspec graph: `<path> → SPEC-001 <title> · DECISION-001 <title>`. Ids and titles, no content. Deduped once per governed area per session. Dictums appear only when lazyspec `governing()` returns them (dictums with `governs`). |
 | The file is referenced by a ref                         | Check 2 finding, naming the claim.                                                       |
 | The file adds an uncovered area                         | Check 1 finding.                                                                         |
-| The file is a spec or delta part                        | Check 3 and 4 findings.                                                                  |
+| The file is a spec or delta part                        | Check 3 and 4 findings. For a spec file, also the spec-edit rule and the `governs`/`tests` warning of check 4. |
 
-Each message is said once per session. Its hash is kept in `<git-dir>/lemma/sessions/<session_id>.said`. A clean edit produces no output. `lemma signal` exits 0 silently on any failure, including lazyspec missing or too old.
+Each message is said once per session, keyed on a stable identity rather than its text: `context:<ids of the governing documents>`, `check1:<spec-id>`, `check2:<claim>:<path>#<symbol>`, and `check4:<document>:<path>:<message>`. A later edit that changes the finding's wording (more files in the range, a shifted line number) does not say it again. Hashes of the keys are kept in `<git-dir>/lemma/sessions/<session_id>.said`. A clean edit produces no output. The base is resolved only when the file is governed, referenced by a ref, or a spec or delta file. `lemma signal` exits 0 silently on any failure.
 
 ### migrate
 
-`lemma migrate` rewrites every spec and delta part in place. It strips the pin and ` [forced]` from `@ref` lines, deletes `@base` lines, and turns a claim whose only receipts are `@checked` lines into an `[intent]` claim. It prints the files it wrote. It is idempotent.
+`lemma migrate` rewrites every spec and delta part in place. It strips the pin and ` [forced]` from `@ref` lines, deletes `@base` lines, rewrites a delta claim with an `@base` line whose id exists in its target spec (a replacement) as a strike of the old id plus the claim under `<old-id>-R` (`-R2`, `-R3` if taken), and turns a claim whose only receipts are `@checked` lines into an `[intent]` claim. It prints each file it wrote, followed by one indented line per replacement rewrite. It is idempotent.
 
 ## Hooks
 
@@ -209,7 +213,7 @@ The human decision point is the transition `in-progress` → `complete`. The age
 
 ## Exit status
 
-`lemma check` exits 2 when any finding has error severity, and 0 otherwise. With `--hook` it exits 0 and lazyspec applies severity. `lemma apply` without an argument prints `updates` and findings as JSON and exits 0; with an argument it exits 2 on error. `lemma refs` exits 2 when a ref is `unresolved` or `not-a-test`. `lemma stop` exits 2 on an error finding and writes diagnostics to stderr. `lemma session-start`, `lemma signal` and `lemma migrate` exit 0 on success. `lemma stop` prints a hint to stderr and exits 0 when `lazyspec --version` is missing or older than 0.15; `lemma signal` exits 0 silently; the other commands exit 2.
+`lemma check` exits 2 when any finding has error severity, and 0 otherwise. With `--hook` it exits 0 and lazyspec applies severity. `lemma apply` without an argument prints `updates` and findings as JSON and exits 0; with an argument it exits 2 on error. `lemma refs` exits 2 when a ref is `unresolved` or `not-a-test`. `lemma stop` exits 2 on an error finding and writes diagnostics to stderr. `lemma session-start`, `lemma signal` and `lemma migrate` exit 0 on success. `lemma stop` prints a hint to stderr and exits 0 when `lazyspec --version` is missing or older than 0.15; `lemma signal` does not check the version and exits 0 silently on any failure; the other commands exit 2.
 
 ## Examples
 

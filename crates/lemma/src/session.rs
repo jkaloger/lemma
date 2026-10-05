@@ -1,4 +1,5 @@
 use crate::git::git_output;
+use lazyspec::engine::hashing::sha256_hex;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Write;
@@ -70,4 +71,23 @@ pub fn record_said(root: &Path, session_id: &str, hashes: &[String]) -> Option<(
         .open(file)
         .ok()?;
     hashes.iter().try_for_each(|h| writeln!(out, "{h}")).ok()
+}
+
+fn key_hash(key: &str) -> String {
+    sha256_hex(key.as_bytes())[..16].to_string()
+}
+
+pub fn say_once<T>(root: &Path, session_id: &str, items: Vec<(String, T)>) -> Option<Vec<T>> {
+    let mut said = said_hashes(root, session_id)?;
+    let fresh: Vec<(String, T)> = items
+        .into_iter()
+        .map(|(key, item)| (key_hash(&key), item))
+        .filter(|(hash, _)| said.insert(hash.clone()))
+        .collect();
+    if fresh.is_empty() {
+        return Some(Vec::new());
+    }
+    let hashes: Vec<String> = fresh.iter().map(|(hash, _)| hash.clone()).collect();
+    record_said(root, session_id, &hashes)?;
+    Some(fresh.into_iter().map(|(_, item)| item).collect())
 }

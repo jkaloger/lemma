@@ -85,6 +85,70 @@ fn base_lines_are_deleted_from_delta_parts() {
     );
 }
 
+const OLD: &str = "- [A-1] one\n  @ref tests/store_test.rs#reopen_keeps_prior\n";
+
+fn replacement_project(spec: &str) -> Repo {
+    let repo = project();
+    repo.spec_behaviour(1, spec);
+    repo.delta_file(1, "draft", &["SPEC-001"], INTENT);
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        "- [A-1] one, reworded\n  @ref tests/store_test.rs#other_test\n  @base 0123456789ab\n",
+    );
+    repo
+}
+
+#[test]
+fn a_based_claim_replacing_a_spec_claim_becomes_a_strike_and_a_new_id() {
+    let repo = replacement_project(OLD);
+
+    let run = migrate(&repo);
+
+    let part = delta_part_path(1, "SPEC-001");
+    assert_eq!(
+        repo.read(&part),
+        "- ~~[A-1]~~ one\n- [A-1-R] one, reworded\n  @ref tests/store_test.rs#other_test\n"
+    );
+    assert_eq!(
+        run.stdout,
+        format!("{part}\n  A-1 struck; replacement re-added as A-1-R\n")
+    );
+}
+
+#[test]
+fn a_taken_replacement_id_is_bumped() {
+    let repo = replacement_project(&format!("{OLD}- [A-1-R] taken\n"));
+
+    migrate(&repo);
+
+    let part = repo.read(&delta_part_path(1, "SPEC-001"));
+    assert!(part.contains("- [A-1-R2] one, reworded"), "{part}");
+}
+
+#[test]
+fn a_replacement_rewrite_is_idempotent_and_the_result_checks_clean() {
+    let repo = replacement_project(OLD);
+    migrate(&repo);
+    let after_first = repo.read(&delta_part_path(1, "SPEC-001"));
+
+    let second = migrate(&repo);
+
+    assert_eq!((second.code, second.stdout.as_str()), (0, ""));
+    assert_eq!(repo.read(&delta_part_path(1, "SPEC-001")), after_first);
+    assert_eq!(repo.run(&["check"], "").stdout, "");
+}
+
+#[test]
+fn a_based_claim_in_a_spec_part_is_only_stripped() {
+    let repo = project();
+    repo.spec_behaviour(1, "- [A-1] one\n  @base 0123456789ab\n");
+
+    migrate(&repo);
+
+    assert_eq!(spec_part(&repo), "- [A-1] one\n");
+}
+
 #[test]
 fn a_claim_with_only_checked_receipts_becomes_intent() {
     let repo = project();

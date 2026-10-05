@@ -1,10 +1,10 @@
-use crate::check::{self, Finding, Options};
-use crate::git::changed_since;
+use crate::check::{self, Finding, Options, Span};
+use crate::evidence::clean;
+use crate::folded::{completed_since, spec_edits};
+use crate::payload::Doc;
 use crate::project;
-use crate::session::{record_said, said_hashes};
-use crate::version;
+use crate::session::say_once;
 use crate::world::{in_flight, World};
-use lazyspec::engine::hashing::sha256_hex;
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -35,12 +35,6 @@ struct Signal {
     text: String,
 }
 
-impl Signal {
-    fn hash(&self) -> String {
-        sha256_hex(self.key.as_bytes())[..16].to_string()
-    }
-}
-
 pub fn run(input: Input, fallback_dir: PathBuf) -> Option<String> {
     if !EDIT_TOOLS.contains(&input.tool_name.as_deref()?) {
         return None;
@@ -49,19 +43,15 @@ pub fn run(input: Input, fallback_dir: PathBuf) -> Option<String> {
     let start = input.cwd.map(PathBuf::from).unwrap_or(fallback_dir);
     let root = project::find_root(&start)?;
     let file = relative_to_root(&root, &start, Path::new(&input.tool_input?.file_path?))?;
-    version::require_lazyspec().ok()?;
-    let said = said_hashes(&root, &session)?;
     let store = project::load_store(&root).ok()?;
-    let fresh: Vec<Signal> = signals(&store, &root, &file, &session)
+    let keyed = signals(&store, &root, &file, &session)
         .into_iter()
-        .filter(|signal| !said.contains(&signal.hash()))
+        .map(|signal| (signal.key, signal.text))
         .collect();
-    if fresh.is_empty() {
+    let lines = say_once(&root, &session, keyed)?;
+    if lines.is_empty() {
         return None;
     }
-    let hashes: Vec<String> = fresh.iter().map(Signal::hash).collect();
-    record_said(&root, &session, &hashes)?;
-    let lines: Vec<&str> = fresh.iter().map(|s| s.text.as_str()).collect();
     Some(
         serde_json::json!({
             "hookSpecificOutput": {
@@ -82,28 +72,69 @@ fn relative_to_root(root: &Path, start: &Path, file: &Path) -> Option<String> {
 
 fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal> {
     let world = World::load(store, None);
-    let options = Options {
-        session: Some(session),
-        ..Options::default()
-    };
+    let governed = !store.governing(&root.join(file)).is_empty();
+    let owner = owner_of(&world, file);
+    let referenced = world
+        .all_sites()
+        .iter()
+        .flat_map(|site| &site.claims)
+        .flat_map(|claim| &claim.receipts)
+        .any(|r| clean(&r.path) == file);
     let mut findings = Vec::new();
-    if let Ok(base) = check::resolve_base(root, &options, None) {
-        findings.extend(check::evidence_changes(root, &world, &base, Some(file)));
-        findings.extend(newly_uncovered(store, root, &world, &base, file));
+    if governed || referenced || owner.is_some() {
+        let options = Options {
+            session: Some(session),
+            ..Options::default()
+        };
+        if let Ok(span) = check::resolve_span(root, &options, None) {
+            let completed = completed_since(root, &world, &span.base, &span.files);
+            if referenced {
+                findings.extend(check::evidence_changes(
+                    root,
+                    &world,
+                    &span,
+                    &completed,
+                    Some(file),
+                ));
+            }
+            if governed {
+                findings.extend(newly_uncovered(
+                    store, root, &world, &span, &completed, file,
+                ));
+            }
+            if let Some(spec) = owner.filter(|doc| doc.doc_type == "spec") {
+                findings.extend(
+                    spec_edits(root, &world, &span.base, &span.files, &completed)
+                        .into_iter()
+                        .filter(|f| f.id.as_deref() == Some(spec.id.as_str())),
+                );
+            }
+        }
     }
-    findings.extend(document_findings(root, &world, file));
+    if let Some(doc) = owner {
+        findings.extend(document_findings(root, &world, doc));
+    }
     findings.sort();
     findings.dedup();
     context_pointers(store, root, file)
         .into_iter()
-        .chain(findings.iter().map(|f| {
-            let text = f.render();
-            Signal {
-                key: text.clone(),
-                text,
-            }
+        .chain(findings.iter().map(|f| Signal {
+            key: stable_key(f),
+            text: f.render(),
         }))
         .collect()
+}
+
+fn stable_key(finding: &Finding) -> String {
+    if let Some(key) = &finding.key {
+        return key.clone();
+    }
+    format!(
+        "check4:{}:{}:{}",
+        finding.id.as_deref().unwrap_or_default(),
+        finding.path.as_deref().unwrap_or_default(),
+        finding.message
+    )
 }
 
 fn context_pointers(store: &Store, root: &Path, file: &str) -> Option<Signal> {
@@ -125,20 +156,24 @@ fn context_pointers(store: &Store, root: &Path, file: &str) -> Option<Signal> {
             .filter_map(|link| store.get(&link.endpoint))
     });
     let mut seen = BTreeSet::new();
-    let pointers: Vec<String> = specs
+    let docs: Vec<_> = specs
         .iter()
         .copied()
         .chain(decisions)
         .chain(dictums)
         .filter(|meta| seen.insert(meta.id.clone()))
-        .map(|meta| format!("{} {}", meta.id, meta.title))
         .collect();
-    if pointers.is_empty() {
+    if docs.is_empty() {
         return None;
     }
-    let pointers = pointers.join(" · ");
+    let ids: Vec<&str> = docs.iter().map(|meta| meta.id.as_str()).collect();
+    let pointers = docs
+        .iter()
+        .map(|meta| format!("{} {}", meta.id, meta.title))
+        .collect::<Vec<_>>()
+        .join(" · ");
     Some(Signal {
-        key: format!("context {pointers}"),
+        key: format!("context:{}", ids.join(",")),
         text: format!("{file} → {pointers}"),
     })
 }
@@ -147,34 +182,33 @@ fn newly_uncovered(
     store: &Store,
     root: &Path,
     world: &World,
-    base: &str,
+    span: &Span,
+    completed: &[&Doc],
     file: &str,
 ) -> Vec<Finding> {
-    if store.governing(&root.join(file)).is_empty() {
-        return Vec::new();
-    }
-    let mut files = changed_since(root, base);
+    let covered = check::covered_specs(world, completed);
+    let mut files = span.files.clone();
     files.retain(|f| f != file);
-    let before: BTreeSet<Option<String>> = check::coverage(store, root, world, &files)
+    let before: BTreeSet<Option<String>> = check::coverage(store, root, &covered, &files)
         .into_iter()
         .map(|f| f.id)
         .collect();
     files.push(file.to_string());
-    check::coverage(store, root, world, &files)
+    check::coverage(store, root, &covered, &files)
         .into_iter()
         .filter(|f| !before.contains(&f.id))
         .collect()
 }
 
-fn document_findings(root: &Path, world: &World, file: &str) -> Vec<Finding> {
-    let owner = world.docs().iter().find(|doc| {
+fn owner_of<'a>(world: &'a World, file: &str) -> Option<&'a Doc> {
+    world.docs().iter().find(|doc| {
         let applies = doc.doc_type == "spec" || in_flight(doc);
         let owns = doc.path == file || doc.parts.iter().any(|p| doc.part_path(&p.name) == file);
         applies && owns
-    });
-    let Some(doc) = owner else {
-        return Vec::new();
-    };
+    })
+}
+
+fn document_findings(root: &Path, world: &World, doc: &Doc) -> Vec<Finding> {
     let require = check::Require::default();
     let mut findings = check::integrity_findings(root, world, doc, require);
     findings.extend(check::evidence_findings(root, world, doc, require));

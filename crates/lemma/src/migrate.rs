@@ -1,38 +1,87 @@
 use crate::claims::{
     checked_pattern, is_pinned, lines_of, parse, Claim, LegacyKind, FORCED_MARKER,
 };
-use crate::world::World;
+use crate::world::{Site, World};
 use lazyspec::engine::refs::parse_refs;
 use lazyspec::engine::store::Store;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+type Existing = BTreeMap<String, String>;
+
+pub struct Replacement {
+    old: String,
+    new: String,
+}
 
 pub fn run(store: &Store, root: &Path) -> Vec<String> {
     let world = World::load(store, None);
-    let paths: BTreeSet<String> = world
-        .docs()
-        .iter()
-        .flat_map(|doc| world.sites(doc))
-        .map(|site| site.path)
-        .collect();
-    paths
+    let mut sites: BTreeMap<String, Existing> = BTreeMap::new();
+    for site in world.docs().iter().flat_map(|doc| world.sites(doc)) {
+        let existing = replaceable(&site);
+        sites.entry(site.path).or_default().extend(existing);
+    }
+    sites
         .into_iter()
-        .filter(|path| migrate_file(&root.join(path)))
+        .filter_map(|(path, existing)| {
+            let replaced = migrate_file(&root.join(&path), &existing)?;
+            let notes = replaced
+                .iter()
+                .map(|r| format!("  {} struck; replacement re-added as {}", r.old, r.new));
+            Some(std::iter::once(path).chain(notes).collect::<Vec<_>>())
+        })
+        .flatten()
         .collect()
 }
 
-fn migrate_file(file: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(file) else {
-        return false;
+fn replaceable(site: &Site) -> Existing {
+    if site.doc.doc_type != "delta" {
+        return Existing::new();
+    }
+    let Some(spec) = site.governing else {
+        return Existing::new();
     };
-    let migrated = rewrite(&text);
-    migrated != text && std::fs::write(file, migrated).is_ok()
+    spec.spec_claims()
+        .into_iter()
+        .map(|c| (c.id.clone(), c.block[0].clone()))
+        .collect()
 }
 
-pub fn rewrite(text: &str) -> String {
+fn migrate_file(file: &Path, existing: &Existing) -> Option<Vec<Replacement>> {
+    let text = std::fs::read_to_string(file).ok()?;
+    let (migrated, replaced) = rewrite(&text, existing);
+    if migrated == text {
+        return None;
+    }
+    std::fs::write(file, migrated).ok()?;
+    Some(replaced)
+}
+
+fn fresh_id(old: &str, taken: &BTreeSet<String>) -> String {
+    let first = format!("{old}-R");
+    if !taken.contains(&first) {
+        return first;
+    }
+    (2..)
+        .map(|n| format!("{first}{n}"))
+        .find(|id| !taken.contains(id))
+        .expect("an unbounded range has a free id")
+}
+
+fn struck_line(old_line: &str, id: &str) -> String {
+    let rest = old_line.find(']').map_or("", |at| &old_line[at + 1..]);
+    format!("- ~~[{id}]~~{rest}")
+}
+
+pub fn rewrite(text: &str, existing: &Existing) -> (String, Vec<Replacement>) {
     let mut lines: Vec<String> = lines_of(text).into_iter().map(str::to_string).collect();
     let mut dropped = BTreeSet::new();
-    for claim in &parse(text).claims {
+    let mut inserted: BTreeMap<usize, String> = BTreeMap::new();
+    let mut replaced = Vec::new();
+    let claims = parse(text).claims;
+    let mut taken: BTreeSet<String> = existing.keys().cloned().collect();
+    taken.extend(claims.iter().map(|c| c.id.clone()));
+    for claim in &claims {
         for legacy in &claim.legacy {
             let at = legacy.line - 1;
             match legacy.kind {
@@ -51,14 +100,28 @@ pub fn rewrite(text: &str) -> String {
         if intent_only(claim) {
             lines[claim.start] = mark_intent(&lines[claim.start]);
         }
+        let based = claim.legacy.iter().any(|l| l.kind == LegacyKind::Base);
+        let Some(old_line) = existing.get(&claim.id).filter(|_| based && !claim.struck) else {
+            continue;
+        };
+        let new = fresh_id(&claim.id, &taken);
+        taken.insert(new.clone());
+        lines[claim.start] =
+            lines[claim.start].replacen(&format!("[{}]", claim.id), &format!("[{new}]"), 1);
+        inserted.insert(claim.start, struck_line(old_line, &claim.id));
+        replaced.push(Replacement {
+            old: claim.id.clone(),
+            new,
+        });
     }
-    lines
+    let text = lines
         .into_iter()
         .enumerate()
         .filter(|(at, _)| !dropped.contains(at))
-        .map(|(_, line)| line)
+        .flat_map(|(at, line)| inserted.remove(&at).into_iter().chain([line]))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    (text, replaced)
 }
 
 fn intent_only(claim: &Claim) -> bool {

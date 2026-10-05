@@ -22,9 +22,17 @@ jobs:
         run: lemma check --base origin/${{ github.base_ref }}
       - name: lemma check (push)
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
-        run: lemma check --base ${{ github.event.before }}
+        run: |
+          before=${{ github.event.before }}
+          git fetch --no-tags origin "$before" || true
+          if git cat-file -e "$before^{commit}" 2>/dev/null; then
+            lemma check --base "$before"
+          else
+            # after a force-push the old tip may be unreachable
+            lemma check --trunk origin/${{ github.event.repository.default_branch }}
+          fi
       - name: lemma check (new branch)
         if: github.event_name == 'push' && github.event.before == '0000000000000000000000000000000000000000'
-        run: lemma check
+        run: lemma check --trunk origin/${{ github.event.repository.default_branch }}
       # lazyspec validate exits 2 on any error finding, including those from the lemma validate hook.
       - run: lazyspec validate

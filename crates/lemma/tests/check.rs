@@ -243,6 +243,31 @@ mod coverage {
     }
 
     #[test]
+    fn a_delta_completed_within_the_range_covers_its_specs() {
+        let repo = project();
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.delta_file(1, "complete", &["SPEC-001", "SPEC-002"], INTENT);
+        touch_both(&repo);
+        repo.commit("both areas under a completed delta");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!((run.code, run.stdout.as_str()), (0, ""));
+    }
+
+    #[test]
+    fn a_delta_completed_before_the_range_does_not_cover_it() {
+        let repo = project();
+        repo.delta_file(1, "complete", &["SPEC-001", "SPEC-002"], INTENT);
+        repo.commit("completed earlier");
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        touch_both(&repo);
+        repo.commit("both areas");
+
+        assert_eq!(check(&repo, &[]).code, 2);
+    }
+
+    #[test]
     fn on_a_branch_committed_changes_are_in_range() {
         let repo = project();
         repo.git(&["checkout", "-q", "-b", "feature"]);
@@ -260,6 +285,17 @@ mod coverage {
 
         assert_eq!(check(&repo, &[]).code, 0);
         assert_eq!(check(&repo, &["--base", "HEAD~1"]).code, 2);
+    }
+
+    #[test]
+    fn master_is_found_without_a_trunk_flag() {
+        let repo = project();
+        repo.git(&["branch", "-M", "master"]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        touch_both(&repo);
+        repo.commit("both areas");
+
+        assert_eq!(check(&repo, &[]).code, 2);
     }
 
     #[test]
@@ -320,16 +356,17 @@ mod evidence_changed {
     }
 
     #[test]
-    fn a_complete_delta_that_struck_it_does_not_excuse_it() {
+    fn a_complete_delta_that_struck_it_before_the_range_does_not_excuse_it() {
         let repo = project();
         delta(&repo, 1, "complete", "SPEC-001", "- ~~[AC-S1-1]~~ gone\n");
+        repo.commit("completed earlier");
         edit_reopen_body(&repo);
 
         assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
     }
 
     #[test]
-    fn a_symbol_absent_at_the_base_counts_as_changed() {
+    fn a_symbol_absent_at_the_base_is_not_a_change() {
         let repo = project();
         repo.spec_behaviour(
             1,
@@ -344,11 +381,84 @@ mod evidence_changed {
 
         let run = check(&repo, &[]);
 
-        assert!(!says(&run, "AC-S1-1"));
+        assert!(!says(&run, "AC-S1-1: evidence"));
+        assert!(!says(&run, "AC-S1-2: evidence"));
         assert!(says(
             &run,
             "AC-S1-2: ref tests/store_test.rs#other_test does not resolve"
         ));
+    }
+
+    #[test]
+    fn a_broken_ref_that_landed_on_main_is_not_flagged_by_an_unrelated_branch_edit() {
+        let repo = project();
+        repo.spec_behaviour(
+            1,
+            &format!("{SPEC_CLAIM}- [AC-S1-2] Gone.\n  @ref tests/store_test.rs#gone_test\n"),
+        );
+        repo.commit("broken ref on main");
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write(
+            TEST_FILE,
+            "#[test]\nfn reopen_keeps_prior() {}\n\n#[test]\nfn other_test() { assert!(true); }\n",
+        );
+        repo.commit("unrelated edit");
+
+        let run = check(&repo, &[]);
+
+        assert!(!says(&run, "evidence"), "{}", run.stdout);
+        assert!(says(
+            &run,
+            "AC-S1-2: ref tests/store_test.rs#gone_test does not resolve"
+        ));
+    }
+
+    fn strike_project(status: &str, folds: &[&str], part: &str) -> Repo {
+        let repo = project();
+        repo.delta_file(1, status, folds, INTENT);
+        repo.delta_part(1, part, "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n");
+        repo.commit("delta");
+        edit_reopen_body(&repo);
+        repo
+    }
+
+    #[test]
+    fn a_draft_delta_striking_the_claim_does_not_excuse_the_change() {
+        let repo = strike_project("draft", &["SPEC-001"], "SPEC-001");
+
+        assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
+    }
+
+    #[test]
+    fn a_strike_from_a_delta_folding_into_another_spec_does_not_excuse_the_change() {
+        let repo = strike_project("in-progress", &["SPEC-002"], "SPEC-001");
+
+        assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
+    }
+
+    #[test]
+    fn a_strike_in_the_part_for_another_spec_does_not_excuse_the_change() {
+        let repo = strike_project("in-progress", &["SPEC-001", "SPEC-002"], "SPEC-002");
+
+        assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
+    }
+
+    #[test]
+    fn an_in_progress_delta_folding_into_the_spec_excuses_the_change() {
+        let repo = strike_project("in-progress", &["SPEC-001"], "SPEC-001");
+
+        assert!(!says(&check(&repo, &[]), "AC-S1-1: evidence"));
+    }
+
+    #[test]
+    fn a_delta_that_completed_in_the_range_excuses_the_change() {
+        let repo = project();
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        delta(&repo, 1, "complete", "SPEC-001", "- ~~[AC-S1-1]~~ gone\n");
+        edit_reopen_body(&repo);
+        repo.commit("completed in range");
+
+        assert!(!says(&check(&repo, &[]), "AC-S1-1: evidence"));
     }
 
     #[test]
@@ -858,12 +968,21 @@ mod hook {
     fn repo_wide_findings_are_not_attributed_to_payload_documents() {
         let repo = project();
         edit_reopen_body(&repo);
-        let payload = validate_payload(vec![delta_doc("draft", "- [AC-D1-1] Fine.\n")]);
+        let payload = transition_payload(
+            "draft",
+            "in-progress",
+            delta_doc("draft", "- [AC-D1-1] Fine.\n"),
+            vec![spec_doc()],
+        );
 
         let run = repo.run(&["check", "--hook"], &payload);
 
         assert_eq!(run.code, 0);
-        let finding = &run.findings()[0];
+        let finding = run
+            .findings()
+            .into_iter()
+            .find(|f| f["message"].as_str().unwrap().contains("AC-S1-1: evidence"))
+            .unwrap();
         assert!(finding.get("id").is_none());
         assert!(finding["message"]
             .as_str()
@@ -916,11 +1035,186 @@ mod hook {
         assert_eq!(plain.stdout, "");
     }
 
+    fn moved_delta(status: &str) -> Value {
+        let mut moved = delta_doc(
+            status,
+            "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
+        );
+        moved["path"] = json!("docs/deltas/DELTA-001-d/index.md");
+        moved
+    }
+
+    #[test]
+    fn the_validate_event_skips_the_range_checks() {
+        let repo = project();
+        repo.delta_file(1, "complete", &["SPEC-001", "SPEC-002"], INTENT);
+        touch_both(&repo);
+        repo.commit("both areas under a completed delta");
+        edit_reopen_body(&repo);
+        let payload = validate_payload(vec![moved_delta("complete")]);
+
+        let run = repo.run(&["check", "--hook"], &payload);
+
+        assert_eq!(run.code, 0);
+        assert!(!run.has_message("governed area"), "{}", run.stdout);
+        assert!(!run.has_message("evidence"), "{}", run.stdout);
+    }
+
+    #[test]
+    fn a_transition_limits_checks_one_and_two_to_the_moved_deltas_targets() {
+        let repo = project();
+        repo.write("b/tests/t_test.rs", "#[test]\nfn t() {}\n");
+        repo.spec_behaviour(2, "- [AC-S2-1] B.\n  @ref b/tests/t_test.rs#t\n");
+        repo.commit("spec 2 evidence");
+        touch_both(&repo);
+        repo.write("b/tests/t_test.rs", "#[test]\nfn t() { assert!(true); }\n");
+        let payload = transition_payload(
+            "in-progress",
+            "complete",
+            moved_delta("in-progress"),
+            vec![spec_doc()],
+        );
+
+        let gate = repo.run(&["check", "--hook"], &payload);
+        let plain = check(&repo, &[]);
+
+        assert_eq!(gate.findings(), Vec::<Value>::new(), "{}", gate.stdout);
+        assert!(says(&plain, "AC-S2-1: evidence"));
+        assert!(says(&plain, "create a delta that folds into SPEC-002"));
+    }
+
     #[test]
     fn an_invalid_payload_is_reported_with_exit_zero() {
         let run = project().run(&["check", "--hook"], "not json");
 
         assert_eq!(run.code, 0);
         assert!(run.has_message("invalid hook payload"));
+    }
+}
+
+mod spec_edits {
+    use super::*;
+
+    const EDITED: &str = "spec behaviour edited outside a fold; change it through a delta";
+
+    fn branch(repo: &Repo) {
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+    }
+
+    #[test]
+    fn a_hand_struck_claim_is_an_error_on_the_spec_part() {
+        let repo = project();
+        branch(&repo);
+        repo.spec_behaviour(
+            1,
+            "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("strike by hand");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            run.stdout
+                .contains(&format!("{SPEC_PART}:1: error: {EDITED}")),
+            "{}",
+            run.stdout
+        );
+    }
+
+    #[test]
+    fn a_hand_reworded_claim_is_an_error() {
+        let repo = project();
+        branch(&repo);
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] Reopen forgets the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("reword by hand");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert!(says(&run, EDITED), "{}", run.stdout);
+    }
+
+    #[test]
+    fn a_hand_added_claim_is_an_error() {
+        let repo = project();
+        branch(&repo);
+        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Added.\n"));
+        repo.commit("add by hand");
+
+        assert!(says(&check(&repo, &[]), EDITED));
+    }
+
+    #[test]
+    fn a_fold_from_a_delta_completed_in_the_range_is_silent() {
+        let repo = project();
+        branch(&repo);
+        let new = "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n";
+        let strike = "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n";
+        delta(&repo, 1, "complete", "SPEC-001", &format!("{strike}{new}"));
+        repo.spec_behaviour(1, new);
+        repo.commit("delta completed and folded");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!((run.code, run.stdout.as_str()), (0, ""));
+    }
+
+    #[test]
+    fn a_fold_that_does_not_match_the_completed_delta_is_an_error() {
+        let repo = project();
+        branch(&repo);
+        let new = "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n";
+        delta(&repo, 1, "complete", "SPEC-001", new);
+        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-D1-1] Different.\n"));
+        repo.commit("fold with a typo");
+
+        assert!(says(&check(&repo, &[]), EDITED));
+    }
+
+    #[test]
+    fn an_edit_on_trunk_before_the_range_is_not_flagged() {
+        let repo = project();
+        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Added.\n"));
+        repo.commit("by hand on main");
+
+        assert_eq!(check(&repo, &[]).stdout, "");
+    }
+
+    #[test]
+    fn a_change_to_governs_is_a_warning() {
+        let repo = project();
+        branch(&repo);
+        repo.spec_file(1, "active", &["a/**", "c/**"], INTENT);
+        repo.spec_behaviour(1, SPEC_CLAIM);
+        repo.commit("widen governs");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 0);
+        assert!(
+            run.stdout.contains(
+                "docs/specs/SPEC-001-s/index.md: warning: governs/tests changed in this range; review"
+            ),
+            "{}",
+            run.stdout
+        );
+    }
+
+    #[test]
+    fn a_change_to_tests_is_a_warning() {
+        let repo = project();
+        branch(&repo);
+        repo.spec_file_with_tests(1, "active", &["a/**"], &["tests/**"], INTENT);
+        repo.spec_behaviour(1, SPEC_CLAIM);
+        repo.commit("custom tests glob");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 0);
+        assert!(says(&run, "governs/tests changed in this range; review"));
     }
 }

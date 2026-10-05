@@ -3,6 +3,7 @@ mod check;
 mod claims;
 mod evidence;
 mod fold;
+mod folded;
 mod git;
 mod migrate;
 mod payload;
@@ -51,9 +52,9 @@ enum Command {
         /// Revision to diff against; overrides base resolution
         #[arg(long)]
         base: Option<String>,
-        /// Trunk branch for the merge-base
-        #[arg(long, default_value = range::DEFAULT_TRUNK)]
-        trunk: String,
+        /// Trunk branch for the merge-base; default main, else master, else origin/HEAD
+        #[arg(long)]
+        trunk: Option<String>,
         /// Turn a readiness condition into errors
         #[arg(long, value_enum)]
         require: Vec<RequireArg>,
@@ -125,14 +126,14 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
 
 fn check_command(
     base: Option<String>,
-    trunk: String,
+    trunk: Option<String>,
     require: &[RequireArg],
     json: bool,
     hook: bool,
 ) -> ExitCode {
     let options = check::Options {
         base: base.as_deref(),
-        trunk: Some(&trunk),
+        trunk: trunk.as_deref(),
         report_intent: json || hook,
         require: check::Require {
             claims: require.iter().any(|r| matches!(r, RequireArg::Claims)),

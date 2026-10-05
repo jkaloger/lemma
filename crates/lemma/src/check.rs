@@ -1,6 +1,7 @@
 use crate::claims::{has_intent, parse, Claim, BEHAVIOUR_PART};
-use crate::evidence::{changed, clean, glob_set, invalid_globs, resolve, RefStatus};
+use crate::evidence::{clean, glob_set, invalid_globs, resolve, RefStatus, Regions};
 use crate::fold::fold;
+use crate::folded::{completed_since, folds_into, spec_edits};
 use crate::git::{changed_since, git_output, touched_files};
 use crate::payload::{tests_or_default, Attributes, Doc, Finding as Wire, Payload};
 use crate::range::{self, Inputs, Rule};
@@ -8,7 +9,7 @@ use crate::targets::Targets;
 use crate::world::{in_flight, Site, World};
 use lazyspec::engine::store::Store;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -47,9 +48,16 @@ pub struct Finding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub part: Option<String>,
     pub message: String,
+    #[serde(skip)]
+    pub key: Option<String>,
 }
 
 impl Finding {
+    pub fn keyed(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+
     fn new(
         severity: &'static str,
         doc: &Doc,
@@ -64,6 +72,7 @@ impl Finding {
             id: Some(doc.id.clone()),
             part: None,
             message: message.into(),
+            key: None,
         }
     }
 
@@ -111,6 +120,7 @@ impl Finding {
             id: None,
             part: None,
             message: message.into(),
+            key: None,
         }
     }
 
@@ -151,26 +161,55 @@ pub fn has_error(findings: &[Finding]) -> bool {
     findings.iter().any(Finding::is_error)
 }
 
+pub struct Span {
+    pub base: String,
+    pub files: Vec<String>,
+}
+
+pub fn resolve_span(
+    root: &Path,
+    options: &Options,
+    payload: Option<&Payload>,
+) -> Result<Span, String> {
+    let base = resolve_base(root, options, payload)?;
+    let files = changed_since(root, &base);
+    Ok(Span { base, files })
+}
+
+fn is_validate(payload: Option<&Payload>) -> bool {
+    payload.is_some_and(|p| p.transition.is_none())
+}
+
 pub fn run(
     store: &Store,
     root: &Path,
     options: &Options,
     payload: Option<&Payload>,
 ) -> Vec<Finding> {
+    let span = (!is_validate(payload)).then(|| resolve_span(root, options, payload));
+    run_with(store, root, options, payload, span.as_ref())
+}
+
+pub fn run_with(
+    store: &Store,
+    root: &Path,
+    options: &Options,
+    payload: Option<&Payload>,
+    span: Option<&Result<Span, String>>,
+) -> Vec<Finding> {
     let world = World::load(store, payload);
     let mut scope = scope_of(&world, payload);
     let full = options.suite == Suite::Full;
-    let mut findings = match resolve_base(root, options, payload) {
-        Ok(base) => {
-            let files = changed_since(root, &base);
-            let mut found = coverage(store, root, &world, &files);
-            found.extend(evidence_changes(root, &world, &base, None));
+    let mut findings = match span {
+        None => Vec::new(),
+        Some(Ok(span)) => {
+            let found = range_findings(store, root, &world, span, full, payload);
             if !full {
-                scope.retain(|doc| touched_by(doc, &files));
+                scope.retain(|doc| touched_by(doc, &span.files));
             }
             found
         }
-        Err(message) => {
+        Some(Err(message)) => {
             if !full {
                 scope.clear();
             }
@@ -195,6 +234,44 @@ pub fn run(
     findings.sort();
     findings.dedup();
     findings
+}
+
+fn range_findings(
+    store: &Store,
+    root: &Path,
+    world: &World,
+    span: &Span,
+    full: bool,
+    payload: Option<&Payload>,
+) -> Vec<Finding> {
+    let completed = completed_since(root, world, &span.base, &span.files);
+    let covered = covered_specs(world, &completed);
+    let mut found = coverage(store, root, &covered, &span.files);
+    found.extend(evidence_changes(root, world, span, &completed, None));
+    if full {
+        found.extend(spec_edits(root, world, &span.base, &span.files, &completed));
+    }
+    if let Some(targets) = moved_targets(world, payload) {
+        found.retain(|f| f.id.as_ref().is_some_and(|id| targets.contains(id)));
+    }
+    found
+}
+
+fn moved_targets(world: &World, payload: Option<&Payload>) -> Option<BTreeSet<String>> {
+    let payload = payload.filter(|p| p.transition.is_some())?;
+    let moved = world.doc(&payload.documents.first()?.id)?;
+    match moved.doc_type.as_str() {
+        "delta" => Some(
+            moved
+                .fold_targets()
+                .into_iter()
+                .filter_map(|t| world.spec_named(t))
+                .map(|spec| spec.id.clone())
+                .collect(),
+        ),
+        "spec" => Some(BTreeSet::from([moved.id.clone()])),
+        _ => None,
+    }
 }
 
 fn touched_by(doc: &Doc, files: &[String]) -> bool {
@@ -225,7 +302,9 @@ pub fn resolve_base(
     payload: Option<&Payload>,
 ) -> Result<String, String> {
     let delta_index = payload
-        .and_then(|p| p.documents.iter().find(|d| d.doc_type == "delta"))
+        .filter(|p| p.transition.is_some())
+        .and_then(|p| p.documents.first())
+        .filter(|d| d.doc_type == "delta")
         .map(|d| Path::new(&d.path));
     let range = range::resolve(
         root,
@@ -258,7 +337,23 @@ fn within_one_area(per_file: &[BTreeSet<String>]) -> bool {
         .is_empty()
 }
 
-pub fn coverage(store: &Store, root: &Path, world: &World, files: &[String]) -> Vec<Finding> {
+pub fn covered_specs(world: &World, completed: &[&Doc]) -> BTreeSet<String> {
+    world
+        .in_flight()
+        .into_iter()
+        .chain(completed.iter().copied())
+        .flat_map(Doc::fold_targets)
+        .filter_map(|target| world.spec_named(target))
+        .map(|spec| spec.id.clone())
+        .collect()
+}
+
+pub fn coverage(
+    store: &Store,
+    root: &Path,
+    covered: &BTreeSet<String>,
+    files: &[String],
+) -> Vec<Finding> {
     let mut touched: BTreeMap<String, (String, Vec<&str>)> = BTreeMap::new();
     let mut per_file: Vec<BTreeSet<String>> = Vec::new();
     for file in files {
@@ -279,17 +374,10 @@ pub fn coverage(store: &Store, root: &Path, world: &World, files: &[String]) -> 
     if within_one_area(&per_file) {
         return Vec::new();
     }
-    let covered: BTreeSet<&str> = world
-        .in_flight()
-        .into_iter()
-        .flat_map(Doc::fold_targets)
-        .filter_map(|target| world.spec_named(target))
-        .map(|spec| spec.id.as_str())
-        .collect();
     let areas = touched.keys().cloned().collect::<Vec<_>>().join(", ");
     touched
         .iter()
-        .filter(|(id, _)| !covered.contains(id.as_str()))
+        .filter(|(id, _)| !covered.contains(*id))
         .map(|(id, (path, files))| {
             let sample: Vec<&str> = files.iter().take(3).copied().collect();
             let more = files.len().saturating_sub(sample.len());
@@ -308,16 +396,24 @@ pub fn coverage(store: &Store, root: &Path, world: &World, files: &[String]) -> 
                     "changes to {}{tail} touch more than one governed area ({areas}) and no in-flight delta folds into {id}; create a delta that folds into {id}",
                     sample.join(", ")
                 ),
+                key: Some(format!("check1:{id}")),
             }
         })
         .collect()
 }
 
-fn struck_by_in_flight(world: &World) -> BTreeSet<String> {
+fn struck_for(world: &World, spec: &Doc, completed: &[&Doc]) -> BTreeSet<String> {
+    let counts = |delta: &&Doc| {
+        delta.doc_type == "delta"
+            && (delta.status == "in-progress" || completed.iter().any(|c| c.id == delta.id))
+    };
     world
-        .in_flight()
-        .into_iter()
-        .flat_map(|d| world.sites(d))
+        .docs()
+        .iter()
+        .filter(counts)
+        .filter(|delta| folds_into(delta, spec))
+        .flat_map(|delta| world.sites(delta))
+        .filter(|site| site.governing.is_some_and(|g| g.id == spec.id))
         .flat_map(|site| site.claims)
         .filter(|c| c.struck)
         .map(|c| c.id)
@@ -327,11 +423,14 @@ fn struck_by_in_flight(world: &World) -> BTreeSet<String> {
 pub fn evidence_changes(
     root: &Path,
     world: &World,
-    base: &str,
+    span: &Span,
+    completed: &[&Doc],
     only: Option<&str>,
 ) -> Vec<Finding> {
-    let struck = struck_by_in_flight(world);
+    let base = span.base.as_str();
     let short = &base[..base.len().min(8)];
+    let changed_files: HashSet<&str> = span.files.iter().map(String::as_str).collect();
+    let mut regions = Regions::new(root, base);
     let mut findings = Vec::new();
     for spec in world.specs() {
         let Some(part) = spec.part(BEHAVIOUR_PART) else {
@@ -344,6 +443,7 @@ pub fn evidence_changes(
         let Some(at_base) = git_output(root, &["show", &format!("{base}:./{path}")]) else {
             continue;
         };
+        let struck = struck_for(world, spec, completed);
         let now = parse(&part.body).claims;
         for old in parse(&at_base).claims.iter().filter(|c| !c.struck) {
             let Some(live) = now.iter().find(|c| c.id == old.id && !c.struck) else {
@@ -356,7 +456,10 @@ pub fn evidence_changes(
                 if only.is_some_and(|file| clean(&r.path) != file) {
                     continue;
                 }
-                if !changed(root, base, &r.path, r.symbol.as_deref()) {
+                if !changed_files.contains(clean(&r.path)) {
+                    continue;
+                }
+                if !regions.changed(&r.path, r.symbol.as_deref()) {
                     continue;
                 }
                 let line = live
@@ -364,19 +467,19 @@ pub fn evidence_changes(
                     .iter()
                     .find(|n| n.path == r.path && n.symbol == r.symbol)
                     .map_or(live.line, |n| n.line);
+                let name = ref_name(&r.path, r.symbol.as_deref());
                 findings.push(
                     Finding::error(
                         spec,
                         &path,
                         Some(line),
                         format!(
-                            "{}: evidence {} changed since {short}; strike {} in a delta and add a new id, or revert the change",
-                            old.id,
-                            ref_name(&r.path, r.symbol.as_deref()),
-                            old.id
+                            "{}: evidence {name} changed since {short}; strike {} in a delta and add a new id, or revert the change",
+                            old.id, old.id
                         ),
                     )
-                    .in_part(BEHAVIOUR_PART),
+                    .in_part(BEHAVIOUR_PART)
+                    .keyed(format!("check2:{}:{name}", old.id)),
                 );
             }
         }
@@ -448,6 +551,7 @@ fn from_wire(doc: &Doc, wire: Wire) -> Finding {
         id: Some(doc.id.clone()),
         part: wire.part,
         message: wire.message,
+        key: None,
     }
 }
 

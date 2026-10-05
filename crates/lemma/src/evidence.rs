@@ -4,6 +4,7 @@ use lazyspec::engine::symbols::{
     normalize_ast, RustSymbolExtractor, SymbolExtractor, TypeScriptSymbolExtractor,
 };
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,10 @@ pub enum RefStatus {
 
 pub fn clean(path: &str) -> &str {
     path.trim_start_matches("./")
+}
+
+fn is_script(extension: &str) -> bool {
+    matches!(extension, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs")
 }
 
 fn extension(path: &str) -> Option<&str> {
@@ -55,7 +60,7 @@ fn text_has_word(source: &str, symbol: &str) -> bool {
 fn symbol_in(path: &str, source: &str, symbol: &str) -> bool {
     match extension(path) {
         Some("rs") => RustSymbolExtractor::new().extract(source, symbol).is_some(),
-        Some("ts") | Some("tsx") => TypeScriptSymbolExtractor::new()
+        Some(ext) if is_script(ext) => TypeScriptSymbolExtractor::new()
             .extract(source, symbol)
             .is_some(),
         _ => text_has_word(source, symbol),
@@ -87,7 +92,7 @@ fn region(path: &str, source: &str, symbol: Option<&str>) -> Option<String> {
             &extract(&RustSymbolExtractor::new())?,
             tree_sitter_rust::LANGUAGE.into(),
         )),
-        Some("ts") | Some("tsx") => Some(normalize_ast(
+        Some(ext) if is_script(ext) => Some(normalize_ast(
             &extract(&TypeScriptSymbolExtractor::new())?,
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         )),
@@ -95,27 +100,73 @@ fn region(path: &str, source: &str, symbol: Option<&str>) -> Option<String> {
     }
 }
 
-pub fn region_now(root: &Path, path: &str, symbol: Option<&str>) -> Option<String> {
-    let source = std::fs::read_to_string(root.join(clean(path))).ok()?;
-    region(path, &source, symbol)
+fn source_now(root: &Path, path: &str) -> Option<String> {
+    std::fs::read_to_string(root.join(clean(path))).ok()
 }
 
-pub fn region_at(root: &Path, rev: &str, path: &str, symbol: Option<&str>) -> Option<String> {
-    let source = git_output(root, &["show", &format!("{rev}:./{}", clean(path))])?;
-    region(path, &source, symbol)
+fn source_at(root: &Path, rev: &str, path: &str) -> Option<String> {
+    git_output(root, &["show", &format!("{rev}:./{}", clean(path))])
 }
 
-pub fn changed(root: &Path, base_rev: &str, path: &str, symbol: Option<&str>) -> bool {
-    let Some(before) = region_at(root, base_rev, path, symbol) else {
-        return true;
+type Ref = (String, Option<String>);
+
+pub struct Regions<'a> {
+    root: &'a Path,
+    base: &'a str,
+    sources: HashMap<String, (Option<String>, Option<String>)>,
+    results: HashMap<Ref, bool>,
+}
+
+impl<'a> Regions<'a> {
+    pub fn new(root: &'a Path, base: &'a str) -> Self {
+        Self {
+            root,
+            base,
+            sources: HashMap::new(),
+            results: HashMap::new(),
+        }
+    }
+
+    pub fn changed(&mut self, path: &str, symbol: Option<&str>) -> bool {
+        let key = (clean(path).to_string(), symbol.map(str::to_string));
+        if let Some(&known) = self.results.get(&key) {
+            return known;
+        }
+        let (root, base) = (self.root, self.base);
+        let (before, now) = self
+            .sources
+            .entry(key.0.clone())
+            .or_insert_with(|| (source_at(root, base, path), source_now(root, path)));
+        let result = differs(path, before.as_deref(), now.as_deref(), symbol);
+        self.results.insert(key, result);
+        result
+    }
+}
+
+fn differs(path: &str, before: Option<&str>, now: Option<&str>, symbol: Option<&str>) -> bool {
+    let Some(before) = before.and_then(|source| region(path, source, symbol)) else {
+        return false;
     };
-    region_now(root, path, symbol).is_none_or(|now| now != before)
+    now.and_then(|source| region(path, source, symbol))
+        .is_none_or(|now| now != before)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testgit::Repo;
+
+    fn region_now(root: &Path, path: &str, symbol: Option<&str>) -> Option<String> {
+        region(path, &source_now(root, path)?, symbol)
+    }
+
+    fn region_at(root: &Path, rev: &str, path: &str, symbol: Option<&str>) -> Option<String> {
+        region(path, &source_at(root, rev, path)?, symbol)
+    }
+
+    fn changed(root: &Path, base: &str, path: &str, symbol: Option<&str>) -> bool {
+        Regions::new(root, base).changed(path, symbol)
+    }
 
     const TESTS: &str =
         "#[test]\nfn reopen_keeps_prior() {\n    assert_eq!(1, 1);\n}\n\n#[test]\nfn other() {}\n";
@@ -257,15 +308,48 @@ mod tests {
     }
 
     #[test]
-    fn a_region_absent_at_base_is_changed() {
+    fn a_region_absent_at_base_is_not_a_change() {
         let (repo, base) = repo_with("tests/a.rs", TESTS);
         repo.write(
             "tests/a.rs",
             &format!("{TESTS}\n#[test]\nfn added() {{}}\n"),
         );
         repo.write("tests/new.rs", TESTS);
-        assert!(changed(repo.root(), &base, "tests/a.rs", Some("added")));
-        assert!(changed(repo.root(), &base, "tests/new.rs", Some("other")));
+        assert!(!changed(repo.root(), &base, "tests/a.rs", Some("added")));
+        assert!(!changed(repo.root(), &base, "tests/new.rs", Some("other")));
+    }
+
+    #[test]
+    fn a_region_present_at_base_and_gone_now_is_changed() {
+        let (repo, base) = repo_with("tests/a.rs", TESTS);
+        repo.write("tests/a.rs", "#[test]\nfn other() {}\n");
+        assert!(changed(
+            repo.root(),
+            &base,
+            "tests/a.rs",
+            Some("reopen_keeps_prior")
+        ));
+        std::fs::remove_file(repo.path("tests/a.rs")).unwrap();
+        assert!(changed(repo.root(), &base, "tests/a.rs", Some("other")));
+    }
+
+    #[test]
+    fn javascript_files_use_the_typescript_extractor() {
+        let src = "function a() { return 1; }\nfunction b() { return 2; }\n";
+        for ext in ["js", "jsx", "mjs", "cjs"] {
+            let path = format!("tests/a.{ext}");
+            let (repo, base) = repo_with(&path, src);
+            repo.write(&path, &format!("{src}function added() {{}}\n"));
+            assert!(!changed(repo.root(), &base, &path, Some("a")), "{ext}");
+            repo.write(&path, &src.replace("return 2", "return 3"));
+            assert!(!changed(repo.root(), &base, &path, Some("a")), "{ext}");
+            assert!(changed(repo.root(), &base, &path, Some("b")), "{ext}");
+            assert_eq!(
+                resolve(repo.root(), &path, Some("a"), &["tests/**".to_string()]),
+                RefStatus::Ok,
+                "{ext}"
+            );
+        }
     }
 
     #[test]

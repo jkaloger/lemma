@@ -2,8 +2,6 @@ use crate::git::git_output;
 use crate::session::recorded_base;
 use std::path::Path;
 
-pub const DEFAULT_TRUNK: &str = "main";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rule {
     Explicit,
@@ -33,6 +31,21 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
     Some(out.trim().to_string())
 }
 
+fn default_trunk(root: &Path) -> Option<String> {
+    let exists = |name: &str| rev_parse(root, name).is_some();
+    if exists("main") {
+        return Some("main".to_string());
+    }
+    if exists("master") {
+        return Some("master".to_string());
+    }
+    let target = git_output(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )?;
+    Some(target.trim().to_string())
+}
+
 fn merge_base_off_head(root: &Path, trunk: &str, head: &str) -> Option<String> {
     let base = git_output(root, &["merge-base", "HEAD", trunk])?;
     let base = base.trim();
@@ -56,10 +69,14 @@ pub fn resolve(root: &Path, inputs: &Inputs) -> Range {
     }
     let head = rev_parse(root, "HEAD");
     let head_rev = head.clone().unwrap_or_else(|| "HEAD".to_string());
-    let trunk = inputs.trunk.unwrap_or(DEFAULT_TRUNK);
+    let trunk = inputs
+        .trunk
+        .map(str::to_string)
+        .or_else(|| default_trunk(root));
     if let Some(base) = head
         .as_deref()
-        .and_then(|head| merge_base_off_head(root, trunk, head))
+        .zip(trunk.as_deref())
+        .and_then(|(head, trunk)| merge_base_off_head(root, trunk, head))
     {
         return found(base, Rule::MergeBase);
     }
@@ -137,6 +154,43 @@ mod tests {
                 rule: Rule::MergeBase
             }
         );
+    }
+
+    fn merge_base_range(repo: &Repo, first: String) {
+        let range = resolve(repo.root(), &inputs());
+        assert_eq!(
+            range,
+            Range {
+                rev: first,
+                rule: Rule::MergeBase
+            }
+        );
+    }
+
+    #[test]
+    fn master_is_the_trunk_when_main_does_not_exist() {
+        let (repo, first) = trunk_with_history();
+        repo.git(&["branch", "-m", "master"]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("b.txt", "2");
+        repo.commit("work");
+        merge_base_range(&repo, first);
+    }
+
+    #[test]
+    fn origin_head_is_the_trunk_when_neither_main_nor_master_exists() {
+        let (repo, first) = trunk_with_history();
+        repo.git(&["branch", "-m", "develop"]);
+        repo.git(&["update-ref", "refs/remotes/origin/develop", "HEAD"]);
+        repo.git(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/develop",
+        ]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("b.txt", "2");
+        repo.commit("work");
+        merge_base_range(&repo, first);
     }
 
     #[test]
