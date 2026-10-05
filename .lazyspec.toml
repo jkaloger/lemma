@@ -66,11 +66,31 @@ dir = ".lazyspec/templates"
 name = "lemma-validate"
 event = "validate"
 types = ["spec", "delta", "decision"]
-run = ["lemma", "validate"]
+run = ["lemma", "check", "--hook"]
 
 [[hooks]]
-name = "lemma-pre-transition"
+name = "lemma-claims-gate"
 event = "pre-transition"
 types = ["delta"]
+from = "draft"
+to = "in-progress"
 context_types = ["spec", "delta"]
-run = ["lemma", "pre-transition"]
+run = ["lemma", "check", "--hook", "--require", "claims"]
+
+[[hooks]]
+name = "lemma-check-gate"
+event = "pre-transition"
+types = ["delta"]
+from = "in-progress"
+to = "complete"
+context_types = ["spec", "delta"]
+run = ["lemma", "check", "--hook", "--require", "evidence", "--require", "clean"]
+
+[[hooks]]
+name = "lemma-fold"
+event = "pre-transition"
+types = ["delta"]
+from = "in-progress"
+to = "complete"
+context_types = ["spec", "delta"]
+run = ["lemma", "apply"]

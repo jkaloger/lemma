@@ -10,6 +10,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v lemma >/dev/null 2>&1 || exit 0; lemma signal"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
