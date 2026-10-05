@@ -1,11 +1,12 @@
 ---
 title: "Lemma is a signal source, not a verifier"
 type: decision
-status: proposed
+status: accepted
 author: "Jack Kaloger"
 date: 2026-10-05
 tags: []
 related: []
+reviewed: 72c6b23963e8783bcd274cacf6b4b0d8218a11d0
 ---
 
 ## Context
