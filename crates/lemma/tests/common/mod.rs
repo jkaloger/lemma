@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
-const CONFIG: &str = r#"
+pub const CONFIG: &str = r#"
 [[types]]
 name = "spec"
 plural = "specs"
@@ -68,6 +68,7 @@ impl Run {
 pub struct Repo {
     dir: TempDir,
     fake_bin: TempDir,
+    sub: &'static str,
 }
 
 pub fn install_fake_lazyspec(dir: &Path, version_output: &str) {
@@ -85,13 +86,25 @@ pub fn path_with_prepended(dir: &Path) -> std::ffi::OsString {
 
 impl Repo {
     pub fn new() -> Self {
+        Self::in_subdir("")
+    }
+
+    pub fn in_subdir(sub: &'static str) -> Self {
         let fake_bin = tempfile::tempdir().unwrap();
         install_fake_lazyspec(fake_bin.path(), "lazyspec 0.15.0");
         let repo = Self {
             dir: tempfile::tempdir().unwrap(),
             fake_bin,
+            sub,
         };
-        repo.git(&["init", "-q"]);
+        std::fs::create_dir_all(repo.root()).unwrap();
+        let init = Command::new("git")
+            .arg("-C")
+            .arg(repo.dir.path())
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        assert!(init.status.success());
         repo.write(".lazyspec.toml", CONFIG);
         repo.write(TEST_FILE, TEST_SRC);
         repo.write("src/lib.rs", "pub fn a() {}\n");
@@ -99,8 +112,8 @@ impl Repo {
         repo
     }
 
-    pub fn root(&self) -> &Path {
-        self.dir.path()
+    pub fn root(&self) -> PathBuf {
+        self.dir.path().join(self.sub)
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {
@@ -150,6 +163,23 @@ impl Repo {
         self.git(&["rev-parse", "--short", "HEAD"])
     }
 
+    pub fn run_real(&self, program: &str, args: &[&str]) -> Run {
+        let state = self.fake_bin.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let out = Command::new(program)
+            .args(args)
+            .env("LAZYSPEC_STATE_DIR", state)
+            .current_dir(self.root())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        Run {
+            code: out.status.code().unwrap(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    }
+
     pub fn run(&self, args: &[&str], stdin: &str) -> Run {
         let mut child = Command::new(env!("CARGO_BIN_EXE_lemma"))
             .args(args)
@@ -175,13 +205,24 @@ impl Repo {
     }
 
     pub fn spec_file(&self, n: u32, status: &str, governs: &[&str], body: &str) {
-        let globs = governs
-            .iter()
-            .map(|g| format!("\"{g}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
+        self.spec_file_with_tests(n, status, governs, &[], body);
+    }
+
+    pub fn spec_file_with_tests(
+        &self,
+        n: u32,
+        status: &str,
+        governs: &[&str],
+        tests: &[&str],
+        body: &str,
+    ) {
+        let globs = quote_all(governs);
+        let tests_line = match tests.is_empty() {
+            true => String::new(),
+            false => format!("tests: [{}]\n", quote_all(tests)),
+        };
         let content = format!(
-            "---\ntitle: \"Spec {n}\"\ntype: spec\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n---\n\n{body}"
+            "---\ntitle: \"Spec {n}\"\ntype: spec\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n{tests_line}---\n\n{body}"
         );
         self.write(&format!("{}/index.md", spec_dir(n)), &content);
         self.spec_behaviour(n, "");
@@ -210,6 +251,14 @@ impl Repo {
     pub fn delta_part(&self, n: u32, target: &str, body: &str) {
         self.write(&delta_part_path(n, target), body);
     }
+}
+
+fn quote_all(items: &[&str]) -> String {
+    items
+        .iter()
+        .map(|g| format!("\"{g}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn spec_dir(n: u32) -> String {
@@ -266,6 +315,11 @@ pub fn with_parts(mut doc: Value, parts: &[(&str, &str)]) -> Value {
     doc
 }
 
+pub fn with_tests(mut doc: Value, tests: &[&str]) -> Value {
+    doc["attributes"]["tests"] = json!(tests);
+    doc
+}
+
 pub fn validate_payload(docs: Vec<Value>) -> String {
     json!({"event": "validate", "hook": "lemma", "documents": docs}).to_string()
 }
@@ -304,4 +358,33 @@ impl Repo {
 pub fn raw_body_of(file: &str) -> &str {
     let closing = file[3..].find("\n---").unwrap() + 3 + 4;
     &file[closing..]
+}
+
+pub fn spec_block_hash(spec_body: &str, id: &str) -> String {
+    let lines: Vec<&str> = spec_body.lines().collect();
+    let needle = format!("- [{id}]");
+    let start = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with(&needle) || l.contains(&format!("[{id}]")))
+        .unwrap_or_else(|| panic!("{id} not in spec body"));
+    let block: Vec<&str> = std::iter::once(lines[start])
+        .chain(
+            lines[start + 1..]
+                .iter()
+                .copied()
+                .take_while(|l| l.starts_with(' ') || l.starts_with('\t')),
+        )
+        .filter(|l| !l.trim_start().starts_with("@base "))
+        .collect();
+    let text = block
+        .iter()
+        .enumerate()
+        .map(|(i, l)| if i == 0 { l.trim() } else { l.trim_end() })
+        .collect::<Vec<_>>()
+        .join("\n");
+    lazyspec::engine::hashing::sha256_hex(text.as_bytes())[..12].to_string()
+}
+
+pub fn base_line_for(spec_body: &str, id: &str) -> String {
+    format!("  @base {}\n", spec_block_hash(spec_body, id))
 }

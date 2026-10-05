@@ -145,10 +145,11 @@ fn start_counts_claims_across_parts() {
 #[test]
 fn complete_errors_per_unreceipted_claim_and_skips_intent_and_strikes() {
     let repo = Repo::new();
-    let claims = "- [AC-D1-1] bare\n- [AC-D1-2] [intent] vibes\n- ~~[AC-OLD-1]~~ removed\n- [AC-D1-3] bare too\n";
-    let d = delta("in-progress", &["SPEC-001"], claims);
+    let old = "- [AC-OLD-1] removed\n";
+    let claims = format!("- [AC-D1-1] bare\n- [AC-D1-2] [intent] vibes\n- ~~[AC-OLD-1]~~ removed\n{}- [AC-D1-3] bare too\n", base_line_for(old, "AC-OLD-1"));
+    let d = delta("in-progress", &["SPEC-001"], &claims);
 
-    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, old)]);
 
     assert_eq!(run.messages().len(), 2);
     assert!(run.has_message("AC-D1-1: claim has no receipt"));
@@ -156,7 +157,7 @@ fn complete_errors_per_unreceipted_claim_and_skips_intent_and_strikes() {
     let findings = run.findings();
     assert_eq!(findings[0]["part"], "behaviour.SPEC-001");
     assert_eq!(findings[0]["line"], 1);
-    assert_eq!(findings[1]["line"], 4);
+    assert_eq!(findings[1]["line"], 5);
 }
 
 #[test]
@@ -229,7 +230,11 @@ fn updates_of(run: &Run) -> Vec<Value> {
 fn complete_folds_into_the_behaviour_part_when_the_gate_is_clean() {
     let repo = Repo::new();
     let sha = repo.head();
-    let claims = format!("- [AC-S-1] new text\n  @ref tests/store_test.rs#reopen_keeps_prior@{sha}\n- ~~[AC-S-2]~~ doomed\n- [AC-D1-1] fresh claim\n  @ref tests/store_test.rs#other_test@{sha}\n");
+    let (b1, b2) = (
+        base_line_for(SPEC_CLAIMS, "AC-S-1"),
+        base_line_for(SPEC_CLAIMS, "AC-S-2"),
+    );
+    let claims = format!("- [AC-S-1] new text\n  @ref tests/store_test.rs#reopen_keeps_prior@{sha}\n{b1}- ~~[AC-S-2]~~ doomed\n{b2}- [AC-D1-1] fresh claim\n  @ref tests/store_test.rs#other_test@{sha}\n");
     let d = delta("in-progress", &["SPEC-001"], &claims);
 
     let run = pre(
@@ -272,7 +277,10 @@ fn complete_folds_each_targets_own_part_into_its_own_spec() {
         &[
             (
                 "behaviour.SPEC-001",
-                "- [AC-A-1] [intent] for one\n- ~~[AC-A-0]~~ old\n",
+                &format!(
+                    "- [AC-A-1] [intent] for one\n- ~~[AC-A-0]~~ old\n{}",
+                    base_line_for("- [AC-A-0] old\n", "AC-A-0")
+                ),
             ),
             ("behaviour.SPEC-002", "- [AC-B-1] [intent] for two\n"),
         ],
@@ -600,4 +608,419 @@ fn a_checked_receipt_satisfies_the_gate() {
 
     assert!(run.findings().is_empty(), "{:?}", run.messages());
     assert_eq!(updates_of(&run).len(), 1);
+}
+
+const BASE_SPEC: &str = "- [AC-S-1] old text\n";
+
+fn severities(run: &Run) -> Vec<String> {
+    run.findings()
+        .iter()
+        .map(|f| f["severity"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn fold_claim(repo: &Repo, base: &str, text: &str) -> String {
+    format!(
+        "- [AC-S-1] {text}\n  @ref {TEST_FILE}#reopen_keeps_prior@{}\n{base}",
+        repo.head()
+    )
+}
+
+#[test]
+fn replace_without_base_fails_draft_to_in_progress() {
+    let repo = Repo::new();
+    let d = delta("draft", &["SPEC-001"], &claim("AC-S-1", "new", None));
+
+    let run = pre(&repo, "draft", "in-progress", d, vec![spec(1, BASE_SPEC)]);
+
+    assert_eq!(severities(&run), ["error"]);
+    assert!(run.has_message("AC-S-1: replaces/strikes a spec claim without `@base`"));
+    assert!(run.has_message("lemma base DELTA-001 AC-S-1"));
+}
+
+#[test]
+fn strike_of_an_unknown_id_fails_draft_to_in_progress() {
+    let repo = Repo::new();
+    let d = delta("draft", &["SPEC-001"], "- ~~[AC-S-9]~~ gone\n");
+
+    let run = pre(&repo, "draft", "in-progress", d, vec![spec(1, BASE_SPEC)]);
+
+    assert!(run.has_message("AC-S-9"));
+    assert_eq!(severities(&run), ["error"]);
+}
+
+#[test]
+fn a_stale_base_is_not_a_draft_gate_error() {
+    let repo = Repo::new();
+    let d = delta(
+        "draft",
+        &["SPEC-001"],
+        "- [AC-S-1] new\n  @base 000000000000\n",
+    );
+
+    let run = pre(&repo, "draft", "in-progress", d, vec![spec(1, BASE_SPEC)]);
+
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+}
+
+#[test]
+fn fold_with_matching_base_replaces_and_drops_the_base_line() {
+    let repo = Repo::new();
+    let base = base_line_for(BASE_SPEC, "AC-S-1");
+    let d = delta(
+        "in-progress",
+        &["SPEC-001"],
+        &fold_claim(&repo, &base, "new"),
+    );
+
+    let run = pre(
+        &repo,
+        "in-progress",
+        "complete",
+        d,
+        vec![spec(1, BASE_SPEC)],
+    );
+
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+    let body = updates_of(&run)[0]["body"].as_str().unwrap().to_string();
+    assert!(body.starts_with("- [AC-S-1] new\n"), "{body}");
+    assert!(!body.contains("@base"));
+}
+
+#[test]
+fn fold_with_a_changed_base_errors_naming_both_hashes() {
+    let repo = Repo::new();
+    let base = base_line_for(BASE_SPEC, "AC-S-1");
+    let base_hash = spec_block_hash(BASE_SPEC, "AC-S-1");
+    let moved = "- [AC-S-1] edited elsewhere\n";
+    let d = delta(
+        "in-progress",
+        &["SPEC-001"],
+        &fold_claim(&repo, &base, "new"),
+    );
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, moved)]);
+
+    assert!(run.has_message(&format!("base {base_hash}")));
+    assert!(run.has_message(&format!("spec {}", spec_block_hash(moved, "AC-S-1"))));
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn a_new_id_colliding_with_a_spec_id_errors_without_writing() {
+    let repo = Repo::new();
+    let d = delta(
+        "in-progress",
+        &["SPEC-001"],
+        &fold_claim(&repo, "", "collides"),
+    );
+
+    let run = pre(
+        &repo,
+        "in-progress",
+        "complete",
+        d,
+        vec![spec(1, BASE_SPEC)],
+    );
+
+    assert!(run.has_message("AC-S-1: replaces/strikes a spec claim without `@base`"));
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn strike_with_a_stale_base_errors() {
+    let repo = Repo::new();
+    let d = delta(
+        "in-progress",
+        &["SPEC-001"],
+        "- ~~[AC-S-1]~~ old text\n  @base 000000000000\n",
+    );
+
+    let run = pre(
+        &repo,
+        "in-progress",
+        "complete",
+        d,
+        vec![spec(1, BASE_SPEC)],
+    );
+
+    assert!(run.has_message("spec block changed since `@base`"));
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn base_on_an_id_the_spec_lacks_errors_at_complete() {
+    let repo = Repo::new();
+    let d = delta(
+        "in-progress",
+        &["SPEC-001"],
+        &fold_claim(&repo, "  @base 000000000000\n", "new"),
+    );
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("has `@base` but SPEC-001 has no claim AC-S-1"));
+}
+
+fn fresh_delta(repo: &Repo) -> Value {
+    let sha = repo.head();
+    delta(
+        "in-progress",
+        &["SPEC-001"],
+        &claim("AC-D1-1", "x", Some(&sha)),
+    )
+}
+
+fn complete_run(repo: &Repo) -> Run {
+    pre(
+        repo,
+        "in-progress",
+        "complete",
+        fresh_delta(repo),
+        vec![spec(1, "")],
+    )
+}
+
+#[test]
+fn a_dirty_governed_file_blocks_complete_without_updates() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write("src/lib.rs", "pub fn a() { /* wip */ }\n");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("src/lib.rs has uncommitted changes; commit before completing"));
+    assert_eq!(run.findings()[0]["severity"], "error");
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn a_dirty_untracked_governed_file_blocks_complete() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write("src/new/mod.rs", "pub fn b() {}\n");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("src/new/mod.rs has uncommitted changes"));
+}
+
+#[test]
+fn a_dirty_ungoverned_file_does_not_block_complete() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write("docs/notes.md", "wip\n");
+    repo.write("scripts/build.sh", "echo\n");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+    assert!(!updates_of(&run).is_empty());
+}
+
+#[test]
+fn a_dirty_receipt_test_file_blocks_complete() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write(TEST_FILE, &format!("{TEST_SRC}// wip\n"));
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message(&format!("{TEST_FILE} has uncommitted changes")));
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn a_dirty_file_is_reported_once_even_when_governed_and_a_receipt() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    let body = format!("- [AC-D1-1] x\n  @ref {TEST_FILE}#reopen_keeps_prior@{sha}\n");
+    let d = delta("in-progress", &["SPEC-001"], &body);
+    let governing = with_parts(
+        doc("SPEC-001", "spec", "active", &["tests/**"], &[], INTENT),
+        &[("behaviour", "")],
+    );
+    repo.write(TEST_FILE, &format!("{TEST_SRC}// wip\n"));
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![governing]);
+
+    let dirty = run
+        .messages()
+        .iter()
+        .filter(|m| m.contains("uncommitted"))
+        .count();
+    assert_eq!(dirty, 1, "{:?}", run.messages());
+}
+
+#[test]
+fn the_by_hand_dry_run_reports_a_dirty_governed_file() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write("src/lib.rs", "pub fn a() { /* wip */ }\n");
+
+    let run = pre(&repo, "in-progress", "in-progress", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("src/lib.rs has uncommitted changes; commit before completing"));
+    assert!(!run.has_message("ready"));
+}
+
+#[test]
+fn a_clean_tree_completes() {
+    let repo = Repo::new();
+
+    assert!(complete_run(&repo).findings().is_empty());
+}
+
+fn production_receipt(repo: &Repo) -> Value {
+    let sha = repo.head();
+    delta(
+        "in-progress",
+        &["SPEC-001"],
+        &format!("- [AC-D1-1] x\n  @ref src/lib.rs#a@{sha}\n"),
+    )
+}
+
+#[test]
+fn complete_errors_on_a_receipt_outside_the_tests_globs() {
+    let repo = Repo::new();
+    let d = production_receipt(&repo);
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message(
+        "AC-D1-1: receipt src/lib.rs is not a test file under SPEC-001's `tests` globs"
+    ));
+    assert_eq!(run.findings()[0]["line"], 2);
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn complete_accepts_a_receipt_matching_the_spec_tests_override() {
+    let repo = Repo::new();
+    let d = production_receipt(&repo);
+    let overridden = with_tests(spec(1, ""), &["src/**"]);
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![overridden]);
+
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+}
+
+#[test]
+fn a_tests_override_rejects_the_default_test_path() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    let overridden = with_tests(spec(1, ""), &["checks/**"]);
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![overridden]);
+
+    assert!(run.has_message(&format!("receipt {TEST_FILE} is not a test file")));
+}
+
+#[test]
+fn a_dirty_governed_file_blocks_complete_when_the_root_is_a_git_subdirectory() {
+    let repo = Repo::in_subdir("proj");
+    let d = fresh_delta(&repo);
+    repo.write("src/lib.rs", "pub fn a() { /* wip */ }\n");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("src/lib.rs has uncommitted changes"));
+    assert!(updates_of(&run).is_empty());
+}
+
+#[test]
+fn dirty_governed_files_with_spaces_or_non_ascii_names_block_complete() {
+    let repo = Repo::in_subdir("proj");
+    let d = fresh_delta(&repo);
+    repo.write("src/my file.rs", "pub fn b() {}\n");
+    repo.write("src/caf\u{e9}.rs", "pub fn c() {}\n");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(run.has_message("src/my file.rs has uncommitted changes"));
+    assert!(run.has_message("src/caf\u{e9}.rs has uncommitted changes"));
+}
+
+#[test]
+fn an_invalid_governs_or_tests_glob_blocks_complete() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    let broken = with_tests(
+        doc("SPEC-001", "spec", "active", &["src/["], &[], INTENT),
+        &["checks/["],
+    );
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![broken]);
+
+    assert!(run.has_message("governs glob `src/[` is invalid:"));
+    assert!(run.has_message("tests glob `checks/[` is invalid:"));
+    assert!(updates_of(&run).is_empty());
+}
+
+fn body_of_fold(spec_claims: &str, delta_claim_text: &str) -> String {
+    let repo = Repo::new();
+    let sha = repo.head();
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.spec_behaviour(1, spec_claims);
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        &format!("- [AC-S-1] {delta_claim_text}\n  @ref {TEST_FILE}#reopen_keeps_prior@{sha}\n"),
+    );
+    repo.commit("fixtures");
+    let based = repo.run(&["base", "DELTA-001"], "");
+    assert_eq!(based.code, 0, "{}", based.stdout);
+    repo.commit("based");
+
+    let spec_doc = with_parts(
+        doc("SPEC-001", "spec", "active", &["src/**"], &[], INTENT),
+        &[("behaviour", &repo.read(&spec_part_path(1)))],
+    );
+    let delta_doc = with_parts(
+        doc(
+            "DELTA-001",
+            "delta",
+            "in-progress",
+            &[],
+            &["SPEC-001"],
+            INTENT,
+        ),
+        &[(
+            "behaviour.SPEC-001",
+            &repo.read(&delta_part_path(1, "SPEC-001")),
+        )],
+    );
+    let run = pre(&repo, "in-progress", "complete", delta_doc, vec![spec_doc]);
+
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+    let updates = updates_of(&run);
+    assert_eq!(updates.len(), 1);
+    updates[0]["body"].as_str().unwrap().to_string()
+}
+
+fn has_base_line(body: &str) -> bool {
+    body.lines().any(|l| l.trim_start().starts_with("@base "))
+}
+
+#[test]
+fn based_delta_folds_after_lemma_base_with_no_base_line_in_the_spec() {
+    let body = body_of_fold("- [AC-S-1] old\n", "new");
+
+    assert!(body.starts_with("- [AC-S-1] new\n"), "{body}");
+    assert!(!has_base_line(&body), "{body}");
+}
+
+#[test]
+fn a_claim_mentioning_base_keeps_its_id_line_through_base_and_fold() {
+    let body = body_of_fold(
+        "- [AC-S-1] the fold strips `@base` lines\n",
+        "the fold strips `@base` lines, now precisely",
+    );
+
+    assert!(
+        body.starts_with("- [AC-S-1] the fold strips `@base` lines, now precisely\n"),
+        "{body}"
+    );
+    assert!(!has_base_line(&body), "{body}");
 }

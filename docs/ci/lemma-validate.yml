@@ -16,4 +16,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install lazyspec lemma --locked
       - run: lazyspec hook trust
+      # lazyspec validate exits 2 on any error finding (lemma invariants), so this step fails the job on them.
+      # --warnings also prints drift findings (stale receipts, @base mismatch), which do not fail it.
       - run: lazyspec validate --warnings

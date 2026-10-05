@@ -19,6 +19,7 @@ pub struct Claim {
     pub struck: bool,
     pub intent: bool,
     pub receipts: Vec<Receipt>,
+    pub base: Option<String>,
     pub block: Vec<String>,
 }
 
@@ -58,6 +59,17 @@ fn item_pattern() -> &'static Regex {
 
 pub fn lines_of(body: &str) -> Vec<&str> {
     body.split('\n').collect()
+}
+
+pub fn owned_lines(body: &str) -> Vec<String> {
+    lines_of(body).into_iter().map(str::to_string).collect()
+}
+
+pub fn eol_of(line: &str) -> &'static str {
+    match line.ends_with('\r') {
+        true => "\r",
+        false => "",
+    }
 }
 
 fn fence_marker(line: &str) -> Option<char> {
@@ -185,6 +197,56 @@ fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<R
         .collect()
 }
 
+fn base_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\s*@base\s+([0-9a-f]+)").unwrap())
+}
+
+fn base_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Option<String> {
+    (start..end)
+        .filter(|&i| live[i] && is_base_line(lines[i]))
+        .find_map(|i| base_pattern().captures(lines[i]))
+        .map(|c| c[1].to_string())
+}
+
+const BASE_MARKER: &str = "@base";
+const HASH_LEN: usize = 12;
+
+pub fn is_base_line(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix(BASE_MARKER)
+        .is_some_and(|rest| rest.starts_with(' '))
+}
+
+pub fn is_annotation(line: &str) -> bool {
+    let line = line.trim_start();
+    is_base_line(line) || line.starts_with("@ref ") || line.starts_with("@checked ")
+}
+
+pub fn without_base(block: &[String]) -> Vec<String> {
+    block
+        .iter()
+        .filter(|line| !is_base_line(line))
+        .cloned()
+        .collect()
+}
+
+pub fn block_hash(claim: &Claim) -> String {
+    let text = without_base(&claim.block)
+        .iter()
+        .enumerate()
+        .map(|(i, line)| if i == 0 { line.trim() } else { line.trim_end() })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut hash = lazyspec::engine::hashing::sha256_hex(text.as_bytes());
+    hash.truncate(HASH_LEN);
+    hash
+}
+
+pub fn base_line(hash: &str) -> String {
+    format!("  {BASE_MARKER} {hash}")
+}
+
 fn marks_intent(lines: &[&str], live: &[bool], start: usize, end: usize) -> bool {
     (start..end).any(|i| live[i] && lines[i].contains("[intent]"))
 }
@@ -212,6 +274,7 @@ pub fn parse(body: &str) -> Behaviour {
             struck: caps.get(1).is_some(),
             intent: marks_intent(&lines, &live, cursor, end),
             receipts: receipts_in(&lines, &live, cursor, end),
+            base: base_in(&lines, &live, cursor, end),
             block: lines[cursor..end].iter().map(|s| s.to_string()).collect(),
         });
         cursor = end;
@@ -323,6 +386,69 @@ mod tests {
         assert_eq!(r.sha.as_deref(), Some("3f9c2e1"));
         assert_eq!(r.line, 2);
         assert!(r.symbol.is_none());
+    }
+
+    #[test]
+    fn base_line_is_parsed() {
+        let b = parse("- [A-1] one\n  @ref a.rs#f@abc\n  @base 0123abcdef45\n- [A-2] two\n");
+        assert_eq!(b.claims[0].base.as_deref(), Some("0123abcdef45"));
+        assert_eq!(b.claims[1].base, None);
+    }
+
+    fn hash_of(body: &str) -> String {
+        block_hash(&parse(body).claims[0])
+    }
+
+    #[test]
+    fn hash_is_twelve_hex_chars_and_ignores_id_indentation_and_trailing_space() {
+        let plain = hash_of("- [A-1] one\n  @ref a.rs#f@abc\n");
+        assert_eq!(plain.len(), 12);
+        assert!(plain.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(plain, hash_of("- [A-1] one   \n  @ref a.rs#f@abc\t\n"));
+        let indented = block_hash(&Claim {
+            block: vec!["  - [A-1] one".into(), "  @ref a.rs#f@abc".into()],
+            ..parse("- [A-1] one\n").claims.remove(0)
+        });
+        assert_eq!(plain, indented);
+    }
+
+    #[test]
+    fn hash_ignores_the_base_line_and_tracks_text_and_receipts() {
+        let plain = hash_of("- [A-1] one\n  @ref a.rs#f@abc\n");
+        assert_eq!(
+            plain,
+            hash_of("- [A-1] one\n  @ref a.rs#f@abc\n  @base 111111111111\n")
+        );
+        assert_ne!(plain, hash_of("- [A-1] uno\n  @ref a.rs#f@abc\n"));
+        assert_ne!(plain, hash_of("- [A-1] one\n  @ref a.rs#f@abd\n"));
+    }
+
+    #[test]
+    fn a_claim_that_mentions_base_in_its_text_keeps_its_id_line() {
+        let body =
+            "- [A-1] the fold strips `@base` lines\n  @ref a.rs#f@abc\n  @base 111111111111\n";
+        let claim = &parse(body).claims[0];
+        assert_eq!(
+            without_base(&claim.block),
+            vec!["- [A-1] the fold strips `@base` lines", "  @ref a.rs#f@abc"]
+        );
+        assert_eq!(claim.base.as_deref(), Some("111111111111"));
+        assert_eq!(
+            block_hash(claim),
+            hash_of("- [A-1] the fold strips `@base` lines\n  @ref a.rs#f@abc\n")
+        );
+        assert_ne!(block_hash(claim), hash_of("- [A-1] \n  @ref a.rs#f@abc\n"));
+    }
+
+    #[test]
+    fn annotation_lines_are_ref_checked_and_base() {
+        assert!(is_annotation("  @ref a.rs#f@abc"));
+        assert!(is_annotation("\t@checked jack@abc"));
+        assert!(is_annotation("  @base 0123"));
+        assert!(is_base_line("  @base 0123"));
+        assert!(!is_base_line("  @ref a.rs#f@abc"));
+        assert!(!is_annotation("- [A-1] strips `@base` lines"));
+        assert!(!is_annotation("  prose"));
     }
 
     #[test]

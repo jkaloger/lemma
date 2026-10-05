@@ -46,6 +46,7 @@ fn receipt_lands_in_the_part_holding_the_claim() {
     let repo = Repo::new();
     delta_with_bare_claims(&repo);
     repo.delta_part(1, "SPEC-002", "- [AC-D1-7] elsewhere\n");
+    repo.spec_file(2, "active", &["src/**"], "## Intent\n\nB.\n");
     repo.commit("second part");
     let other_part = delta_part_path(1, "SPEC-002");
     let first_before = repo.read(DELTA);
@@ -239,4 +240,142 @@ fn receipt_refuses_a_claim_live_in_two_parts() {
     let run = refused(&repo, &["receipt", "DELTA-001", "AC-D1-2", &target()]);
 
     assert!(run.has_message("more than one part"));
+}
+
+fn based_delta(repo: &Repo, delta_claims: &str) {
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", delta_claims);
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.spec_behaviour(1, "- [AC-S-1] old\n");
+    repo.commit("delta");
+}
+
+#[test]
+fn receipt_on_a_replacing_claim_inserts_base_after_the_ref() {
+    let repo = Repo::new();
+    based_delta(&repo, "- [AC-S-1] new\n  note\n");
+    let head = repo.head();
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-S-1", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert_eq!(
+        repo.read(DELTA),
+        format!(
+            "- [AC-S-1] new\n  @ref {TEST_FILE}#reopen_keeps_prior@{head}\n{}  note\n",
+            base_line_for("- [AC-S-1] old\n", "AC-S-1")
+        )
+    );
+}
+
+#[test]
+fn receipt_on_a_new_id_claim_adds_no_base() {
+    let repo = Repo::new();
+    based_delta(&repo, "- [AC-D1-1] fresh\n");
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-1", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(!repo.read(DELTA).contains("@base"));
+}
+
+#[test]
+fn receipt_leaves_an_existing_base_alone() {
+    let repo = Repo::new();
+    based_delta(&repo, "- [AC-S-1] new\n  @base 000000000000\n");
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-S-1", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert_eq!(repo.read(DELTA).matches("@base").count(), 1);
+    assert!(repo.read(DELTA).contains("@base 000000000000"));
+}
+
+#[test]
+fn re_receipting_a_replaced_claim_puts_base_after_the_id_line() {
+    let repo = Repo::new();
+    based_delta(
+        &repo,
+        &format!("- [AC-S-1] new\n  @ref {TEST_FILE}#reopen_keeps_prior@1111111\n"),
+    );
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-S-1", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(repo.read(DELTA).starts_with(&format!(
+        "- [AC-S-1] new\n{}",
+        base_line_for("- [AC-S-1] old\n", "AC-S-1")
+    )));
+}
+
+#[test]
+fn receipt_refuses_a_production_path_and_writes_nothing() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+
+    let run = refused(&repo, &["receipt", "DELTA-001", "AC-D1-1", "src/lib.rs#a"]);
+
+    assert!(run.has_message(
+        "src/lib.rs is not a test file under SPEC-001's `tests` globs; a production symbol is not a receipt"
+    ));
+}
+
+#[test]
+fn a_spec_tests_override_accepts_its_own_paths_and_rejects_the_default() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    repo.spec_file_with_tests(
+        1,
+        "active",
+        &["src/**"],
+        &["checks/**"],
+        "## Intent\n\nA.\n",
+    );
+    repo.write("checks/foo.rs", "#[test]\nfn holds() {}\n");
+    repo.commit("override");
+
+    let rejected = refused(&repo, &["receipt", "DELTA-001", "AC-D1-1", &target()]);
+    assert!(rejected.has_message("is not a test file under SPEC-001's"));
+
+    let run = repo.run(
+        &["receipt", "DELTA-001", "AC-D1-1", "checks/foo.rs#holds"],
+        "",
+    );
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(repo.read(DELTA).contains("@ref checks/foo.rs#holds@"));
+}
+
+#[test]
+fn receipt_refuses_when_the_target_spec_does_not_resolve() {
+    let repo = Repo::new();
+    repo.delta_file(1, "in-progress", &["SPEC-009"], INTENT);
+    repo.delta_part(1, "SPEC-009", "- [AC-D1-1] first\n");
+    repo.commit("delta");
+
+    let part = delta_part_path(1, "SPEC-009");
+    let before = repo.read(&part);
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-1", &target()], "");
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.has_message("SPEC-009"));
+    assert_eq!(repo.read(&part), before);
+}
+
+#[test]
+fn receipt_on_a_specs_own_claim_applies_the_spec_tests_globs() {
+    let repo = Repo::new();
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.spec_behaviour(1, "- [AC-1] works\n");
+    repo.commit("spec");
+    let part = spec_part_path(1);
+    let before = repo.read(&part);
+
+    let run = repo.run(&["receipt", "SPEC-001", "AC-1", "src/lib.rs#a"], "");
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.has_message(
+        "src/lib.rs is not a test file under SPEC-001's `tests` globs; a production symbol is not a receipt"
+    ));
+    assert_eq!(repo.read(&part), before);
 }

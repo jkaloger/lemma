@@ -2,8 +2,9 @@ use crate::claims::{has_intent, Claim, BEHAVIOUR_PART};
 use crate::fold::fold;
 use crate::payload::{BehaviourPart, Doc, Finding, Output, Payload, Update};
 use crate::project::specs_from_store;
-use crate::receipt::{Checker, Verdict};
+use crate::receipt::{glob_set, invalid_glob_findings, non_test_receipts, Checker, Verdict};
 use crate::targets::{specs_in, Targets};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 pub fn run(payload: &Payload, root: &Path) -> Output {
@@ -64,17 +65,7 @@ fn unresolved_targets(delta: &Doc, targets: &Targets) -> Vec<Finding> {
             "delta has no folds-into link",
         )];
     }
-    targets
-        .unresolved()
-        .into_iter()
-        .map(|t| {
-            Finding::error(
-                &delta.id,
-                None,
-                format!("fold target {t} does not resolve to a spec"),
-            )
-        })
-        .collect()
+    targets.unresolved_findings(delta)
 }
 
 fn start(delta: &Doc, specs: &[&Doc]) -> Vec<Finding> {
@@ -98,7 +89,29 @@ fn start(delta: &Doc, specs: &[&Doc]) -> Vec<Finding> {
     findings.extend(unresolved_targets(delta, &targets));
     findings.extend(targets.missing_parts(delta, true));
     findings.extend(targets.orphan_parts(&parts, delta));
+    findings.extend(base_findings(delta, &targets, &parts, true));
     findings
+}
+
+fn base_findings(
+    delta: &Doc,
+    targets: &Targets,
+    parts: &[BehaviourPart],
+    start_only: bool,
+) -> Vec<Finding> {
+    targets
+        .base_issues(parts)
+        .into_iter()
+        .filter(|p| !start_only || p.issue.blocks_start())
+        .map(|p| {
+            Finding::error(
+                &delta.id,
+                Some(p.issue.line),
+                p.issue.message(&delta.id, &p.spec),
+            )
+            .in_part(&p.part)
+        })
+        .collect()
 }
 
 fn complete(delta: &Doc, specs: &[&Doc], root: &Path, will_write: bool) -> Vec<Finding> {
@@ -111,10 +124,58 @@ fn complete(delta: &Doc, specs: &[&Doc], root: &Path, will_write: bool) -> Vec<F
         let governs = targets.governs_of(part);
         for claim in part.claims.iter().filter(|c| !c.struck && !c.intent) {
             findings.extend(unsettled(delta, part, claim, &governs, &checker));
+            findings.extend(
+                targets
+                    .spec_of(part)
+                    .into_iter()
+                    .flat_map(|spec| non_test_receipts(&delta.id, part.name, claim, spec)),
+            );
         }
     }
+    findings.extend(
+        targets
+            .resolved
+            .iter()
+            .flat_map(|spec| invalid_glob_findings(spec)),
+    );
     findings.extend(unfoldable_targets(delta, &targets, &parts, will_write));
+    findings.extend(dirty_findings(delta, &targets, &parts, &checker));
+    findings.extend(base_findings(delta, &targets, &parts, false));
     findings
+}
+
+fn dirty_findings(
+    delta: &Doc,
+    targets: &Targets,
+    parts: &[BehaviourPart],
+    checker: &Checker,
+) -> Vec<Finding> {
+    let governs: Vec<String> = targets
+        .resolved
+        .iter()
+        .flat_map(|s| s.governs.clone())
+        .collect();
+    let governed = glob_set(&governs);
+    let receipt_paths: BTreeSet<&str> = parts
+        .iter()
+        .flat_map(|p| &p.claims)
+        .filter(|c| !c.struck && !c.intent)
+        .flat_map(|c| &c.receipts)
+        .filter(|r| r.checked_by.is_none())
+        .map(|r| r.path.trim_start_matches("./"))
+        .collect();
+    checker
+        .dirty_paths()
+        .iter()
+        .filter(|p| governed.is_match(p.as_str()) || receipt_paths.contains(p.as_str()))
+        .map(|p| {
+            Finding::error(
+                &delta.id,
+                None,
+                format!("{p} has uncommitted changes; commit before completing"),
+            )
+        })
+        .collect()
 }
 
 fn unsettled(

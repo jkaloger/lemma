@@ -1,7 +1,8 @@
 use crate::claims::{Claim, BEHAVIOUR_PART};
-use crate::payload::{Doc, Finding, Output, Payload};
+use crate::fold::BaseKind;
+use crate::payload::{BehaviourPart, Doc, Finding, Output, Payload};
 use crate::project::specs_from_store;
-use crate::receipt::{Checker, Verdict};
+use crate::receipt::{invalid_glob_findings, non_test_receipts, Checker, Verdict};
 use crate::targets::{specs_in, Targets};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,6 +21,7 @@ pub fn run(payload: &Payload, root: &Path) -> Output {
                 }
             }
             "spec" => {
+                findings.extend(invalid_glob_findings(doc));
                 findings.extend(check_spec(doc, &checker));
                 findings.extend(intent_count(doc, &doc.spec_claims()));
             }
@@ -60,7 +62,7 @@ fn receipt_findings(
         .filter_map(|receipt| match checker.check(receipt, governs) {
             Verdict::Fresh => None,
             Verdict::Unresolved(why) => Some(
-                Finding::warning(
+                Finding::error(
                     &doc.id,
                     Some(receipt.line),
                     format!("{}: receipt does not resolve: {why}", claim.id),
@@ -104,7 +106,7 @@ fn claims_in_index(doc: &Doc, root: &Path) -> Vec<Finding> {
     doc.index_claims(root)
         .into_iter()
         .map(|claim| {
-            Finding::warning(
+            Finding::error(
                 &doc.id,
                 Some(claim.line),
                 format!(
@@ -122,33 +124,30 @@ fn check_spec(spec: &Doc, checker: &Checker) -> Vec<Finding> {
     }
     spec.spec_claims()
         .iter()
-        .flat_map(|claim| receipt_findings(spec, BEHAVIOUR_PART, claim, &spec.governs, checker))
+        .flat_map(|claim| {
+            let mut found = receipt_findings(spec, BEHAVIOUR_PART, claim, &spec.governs, checker);
+            if !claim.intent {
+                found.extend(non_test_receipts(&spec.id, BEHAVIOUR_PART, claim, spec));
+            }
+            found
+        })
         .collect()
 }
 
 fn check_delta(delta: &Doc, specs: &[&Doc], checker: &Checker) -> Vec<Finding> {
     let parts = delta.behaviour_parts();
     let targets = Targets::of(delta, specs);
-    let mut findings: Vec<Finding> = targets
-        .unresolved()
-        .into_iter()
-        .map(|t| {
-            Finding::warning(
-                &delta.id,
-                None,
-                format!("fold target {t} does not resolve to a spec"),
-            )
-        })
-        .collect();
+    let mut findings = targets.unresolved_findings(delta);
     findings.extend(targets.missing_parts(delta, delta.status != "draft"));
     findings.extend(targets.orphan_parts(&parts, delta));
+    findings.extend(base_findings(delta, &targets, &parts));
 
     for part in &parts {
         let governs = targets.governs_of(part);
         for claim in part.claims.iter().filter(|c| !c.struck) {
             if delta.status == "in-progress" && !claim.intent && claim.receipts.is_empty() {
                 findings.push(
-                    Finding::warning(
+                    Finding::error(
                         &delta.id,
                         Some(claim.line),
                         format!("{}: claim has no receipt", claim.id),
@@ -158,10 +157,41 @@ fn check_delta(delta: &Doc, specs: &[&Doc], checker: &Checker) -> Vec<Finding> {
             }
             if receipts_apply(delta) {
                 findings.extend(receipt_findings(delta, part.name, claim, &governs, checker));
+                if !claim.intent {
+                    findings.extend(
+                        targets
+                            .spec_of(part)
+                            .into_iter()
+                            .flat_map(|spec| non_test_receipts(&delta.id, part.name, claim, spec)),
+                    );
+                }
             }
         }
     }
     findings
+}
+
+fn base_findings(delta: &Doc, targets: &Targets, parts: &[BehaviourPart]) -> Vec<Finding> {
+    if delta.status == "complete" {
+        return Vec::new();
+    }
+    targets
+        .base_issues(parts)
+        .into_iter()
+        .map(|p| {
+            let message = p.issue.message(&delta.id, &p.spec);
+            let line = Some(p.issue.line);
+            let finding = match p.issue.kind {
+                BaseKind::Missing | BaseKind::StrikeOfUnknown => {
+                    Finding::error(&delta.id, line, message)
+                }
+                BaseKind::Stale { .. } | BaseKind::OrphanBase => {
+                    Finding::warning(&delta.id, line, message)
+                }
+            };
+            finding.in_part(&p.part)
+        })
+        .collect()
 }
 
 fn overlapping_claims(docs: &[Doc]) -> Vec<Finding> {

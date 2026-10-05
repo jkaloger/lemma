@@ -1,4 +1,5 @@
 mod attach;
+mod base;
 mod claims;
 mod fold;
 mod outcome;
@@ -40,8 +41,16 @@ enum Command {
     PreTransition,
     /// Bound a session's changes (Claude Code Stop hook)
     Stop,
-    /// Update the receipt commits on one document
-    RePin { id: String },
+    /// Update the receipt commits on one document, or on the named claims only
+    RePin {
+        id: String,
+        claims: Vec<String>,
+        /// Re-pin even when a receipt file changed and its claim did not
+        #[arg(long)]
+        force: bool,
+    },
+    /// Record the spec block a delta claim replaces or strikes (`@base <hash>`)
+    Base { delta: String, claims: Vec<String> },
     /// Pin a test as a claim's receipt at the current HEAD
     Receipt {
         delta: String,
@@ -139,7 +148,12 @@ fn main() -> ExitCode {
         Command::Validate => with_payload(|p| validate::run(p, &current_dir())),
         Command::PreTransition => with_payload(|p| transition::run(p, &current_dir())),
         Command::Stop => stop_command(),
-        Command::RePin { id } => store_command(|store, root| repin::run(store, root, &id)),
+        Command::RePin { id, claims, force } => {
+            store_command(|store, root| repin::run(store, root, &id, &claims, force))
+        }
+        Command::Base { delta, claims } => {
+            store_command(|store, root| base::run(store, root, &delta, &claims))
+        }
         Command::Receipt {
             delta,
             claim,

@@ -16,10 +16,25 @@ pub struct Part {
     pub body: String,
 }
 
+pub fn tests_or_default(attributes: &Attributes) -> Vec<String> {
+    if !attributes.tests.is_empty() {
+        return attributes.tests.clone();
+    }
+    DEFAULT_TESTS.iter().map(|g| g.to_string()).collect()
+}
+
 pub struct BehaviourPart<'a> {
     pub name: &'a str,
     pub target: Option<&'a str>,
     pub claims: Vec<Claim>,
+}
+
+const DEFAULT_TESTS: [&str; 4] = ["**/tests/**", "**/*_test.*", "**/*.test.*", "**/*.spec.*"];
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Attributes {
+    #[serde(default)]
+    pub tests: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -41,11 +56,17 @@ pub struct Doc {
     pub parts: Vec<Part>,
     #[serde(default)]
     pub content_hash: String,
+    #[serde(default)]
+    pub attributes: Attributes,
     #[serde(skip)]
     pub from_store: bool,
 }
 
 impl Doc {
+    pub fn tests_globs(&self) -> Vec<String> {
+        tests_or_default(&self.attributes)
+    }
+
     pub fn fold_targets(&self) -> Vec<&str> {
         self.related
             .iter()

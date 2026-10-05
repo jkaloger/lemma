@@ -1,5 +1,5 @@
 use crate::payload::Finding;
-use crate::receipt::{git_lines, git_output};
+use crate::receipt::{git_output, touched_files};
 use lazyspec::engine::document::DocMeta;
 use lazyspec::engine::store::Store;
 use regex::Regex;
@@ -35,15 +35,6 @@ fn unapproved_completions(store: &Store, root: &Path, touched: &[String]) -> Vec
             ))
         })
         .collect()
-}
-
-fn touched_files(root: &Path) -> Vec<String> {
-    let tracked =
-        git_lines(root, &["diff", "--name-only", "--relative", "HEAD"]).unwrap_or_default();
-    let untracked =
-        git_lines(root, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
-    let all: BTreeSet<String> = tracked.into_iter().chain(untracked).collect();
-    all.into_iter().collect()
 }
 
 fn governing_ids(store: &Store, root: &Path, file: &str) -> BTreeSet<String> {

@@ -175,7 +175,7 @@ fn claim_in_a_spec_index_is_an_error() {
 
     let findings = findings_besides_intent_counts(&run);
     assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0]["severity"], "warning");
+    assert_eq!(findings[0]["severity"], "error");
     assert!(run.has_message("AC-S-1: claim-shaped item is in index.md"));
 }
 
@@ -196,7 +196,7 @@ fn claim_in_a_delta_index_gets_the_finding() {
 
     let findings = findings_besides_intent_counts(&run);
     assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0]["severity"], "warning");
+    assert_eq!(findings[0]["severity"], "error");
     assert!(run.has_message("AC-D1-1: claim-shaped item is in index.md"));
 }
 
@@ -561,4 +561,285 @@ fn a_governed_change_after_completion_stales_the_spec_only() {
     let findings = run.findings();
     let ids: Vec<&str> = findings.iter().map(|f| f["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["SPEC-001"], "{:?}", run.messages());
+}
+
+const BASED_SPEC: &str = "- [AC-S-1] old text\n";
+
+fn based_run(repo: &Repo, status: &str, delta_claims: &str, spec_claims: &str) -> Run {
+    let d = delta("DELTA-001", status, &["SPEC-001"], delta_claims);
+    validate(repo, vec![spec_with_claims(spec_claims), d])
+}
+
+fn severity_of(run: &Run, needle: &str) -> Option<String> {
+    run.findings()
+        .into_iter()
+        .find(|f| f["message"].as_str().unwrap().contains(needle))
+        .map(|f| f["severity"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn replace_without_base_is_an_error_until_complete() {
+    let repo = Repo::new();
+    for status in ["draft", "in-progress"] {
+        let run = based_run(&repo, status, "- [AC-S-1] new\n", BASED_SPEC);
+        assert_eq!(
+            severity_of(&run, "without `@base`").as_deref(),
+            Some("error"),
+            "{status}"
+        );
+    }
+    let run = based_run(&repo, "complete", "- [AC-S-1] new\n", BASED_SPEC);
+    assert!(severity_of(&run, "without `@base`").is_none());
+}
+
+#[test]
+fn strike_of_an_unknown_id_is_an_error() {
+    let repo = Repo::new();
+    let run = based_run(&repo, "draft", "- ~~[AC-S-9]~~ gone\n", BASED_SPEC);
+    assert_eq!(
+        severity_of(&run, "AC-S-9").as_deref(),
+        Some("error"),
+        "{:?}",
+        run.messages()
+    );
+}
+
+#[test]
+fn base_mismatch_and_orphan_base_are_warnings() {
+    let repo = Repo::new();
+    let stale = "- [AC-S-1] new\n  @base 000000000000\n";
+    let run = based_run(&repo, "draft", stale, BASED_SPEC);
+    assert_eq!(
+        severity_of(&run, "spec block changed").as_deref(),
+        Some("warning")
+    );
+    let run = based_run(
+        &repo,
+        "in-progress",
+        "- [AC-S-2] new\n  @base 000000000000\n  [intent]\n",
+        BASED_SPEC,
+    );
+    assert_eq!(
+        severity_of(&run, "has `@base` but SPEC-001 has no claim AC-S-2").as_deref(),
+        Some("warning")
+    );
+}
+
+#[test]
+fn matching_base_is_clean() {
+    let repo = Repo::new();
+    let delta_claims = format!(
+        "- [AC-S-1] new\n  [intent]\n{}",
+        base_line_for(BASED_SPEC, "AC-S-1")
+    );
+    let run = based_run(&repo, "draft", &delta_claims, BASED_SPEC);
+    assert!(
+        findings_besides_intent_counts(&run).is_empty(),
+        "{:?}",
+        run.messages()
+    );
+}
+
+fn in_progress_with(repo: &Repo, claims: &str, spec: serde_json::Value) -> Run {
+    let d = delta("DELTA-001", "in-progress", &["SPEC-001"], claims);
+    validate(repo, vec![spec, d])
+}
+
+#[test]
+fn a_claim_without_a_receipt_on_an_in_progress_delta_is_an_error() {
+    let repo = Repo::new();
+
+    let run = in_progress_with(&repo, "- [AC-D1-1] bare\n", spec(""));
+
+    assert_eq!(
+        severity_of(&run, "claim has no receipt").as_deref(),
+        Some("error")
+    );
+}
+
+#[test]
+fn a_receipt_that_does_not_resolve_is_an_error() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    let body = format!("- [AC-D1-1] works\n  @ref {TEST_FILE}#gone@{sha}\n");
+
+    let run = in_progress_with(&repo, &body, spec(""));
+
+    assert_eq!(
+        severity_of(&run, "does not resolve").as_deref(),
+        Some("error")
+    );
+}
+
+#[test]
+fn an_unresolved_fold_target_is_an_error() {
+    let repo = Repo::new();
+    let d = delta("DELTA-001", "draft", &["SPEC-404"], "- [AC-D1-1] a\n");
+
+    let run = validate(&repo, vec![d]);
+
+    assert_eq!(
+        severity_of(&run, "fold target SPEC-404 does not resolve").as_deref(),
+        Some("error")
+    );
+}
+
+#[test]
+fn a_stale_receipt_stays_a_warning() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    repo.write("src/lib.rs", "pub fn a() { /* changed */ }\n");
+    repo.commit("touch governed code");
+
+    let run = in_progress_with(&repo, &claim("AC-D1-1", "works", Some(&sha)), spec(""));
+
+    assert_eq!(severity_of(&run, "stale").as_deref(), Some("warning"));
+    assert_eq!(run.code, 0);
+}
+
+#[test]
+fn an_intent_count_stays_a_warning() {
+    let repo = Repo::new();
+
+    let run = in_progress_with(&repo, "- [AC-D1-1] [intent] feels right\n", spec(""));
+
+    assert_eq!(severity_of(&run, "[intent]").as_deref(), Some("warning"));
+}
+
+fn production_claim(repo: &Repo) -> String {
+    let sha = repo.head();
+    format!("- [AC-D1-1] works\n  @ref src/lib.rs#a@{sha}\n")
+}
+
+#[test]
+fn a_production_path_receipt_is_an_error_on_the_receipt_line() {
+    let repo = Repo::new();
+
+    let run = in_progress_with(&repo, &production_claim(&repo), spec(""));
+
+    let finding = &run.findings()[0];
+    assert_eq!(finding["severity"], "error");
+    assert_eq!(finding["line"], 2);
+    assert_eq!(finding["part"], "behaviour.SPEC-001");
+    assert_eq!(
+        finding["message"],
+        "AC-D1-1: receipt src/lib.rs is not a test file under SPEC-001's `tests` globs"
+    );
+}
+
+#[test]
+fn a_production_path_receipt_in_a_spec_is_an_error() {
+    let repo = Repo::new();
+    let s = spec_with_claims(&production_claim(&repo));
+
+    let run = validate(&repo, vec![s]);
+
+    assert!(run.has_message("receipt src/lib.rs is not a test file under SPEC-001's"));
+}
+
+#[test]
+fn default_tests_globs_accept_the_test_file() {
+    let repo = Repo::new();
+    let sha = repo.head();
+
+    let run = in_progress_with(&repo, &claim("AC-D1-1", "ok", Some(&sha)), spec(""));
+
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+}
+
+#[test]
+fn attributes_tests_override_the_default_globs() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    let overridden = with_tests(spec(""), &["checks/**"]);
+
+    let run = in_progress_with(&repo, &claim("AC-D1-1", "ok", Some(&sha)), overridden);
+
+    assert!(run.has_message(&format!("receipt {TEST_FILE} is not a test file")));
+}
+
+#[test]
+fn a_checked_receipt_is_exempt_from_the_tests_globs() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    let body = format!("- [AC-D1-1] works\n  @checked manual@{sha}\n");
+
+    let run = in_progress_with(&repo, &body, spec(""));
+
+    assert!(!run.has_message("not a test file"), "{:?}", run.messages());
+}
+
+#[test]
+fn intent_claims_skip_the_tests_glob_check() {
+    let repo = Repo::new();
+    let sha = repo.head();
+    let body = format!("- [AC-D1-1] [intent] feels fast\n  @ref src/lib.rs#a@{sha}\n");
+
+    let run = in_progress_with(&repo, &body, spec(""));
+
+    assert!(!run.has_message("not a test file"), "{:?}", run.messages());
+}
+
+#[test]
+fn invalid_governs_and_tests_globs_on_a_spec_are_errors() {
+    let repo = Repo::new();
+    let broken = with_tests(
+        doc("SPEC-001", "spec", "active", &["src/["], &[], INTENT),
+        &["checks/["],
+    );
+
+    let run = validate(&repo, vec![broken]);
+
+    let errors: Vec<String> = run
+        .findings()
+        .iter()
+        .filter(|f| f["severity"] == "error")
+        .map(|f| f["message"].as_str().unwrap().to_string())
+        .collect();
+    assert!(errors
+        .iter()
+        .any(|m| m.starts_with("governs glob `src/[` is invalid:")));
+    assert!(errors
+        .iter()
+        .any(|m| m.starts_with("tests glob `checks/[` is invalid:")));
+}
+
+#[test]
+fn lazyspec_validate_exits_non_zero_on_an_unreceipted_in_progress_claim() {
+    let Ok(lazyspec) = which("lazyspec") else {
+        if std::env::var_os("CI").is_some() {
+            panic!("CI is set but lazyspec is not on PATH; the real-lazyspec validate test must not be skipped in CI");
+        }
+        eprintln!("skipping: lazyspec is not on PATH");
+        return;
+    };
+    let repo = Repo::new();
+    let lemma = env!("CARGO_BIN_EXE_lemma");
+    repo.write(
+        ".lazyspec.toml",
+        &format!(
+            "{CONFIG}\n[[hooks]]\nname = \"lemma-validate\"\nevent = \"validate\"\ntypes = [\"spec\", \"delta\"]\nrun = [\"{lemma}\", \"validate\"]\n"
+        ),
+    );
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", "- [AC-D1-1] bare\n");
+    repo.commit("fixture");
+
+    let trust = repo.run_real(&lazyspec, &["hook", "trust"]);
+    assert_eq!(trust.code, 0, "{}{}", trust.stdout, trust.stderr);
+    let run = repo.run_real(&lazyspec, &["validate", "--warnings"]);
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    let output = format!("{}{}", run.stdout, run.stderr);
+    assert!(output.contains("has no receipt"), "{output}");
+}
+
+fn which(program: &str) -> Result<String, ()> {
+    let path = std::env::var_os("PATH").ok_or(())?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or(())
 }
