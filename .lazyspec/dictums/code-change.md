@@ -18,3 +18,4 @@ The workflow is chosen by judgement. Nothing classifies the change.
 - [CHG-7] [intent] Refactor: preserve the observable contract. Add characterisation tests where existing behaviour is not sufficiently verified.
 - [CHG-8] [intent] Spike: agree the question, the cost boundary and the evidence first. Keep experimental code isolated and disposable.
 - [CHG-9] [intent] Build: the delta is the reviewed approach, and its claims name the verification.
+- [CHG-10] [intent] Adopt: the first delta into an empty spec over tested code claims what the tests already settle and receipts against them; characterisation tests only where a claim has none; no production change.

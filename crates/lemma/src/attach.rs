@@ -3,9 +3,9 @@ use crate::base::{
 };
 use crate::claims::{base_line, eol_of, owned_lines, target_of, Claim, Receipt};
 use crate::outcome::Outcome;
-use crate::payload::Finding;
+use crate::payload::{Finding, Written};
 use crate::receipt::{is_dirty, names_a_test, Checker};
-use crate::repin::repinned_line;
+use crate::repin::{pin_drifted, repinned_line};
 use anyhow::Result;
 use lazyspec::engine::document::{DocMeta, Part};
 use lazyspec::engine::store::Store;
@@ -36,6 +36,12 @@ pub fn run(store: &Store, root: &Path, id: &str, claim_id: &str, target: &str) -
             &doc.id, None, message,
         )]))
     };
+    if doc.doc_type.as_str() != "delta" {
+        return refuse(format!(
+            "{} is a {}; `lemma receipt` pins delta claims (spec receipts arrive by fold, humans write @checked)",
+            doc.id, doc.doc_type
+        ));
+    }
     let Some((path, symbol)) = target
         .split_once('#')
         .filter(|(p, s)| !p.is_empty() && !s.is_empty())
@@ -74,31 +80,49 @@ pub fn run(store: &Store, root: &Path, id: &str, claim_id: &str, target: &str) -
             "{path} has uncommitted changes; commit before pinning so the pin does not lie"
         ));
     }
+    let existing = existing_receipt(&claim, path, symbol);
+    if let Some(receipt) = existing.filter(|r| pin_drifted(root, part, &body, &claim, r)) {
+        let sha = receipt.sha.as_deref().unwrap_or_default();
+        return refuse(format!(
+            "{claim_id}: {path}#{symbol} changed since {sha} but the claim did not; \
+             run `lemma re-pin {} {claim_id} --force` if the test still proves the claim",
+            doc.id
+        ));
+    }
     let Some(head) = checker.head_short() else {
         return refuse("repository has no HEAD commit".to_string());
     };
 
     let mut lines = owned_lines(&body);
     let eol = eol_of(&lines[claim.start]);
+    let mut wrote = Vec::new();
     let mut base_at = claim.start + 1;
-    match existing_receipt(&claim, path, symbol) {
+    match existing {
         Some(receipt) => {
             let idx = receipt.line - 1;
+            base_at = receipt.line;
             lines[idx] = repinned_line(&lines[idx], &head);
+            wrote.push(Written::new(
+                &claim.id,
+                &part.name,
+                receipt.line,
+                &lines[idx],
+            ));
         }
         None => {
-            lines.insert(
-                claim.start + 1,
-                format!("  @ref {path}#{symbol}@{head}{eol}"),
-            );
+            let text = format!("  @ref {path}#{symbol}@{head}{eol}");
+            wrote.push(Written::new(&claim.id, &part.name, claim.start + 2, &text));
+            lines.insert(claim.start + 1, text);
             base_at += 1;
         }
     }
     if let Some(hash) = base_to_insert(store, part, &claim) {
-        lines.insert(base_at, format!("{}{eol}", base_line(&hash)));
+        let text = format!("{}{eol}", base_line(&hash));
+        wrote.push(Written::new(&claim.id, &part.name, base_at + 1, &text));
+        lines.insert(base_at, text);
     }
     std::fs::write(root.join(&part.path), lines.join("\n"))?;
-    Ok(Outcome::done(Vec::new()))
+    Ok(Outcome::done(Vec::new()).wrote(wrote))
 }
 
 fn owner_tests(store: &Store, doc: &DocMeta, part: &Part) -> Result<(String, Vec<String>), String> {

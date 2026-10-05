@@ -1,6 +1,6 @@
 {
   "name": "lemma",
-  "version": "0.1.0",
+  "version": "1.5.0",
   "description": "Claims, receipts and fold for agent-driven delivery on lazyspec. Prerequisites: the `lemma` binary on PATH (`cargo install lemma`) and lazyspec.",
   "author": {
     "name": "Jack Kaloger"

@@ -2,10 +2,14 @@ use crate::claims::{has_intent, Claim, BEHAVIOUR_PART};
 use crate::fold::fold;
 use crate::payload::{BehaviourPart, Doc, Finding, Output, Payload, Update};
 use crate::project::specs_from_store;
-use crate::receipt::{glob_set, invalid_glob_findings, non_test_receipts, Checker, Verdict};
+use crate::receipt::{
+    forced_warnings, glob_set, invalid_glob_findings, non_test_receipts, Checker, Verdict,
+};
 use crate::targets::{specs_in, Targets};
 use std::collections::BTreeSet;
 use std::path::Path;
+
+const INDEX_FILE: &str = "index.md";
 
 pub fn run(payload: &Payload, root: &Path) -> Output {
     let Some(transition) = &payload.transition else {
@@ -32,7 +36,11 @@ pub fn run(payload: &Payload, root: &Path) -> Output {
 fn by_hand(status: &str, delta: &Doc, specs: &[&Doc], root: &Path) -> Output {
     let (next, mut findings) = match status {
         "draft" => ("in-progress", start(delta, specs)),
-        "in-progress" => ("complete", complete_preview(delta, specs, root)),
+        "in-progress" => {
+            let mut findings = uncommitted_bundle_files(delta, root);
+            findings.extend(complete_preview(delta, specs, root));
+            ("complete", findings)
+        }
         _ => return Output::default(),
     };
     if findings.iter().any(|f| f.severity == "error") {
@@ -44,6 +52,29 @@ fn by_hand(status: &str, delta: &Doc, specs: &[&Doc], root: &Path) -> Output {
         format!("checked {status} → {next}: ready"),
     ));
     Output::findings(findings)
+}
+
+fn uncommitted_bundle_files(delta: &Doc, root: &Path) -> Vec<Finding> {
+    let index = Path::new(&delta.path);
+    let bundle = match index.file_name().is_some_and(|n| n == INDEX_FILE) {
+        true => index.parent(),
+        false => None,
+    };
+    Checker::new(root)
+        .dirty_paths()
+        .iter()
+        .filter(|p| match bundle {
+            Some(dir) => Path::new(p.as_str()).starts_with(dir),
+            None => Path::new(p.as_str()) == index,
+        })
+        .map(|p| {
+            Finding::warning(
+                &delta.id,
+                None,
+                format!("{p} has uncommitted changes; commit the delta before asking for review"),
+            )
+        })
+        .collect()
 }
 
 fn complete_preview(delta: &Doc, specs: &[&Doc], root: &Path) -> Vec<Finding> {
@@ -124,6 +155,7 @@ fn complete(delta: &Doc, specs: &[&Doc], root: &Path, will_write: bool) -> Vec<F
         let governs = targets.governs_of(part);
         for claim in part.claims.iter().filter(|c| !c.struck && !c.intent) {
             findings.extend(unsettled(delta, part, claim, &governs, &checker));
+            findings.extend(forced_warnings(&delta.id, part.name, claim));
             findings.extend(
                 targets
                     .spec_of(part)
@@ -141,7 +173,26 @@ fn complete(delta: &Doc, specs: &[&Doc], root: &Path, will_write: bool) -> Vec<F
     findings.extend(unfoldable_targets(delta, &targets, &parts, will_write));
     findings.extend(dirty_findings(delta, &targets, &parts, &checker));
     findings.extend(base_findings(delta, &targets, &parts, false));
+    findings.extend(draft_specs(delta, &targets));
     findings
+}
+
+fn draft_specs(delta: &Doc, targets: &Targets) -> Vec<Finding> {
+    targets
+        .resolved
+        .iter()
+        .filter(|spec| spec.status == "draft")
+        .map(|spec| {
+            Finding::warning(
+                &delta.id,
+                None,
+                format!(
+                    "{} is draft; move it to active once this fold lands",
+                    spec.id
+                ),
+            )
+        })
+        .collect()
 }
 
 fn dirty_findings(
@@ -246,7 +297,7 @@ fn unfoldable_targets(
 
 fn complete_and_fold(delta: &Doc, specs: &[&Doc], root: &Path) -> Output {
     let findings = complete(delta, specs, root, true);
-    if !findings.is_empty() {
+    if findings.iter().any(|f| f.severity == "error") {
         return Output::findings(findings);
     }
     let targets = Targets::of(delta, specs);
@@ -257,8 +308,9 @@ fn complete_and_fold(delta: &Doc, specs: &[&Doc], root: &Path) -> Output {
         .filter_map(|spec| fold_into(spec, &targets, &parts))
         .collect();
     Output {
-        findings: Vec::new(),
+        findings,
         updates,
+        ..Output::default()
     }
 }
 

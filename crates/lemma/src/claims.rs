@@ -8,6 +8,7 @@ pub struct Receipt {
     pub symbol: Option<String>,
     pub sha: Option<String>,
     pub checked_by: Option<String>,
+    pub forced: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +171,12 @@ fn checked_pattern() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"@checked\s+([^@\s]+)@([0-9a-fA-F]+)").unwrap())
 }
 
+pub const FORCED_MARKER: &str = "[forced]";
+
+pub fn is_forced(after_ref: &str) -> bool {
+    after_ref.trim_start().starts_with(FORCED_MARKER)
+}
+
 fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<Receipt> {
     (start..end)
         .filter(|&i| live[i])
@@ -177,6 +184,7 @@ fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<R
             let refs = lazyspec::engine::refs::parse_refs(lines[i])
                 .into_iter()
                 .map(move |r| Receipt {
+                    forced: is_forced(&lines[i][r.span.1..]),
                     line: i + 1,
                     path: r.path,
                     symbol: r.symbol,
@@ -191,6 +199,7 @@ fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<R
                     symbol: None,
                     sha: Some(c[2].to_string()),
                     checked_by: Some(c[1].to_string()),
+                    forced: false,
                 });
             refs.chain(checks).collect::<Vec<_>>()
         })
@@ -460,5 +469,16 @@ mod tests {
         assert_eq!(target_of("behaviour.SPEC-003"), Some("SPEC-003"));
         assert_eq!(target_of("behaviour"), None);
         assert_eq!(part_for("SPEC-003"), "behaviour.SPEC-003");
+    }
+
+    #[test]
+    fn forced_follows_the_ref_it_marks() {
+        let marked = parse("- [AC-1] x\n  @ref a.rs#f@abc [forced]\n");
+        let trailing = parse("- [AC-1] x\n  @ref a.rs#f@abc trailing\n");
+
+        assert_eq!(marked.claims[0].receipts[0].sha.as_deref(), Some("abc"));
+        assert!(marked.claims[0].receipts[0].forced);
+        assert_eq!(trailing.claims[0].receipts[0].sha.as_deref(), Some("abc"));
+        assert!(!trailing.claims[0].receipts[0].forced);
     }
 }

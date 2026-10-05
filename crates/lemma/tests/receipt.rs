@@ -292,20 +292,33 @@ fn receipt_leaves_an_existing_base_alone() {
 }
 
 #[test]
-fn re_receipting_a_replaced_claim_puts_base_after_the_id_line() {
+fn re_receipting_a_replaced_claim_puts_base_after_the_rewritten_ref() {
     let repo = Repo::new();
     based_delta(
         &repo,
         &format!("- [AC-S-1] new\n  @ref {TEST_FILE}#reopen_keeps_prior@1111111\n"),
     );
+    let head = repo.head();
 
     let run = repo.run(&["receipt", "DELTA-001", "AC-S-1", &target()], "");
 
     assert_eq!(run.code, 0, "{}", run.stdout);
-    assert!(repo.read(DELTA).starts_with(&format!(
-        "- [AC-S-1] new\n{}",
-        base_line_for("- [AC-S-1] old\n", "AC-S-1")
-    )));
+    let text = repo.read(DELTA);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[1],
+        format!("  @ref {TEST_FILE}#reopen_keeps_prior@{head}")
+    );
+    assert_eq!(
+        lines[2],
+        base_line_for("- [AC-S-1] old\n", "AC-S-1").trim_end()
+    );
+    let wrote = run.json()["wrote"].clone();
+    for entry in wrote.as_array().unwrap() {
+        let line = entry["line"].as_u64().unwrap() as usize;
+        assert_eq!(entry["text"], lines[line - 1], "{wrote}");
+    }
+    assert_eq!(wrote.as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -363,7 +376,7 @@ fn receipt_refuses_when_the_target_spec_does_not_resolve() {
 }
 
 #[test]
-fn receipt_on_a_specs_own_claim_applies_the_spec_tests_globs() {
+fn receipt_refuses_a_spec_id() {
     let repo = Repo::new();
     repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
     repo.spec_behaviour(1, "- [AC-1] works\n");
@@ -371,11 +384,105 @@ fn receipt_on_a_specs_own_claim_applies_the_spec_tests_globs() {
     let part = spec_part_path(1);
     let before = repo.read(&part);
 
-    let run = repo.run(&["receipt", "SPEC-001", "AC-1", "src/lib.rs#a"], "");
+    let run = repo.run(&["receipt", "SPEC-001", "AC-1", &target()], "");
 
     assert_eq!(run.code, 2, "{}", run.stdout);
-    assert!(run.has_message(
-        "src/lib.rs is not a test file under SPEC-001's `tests` globs; a production symbol is not a receipt"
-    ));
+    assert!(run.has_message("SPEC-001 is a spec; `lemma receipt` pins delta claims"));
     assert_eq!(repo.read(&part), before);
+}
+
+fn pinned_delta(repo: &Repo) -> (String, String) {
+    let pin = repo.head();
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", &claim("AC-D1-1", "works", Some(&pin)));
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.commit("delta");
+    (pin, delta_part_path(1, "SPEC-001"))
+}
+
+#[test]
+fn receipt_refuses_to_replace_a_drifted_receipt() {
+    let repo = Repo::new();
+    let (_, part) = pinned_delta(&repo);
+    repo.write(
+        TEST_FILE,
+        "#[test]\nfn reopen_keeps_prior() { assert!(true); }\n",
+    );
+    repo.commit("weaken test");
+    let before = repo.read(&part);
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-1", &target()], "");
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.has_message("lemma re-pin DELTA-001 AC-D1-1 --force"));
+    assert_eq!(repo.read(&part), before);
+}
+
+#[test]
+fn receipt_replaces_a_receipt_when_only_a_sibling_test_changed() {
+    let repo = Repo::new();
+    let (_, part) = pinned_delta(&repo);
+    repo.write(
+        TEST_FILE,
+        &format!("{}\n#[test]\nfn added() {{}}\n", TEST_SRC),
+    );
+    let new = repo.commit("sibling test");
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-1", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(repo.read(&part).contains(&format!("@{new}")));
+}
+
+#[test]
+fn receipt_lists_the_lines_it_inserted() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+    let head = repo.head();
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-2", &target()], "");
+
+    assert_eq!(
+        run.json()["wrote"],
+        serde_json::json!([{
+            "id": "AC-D1-2",
+            "part": "behaviour.SPEC-001",
+            "line": 3,
+            "text": format!("  @ref {TEST_FILE}#reopen_keeps_prior@{head}"),
+        }])
+    );
+}
+
+#[test]
+fn receipt_keeps_the_forced_marker_when_it_rewrites_the_line() {
+    let repo = Repo::new();
+    let pin = repo.head();
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        &format!("- [AC-D1-1] works\n  @ref {TEST_FILE}#reopen_keeps_prior@{pin} [forced]\n"),
+    );
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.commit("delta");
+    repo.write("src/lib.rs", "pub fn changed() {}\n");
+    let new = repo.commit("code moved");
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-D1-1", &target()], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    let expected = format!("  @ref {TEST_FILE}#reopen_keeps_prior@{new} [forced]");
+    assert!(repo.read(DELTA).contains(&expected));
+    assert_eq!(run.json()["wrote"][0]["text"], expected);
+}
+
+#[test]
+fn receipt_refusal_omits_wrote() {
+    let repo = Repo::new();
+    delta_with_bare_claims(&repo);
+
+    let run = repo.run(&["receipt", "DELTA-001", "AC-NOPE-1", &target()], "");
+
+    assert_eq!(run.code, 2);
+    assert!(run.json().get("wrote").is_none());
 }

@@ -197,3 +197,36 @@ fn base_refuses_a_spec_whose_tests_attribute_is_not_a_list_of_strings() {
         assert!(run.has_message("SPEC-001: `tests` must be a list of glob strings"));
     }
 }
+
+#[test]
+fn base_lists_every_line_it_wrote_with_post_edit_line_numbers() {
+    let repo = Repo::new();
+    setup(&repo, "- [AC-S-1] new one\n  more\n- [AC-S-2] new two\n");
+
+    let run = repo.run(&["base", "DELTA-001"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    let wrote = run.json()["wrote"].clone();
+    assert_eq!(
+        wrote,
+        serde_json::json!([
+            {"id": "AC-S-1", "part": "behaviour.SPEC-001", "line": 3,
+             "text": base_line_for(SPEC_CLAIMS, "AC-S-1").trim_end()},
+            {"id": "AC-S-2", "part": "behaviour.SPEC-001", "line": 5,
+             "text": base_line_for(SPEC_CLAIMS, "AC-S-2").trim_end()},
+        ])
+    );
+    let text = delta_text(&repo);
+    assert_eq!(text.lines().nth(2).unwrap(), wrote[0]["text"]);
+    assert_eq!(text.lines().nth(4).unwrap(), wrote[1]["text"]);
+}
+
+#[test]
+fn base_omits_wrote_when_it_refuses() {
+    let repo = Repo::new();
+    setup(&repo, "- [AC-S-1] new one\n");
+
+    let run = refused(&repo, &["base", "DELTA-001", "AC-NOPE-1"]);
+
+    assert!(run.json().get("wrote").is_none());
+}

@@ -334,11 +334,11 @@ fn two_in_progress_deltas_touching_one_claim_id_are_both_flagged() {
     assert!(findings_besides_intent_counts(&run)
         .iter()
         .all(|f| f["part"] == "behaviour.SPEC-001" && f["line"] == 1));
-    assert!(run.has_message("AC-X-1 is touched by in-progress deltas DELTA-001, DELTA-002"));
+    assert!(run.has_message("AC-X-1 is touched by in-flight deltas DELTA-001, DELTA-002"));
 }
 
 #[test]
-fn a_draft_and_an_in_progress_delta_sharing_an_id_are_not_flagged() {
+fn a_draft_and_an_in_progress_delta_sharing_an_id_are_both_flagged() {
     let repo = Repo::new();
     let a = delta(
         "DELTA-001",
@@ -355,7 +355,7 @@ fn a_draft_and_an_in_progress_delta_sharing_an_id_are_not_flagged() {
 
     let run = validate(&repo, vec![spec(""), a, b]);
 
-    assert!(findings_besides_intent_counts(&run).is_empty());
+    assert!(run.has_message("AC-X-1 is touched by in-flight deltas DELTA-001, DELTA-002"));
 }
 
 #[test]
@@ -646,14 +646,14 @@ fn in_progress_with(repo: &Repo, claims: &str, spec: serde_json::Value) -> Run {
 }
 
 #[test]
-fn a_claim_without_a_receipt_on_an_in_progress_delta_is_an_error() {
+fn a_claim_without_a_receipt_on_an_in_progress_delta_is_a_warning() {
     let repo = Repo::new();
 
     let run = in_progress_with(&repo, "- [AC-D1-1] bare\n", spec(""));
 
     assert_eq!(
         severity_of(&run, "claim has no receipt").as_deref(),
-        Some("error")
+        Some("warning")
     );
 }
 
@@ -805,7 +805,7 @@ fn invalid_governs_and_tests_globs_on_a_spec_are_errors() {
 }
 
 #[test]
-fn lazyspec_validate_exits_non_zero_on_an_unreceipted_in_progress_claim() {
+fn lazyspec_validate_exits_non_zero_on_an_unresolved_receipt() {
     let Ok(lazyspec) = which("lazyspec") else {
         if std::env::var_os("CI").is_some() {
             panic!("CI is set but lazyspec is not on PATH; the real-lazyspec validate test must not be skipped in CI");
@@ -823,7 +823,12 @@ fn lazyspec_validate_exits_non_zero_on_an_unreceipted_in_progress_claim() {
     );
     repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
     repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
-    repo.delta_part(1, "SPEC-001", "- [AC-D1-1] bare\n");
+    let sha = repo.head();
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        &format!("- [AC-D1-1] works\n  @ref {TEST_FILE}#gone@{sha}\n"),
+    );
     repo.commit("fixture");
 
     let trust = repo.run_real(&lazyspec, &["hook", "trust"]);
@@ -832,7 +837,7 @@ fn lazyspec_validate_exits_non_zero_on_an_unreceipted_in_progress_claim() {
 
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     let output = format!("{}{}", run.stdout, run.stderr);
-    assert!(output.contains("has no receipt"), "{output}");
+    assert!(output.contains("does not resolve"), "{output}");
 }
 
 fn which(program: &str) -> Result<String, ()> {
@@ -842,4 +847,52 @@ fn which(program: &str) -> Result<String, ()> {
         .find(|candidate| candidate.is_file())
         .map(|p| p.to_string_lossy().into_owned())
         .ok_or(())
+}
+
+const FORCED_WARNING: &str =
+    "AC-1: receipt was force re-pinned; review the test against the claim, then remove [forced] or add @checked";
+
+fn forced_claim(repo: &Repo, id: &str) -> String {
+    let sha = repo.head();
+    format!("- [{id}] works\n  @ref {TEST_FILE}#reopen_keeps_prior@{sha} [forced]\n")
+}
+
+#[test]
+fn a_forced_receipt_on_an_in_progress_delta_warns() {
+    let repo = Repo::new();
+
+    let run = in_progress_with(&repo, &forced_claim(&repo, "AC-1"), spec(""));
+
+    assert_eq!(
+        severity_of(&run, FORCED_WARNING).as_deref(),
+        Some("warning")
+    );
+    assert!(!run.has_message("claim has no receipt"));
+}
+
+#[test]
+fn a_forced_receipt_on_a_spec_warns() {
+    let repo = Repo::new();
+
+    let run = validate(&repo, vec![spec_with_claims(&forced_claim(&repo, "AC-1"))]);
+
+    assert_eq!(
+        severity_of(&run, FORCED_WARNING).as_deref(),
+        Some("warning")
+    );
+}
+
+#[test]
+fn a_forced_receipt_on_a_draft_delta_does_not_warn() {
+    let repo = Repo::new();
+    let d = delta(
+        "DELTA-001",
+        "draft",
+        &["SPEC-001"],
+        &forced_claim(&repo, "AC-1"),
+    );
+
+    let run = validate(&repo, vec![spec(""), d]);
+
+    assert!(!run.has_message("force re-pinned"));
 }

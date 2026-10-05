@@ -1024,3 +1024,115 @@ fn a_claim_mentioning_base_keeps_its_id_line_through_base_and_fold() {
     );
     assert!(!has_base_line(&body), "{body}");
 }
+
+const FORCED_WARNING: &str =
+    "AC-D1-1: receipt was force re-pinned; review the test against the claim, then remove [forced] or add @checked";
+
+fn forced_delta(repo: &Repo, status: &str) -> Value {
+    let sha = repo.head();
+    delta(
+        status,
+        &["SPEC-001"],
+        &format!("- [AC-D1-1] x\n  @ref {TEST_FILE}#reopen_keeps_prior@{sha} [forced]\n"),
+    )
+}
+
+#[test]
+fn a_forced_receipt_warns_at_the_gate_without_blocking_the_fold() {
+    let repo = Repo::new();
+    let d = forced_delta(&repo, "in-progress");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert_eq!(run.code, 0);
+    assert!(run.has_message(FORCED_WARNING));
+    assert!(run.findings().iter().all(|f| f["severity"] == "warning"));
+    assert_eq!(updates_of(&run).len(), 1);
+}
+
+#[test]
+fn a_forced_receipt_warns_in_the_by_hand_preview() {
+    let repo = Repo::new();
+    let d = forced_delta(&repo, "in-progress");
+
+    let run = by_hand(&repo, "in-progress", d, vec![spec(1, "")]);
+
+    assert!(run.has_message(FORCED_WARNING));
+    assert!(run.has_message("checked in-progress → complete: ready"));
+}
+
+#[test]
+fn the_fold_carries_the_forced_marker_into_the_spec() {
+    let repo = Repo::new();
+    let d = forced_delta(&repo, "in-progress");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    let body = updates_of(&run)[0]["body"].as_str().unwrap().to_string();
+    assert!(
+        body.contains(&format!("#reopen_keeps_prior@{} [forced]", repo.head())),
+        "{body}"
+    );
+}
+
+#[test]
+fn by_hand_dry_run_warns_about_an_uncommitted_index_and_still_says_ready() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write("docs/deltas/DELTA-001-x/index.md", "wip\n");
+    repo.write("docs/deltas/DELTA-001-x/behaviour.SPEC-001.md", "wip\n");
+    repo.write("docs/deltas/DELTA-002-x/index.md", "other\n");
+
+    let run = by_hand(&repo, "in-progress", d, vec![spec(1, "")]);
+
+    assert_eq!(run.code, 0);
+    assert!(run.has_message(
+        "docs/deltas/DELTA-001-x/index.md has uncommitted changes; commit the delta before asking for review"
+    ));
+    assert!(
+        run.has_message("docs/deltas/DELTA-001-x/behaviour.SPEC-001.md has uncommitted changes")
+    );
+    assert!(!run.has_message("DELTA-002-x"));
+    assert!(run.findings().iter().all(|f| f["severity"] == "warning"));
+    assert!(run.has_message("checked in-progress → complete: ready"));
+}
+
+#[test]
+fn the_real_transition_does_not_warn_about_uncommitted_delta_files() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+    repo.write("docs/deltas/DELTA-001-x/index.md", "wip\n");
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![spec(1, "")]);
+
+    assert!(!run.has_message("commit the delta"));
+}
+
+fn draft_spec(n: u32) -> Value {
+    let mut spec = spec(n, "");
+    spec["status"] = serde_json::json!("draft");
+    spec
+}
+
+#[test]
+fn folding_into_a_draft_spec_warns_and_still_folds() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+
+    let run = pre(&repo, "in-progress", "complete", d, vec![draft_spec(1)]);
+
+    assert_eq!(run.code, 0);
+    assert!(run.has_message("SPEC-001 is draft; move it to active once this fold lands"));
+    assert_eq!(updates_of(&run).len(), 1);
+}
+
+#[test]
+fn the_by_hand_preview_warns_about_a_draft_target() {
+    let repo = Repo::new();
+    let d = fresh_delta(&repo);
+
+    let run = by_hand(&repo, "in-progress", d, vec![draft_spec(1)]);
+
+    assert!(run.has_message("SPEC-001 is draft; move it to active once this fold lands"));
+    assert!(run.has_message("checked in-progress → complete: ready"));
+}

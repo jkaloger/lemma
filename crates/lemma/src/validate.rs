@@ -2,7 +2,7 @@ use crate::claims::{Claim, BEHAVIOUR_PART};
 use crate::fold::BaseKind;
 use crate::payload::{BehaviourPart, Doc, Finding, Output, Payload};
 use crate::project::specs_from_store;
-use crate::receipt::{invalid_glob_findings, non_test_receipts, Checker, Verdict};
+use crate::receipt::{forced_warnings, invalid_glob_findings, non_test_receipts, Checker, Verdict};
 use crate::targets::{specs_in, Targets};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -56,28 +56,32 @@ fn receipt_findings(
     governs: &[String],
     checker: &Checker,
 ) -> Vec<Finding> {
-    claim
-        .receipts
-        .iter()
-        .filter_map(|receipt| match checker.check(receipt, governs) {
-            Verdict::Fresh => None,
-            Verdict::Unresolved(why) => Some(
-                Finding::error(
-                    &doc.id,
-                    Some(receipt.line),
-                    format!("{}: receipt does not resolve: {why}", claim.id),
-                )
-                .in_part(part),
-            ),
-            Verdict::Stale(why) => Some(
-                Finding::warning(
-                    &doc.id,
-                    Some(receipt.line),
-                    format!("{}: receipt is stale: {why}", claim.id),
-                )
-                .in_part(part),
-            ),
-        })
+    let verdicts =
+        claim
+            .receipts
+            .iter()
+            .filter_map(|receipt| match checker.check(receipt, governs) {
+                Verdict::Fresh => None,
+                Verdict::Unresolved(why) => Some(
+                    Finding::error(
+                        &doc.id,
+                        Some(receipt.line),
+                        format!("{}: receipt does not resolve: {why}", claim.id),
+                    )
+                    .in_part(part),
+                ),
+                Verdict::Stale(why) => Some(
+                    Finding::warning(
+                        &doc.id,
+                        Some(receipt.line),
+                        format!("{}: receipt is stale: {why}", claim.id),
+                    )
+                    .in_part(part),
+                ),
+            });
+    forced_warnings(&doc.id, part, claim)
+        .into_iter()
+        .chain(verdicts)
         .collect()
 }
 
@@ -147,7 +151,7 @@ fn check_delta(delta: &Doc, specs: &[&Doc], checker: &Checker) -> Vec<Finding> {
         for claim in part.claims.iter().filter(|c| !c.struck) {
             if delta.status == "in-progress" && !claim.intent && claim.receipts.is_empty() {
                 findings.push(
-                    Finding::error(
+                    Finding::warning(
                         &delta.id,
                         Some(claim.line),
                         format!("{}: claim has no receipt", claim.id),
@@ -198,7 +202,7 @@ fn overlapping_claims(docs: &[Doc]) -> Vec<Finding> {
     let mut by_claim: BTreeMap<String, Vec<(&Doc, String, usize)>> = BTreeMap::new();
     for delta in docs
         .iter()
-        .filter(|d| d.doc_type == "delta" && d.status == "in-progress")
+        .filter(|d| d.doc_type == "delta" && matches!(d.status.as_str(), "draft" | "in-progress"))
     {
         for part in delta.behaviour_parts() {
             for claim in part.claims {
@@ -222,7 +226,7 @@ fn overlapping_claims(docs: &[Doc]) -> Vec<Finding> {
                         &delta.id,
                         Some(*line),
                         format!(
-                            "{claim_id} is touched by in-progress deltas {}",
+                            "{claim_id} is touched by in-flight deltas {}",
                             ids.join(", ")
                         ),
                     )

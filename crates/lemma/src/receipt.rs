@@ -114,6 +114,40 @@ fn symbol_in(path: &str, source: &str, symbol: &str) -> bool {
     }
 }
 
+pub fn symbol_text(path: &str, source: &str, symbol: Option<&str>) -> Option<String> {
+    let Some(symbol) = symbol else {
+        return Some(source.to_string());
+    };
+    let extension = Path::new(path).extension().and_then(|e| e.to_str());
+    let text = match extension {
+        Some("rs") => RustSymbolExtractor::new().extract(source, symbol),
+        Some("ts") | Some("tsx") => TypeScriptSymbolExtractor::new().extract(source, symbol),
+        _ => return Some(source.to_string()),
+    }?;
+    Some(format!("{}{text}", attributes_above(source, &text)))
+}
+
+fn attributes_above(source: &str, text: &str) -> String {
+    let Some(at) = source.find(text) else {
+        return String::new();
+    };
+    let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
+    let mut attributes: Vec<&str> = Vec::new();
+    for line in source[..line_start].lines().rev() {
+        let trimmed = line.trim();
+        let is_attribute = trimmed.starts_with("#[") || trimmed.starts_with("#![");
+        let is_comment = trimmed.starts_with("//");
+        if !is_attribute && !is_comment {
+            break;
+        }
+        if is_attribute {
+            attributes.push(trimmed);
+        }
+    }
+    attributes.reverse();
+    attributes.iter().map(|a| format!("{a}\n")).collect()
+}
+
 pub fn names_a_test(path: &str, globs: &[String]) -> bool {
     glob_set(globs).is_match(path.trim_start_matches("./"))
 }
@@ -131,6 +165,25 @@ pub fn non_test_receipts(doc_id: &str, part: &str, claim: &Claim, spec: &Doc) ->
                 format!(
                     "{}: receipt {} is not a test file under {}'s `tests` globs",
                     claim.id, r.path, spec.id
+                ),
+            )
+            .in_part(part)
+        })
+        .collect()
+}
+
+pub fn forced_warnings(doc_id: &str, part: &str, claim: &Claim) -> Vec<Finding> {
+    claim
+        .receipts
+        .iter()
+        .filter(|r| r.forced)
+        .map(|r| {
+            Finding::warning(
+                doc_id,
+                Some(r.line),
+                format!(
+                    "{}: receipt was force re-pinned; review the test against the claim, then remove [forced] or add @checked",
+                    claim.id
                 ),
             )
             .in_part(part)

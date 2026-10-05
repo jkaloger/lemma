@@ -7,6 +7,7 @@ mod payload;
 mod project;
 mod receipt;
 mod repin;
+mod session;
 mod stop;
 mod targets;
 mod transition;
@@ -41,6 +42,8 @@ enum Command {
     PreTransition,
     /// Bound a session's changes (Claude Code Stop hook)
     Stop,
+    /// Record the session's base commit (Claude Code SessionStart hook)
+    SessionStart,
     /// Update the receipt commits on one document, or on the named claims only
     RePin {
         id: String,
@@ -108,7 +111,7 @@ fn stop_command() -> ExitCode {
             return ExitCode::SUCCESS;
         }
     };
-    let findings = stop::run(&store, &root);
+    let findings = stop::run(&store, &root, input.session_id.as_deref());
     if findings.is_empty() {
         return ExitCode::SUCCESS;
     }
@@ -116,6 +119,18 @@ fn stop_command() -> ExitCode {
         .iter()
         .for_each(|f| eprintln!("lemma: {}", f.message));
     ExitCode::from(2)
+}
+
+fn session_start_command() -> ExitCode {
+    let input: session::SessionStartInput = serde_json::from_str(&read_stdin()).unwrap_or_default();
+    let dir = input.cwd.map(PathBuf::from).unwrap_or_else(current_dir);
+    if project::find_root(&dir).is_none() {
+        return ExitCode::SUCCESS;
+    }
+    if let Some(id) = input.session_id {
+        session::record_base(&dir, &id);
+    }
+    ExitCode::SUCCESS
 }
 
 fn refuse_with(message: String) -> ExitCode {
@@ -132,7 +147,10 @@ fn store_command(run: impl FnOnce(&Store, &Path) -> Result<Outcome>) -> ExitCode
     }
     match project::load_store(&root).and_then(|store| run(&store, &root)) {
         Ok(outcome) => {
-            print(&Output::findings(outcome.findings));
+            print(&Output {
+                wrote: outcome.wrote,
+                ..Output::findings(outcome.findings)
+            });
             if outcome.refused {
                 ExitCode::from(2)
             } else {
@@ -148,6 +166,7 @@ fn main() -> ExitCode {
         Command::Validate => with_payload(|p| validate::run(p, &current_dir())),
         Command::PreTransition => with_payload(|p| transition::run(p, &current_dir())),
         Command::Stop => stop_command(),
+        Command::SessionStart => session_start_command(),
         Command::RePin { id, claims, force } => {
             store_command(|store, root| repin::run(store, root, &id, &claims, force))
         }

@@ -428,3 +428,211 @@ fn repin_leaves_a_checked_receipt_alone() {
         format!("- [AC-D1-1] by hand\n  @checked jack@{old}\n")
     );
 }
+
+const SYMBOL_FILE: &str = "tests/store_test.rs";
+
+fn pinned_at_head(repo: &Repo) -> (String, String) {
+    let old = repo.head();
+    let path = delta_with_receipt(repo, &old, "works");
+    (old, path)
+}
+
+#[test]
+fn repin_ignores_a_sibling_test_added_to_the_same_file() {
+    let repo = Repo::new();
+    let (_, path) = pinned_at_head(&repo);
+    repo.write(
+        SYMBOL_FILE,
+        &format!("{TEST_SRC}\n#[test]\nfn added() {{}}\n"),
+    );
+    let new = repo.commit("add sibling test");
+
+    let run = repo.run(&["re-pin", "DELTA-001"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+    assert!(repo.read(&path).contains(&format!("@{new}")));
+}
+
+#[test]
+fn repin_ignores_a_doc_comment_added_to_the_file() {
+    let repo = Repo::new();
+    let (_, path) = pinned_at_head(&repo);
+    repo.write(
+        SYMBOL_FILE,
+        &TEST_SRC.replace(
+            "#[test]\nfn reopen",
+            "/// Reopening keeps the prior.\n#[test]\nfn reopen",
+        ),
+    );
+    let new = repo.commit("doc comment");
+
+    let run = repo.run(&["re-pin", "DELTA-001"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(run.findings().is_empty(), "{:?}", run.messages());
+    assert!(repo.read(&path).contains(&format!("@{new}")));
+}
+
+#[test]
+fn repin_refuses_an_attribute_added_above_the_test() {
+    let repo = Repo::new();
+    let (_, path) = pinned_at_head(&repo);
+    repo.write(
+        SYMBOL_FILE,
+        &TEST_SRC.replace(
+            "#[test]\nfn reopen",
+            "#[test]\n#[ignore = \"later\"]\nfn reopen",
+        ),
+    );
+    repo.commit("ignore the test");
+    let before = repo.read(&path);
+
+    let run = repo.run(&["re-pin", "DELTA-001"], "");
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.has_message("re-pin refused"));
+    assert_eq!(repo.read(&path), before);
+}
+
+#[test]
+fn repin_forced_marks_the_ref_not_the_end_of_the_line() {
+    let repo = Repo::new();
+    let old = repo.head();
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        &format!("- [AC-D1-1] works\n  @ref {TEST_FILE}#reopen_keeps_prior@{old} (happy path)\n"),
+    );
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.commit("delta");
+    repo.write(TEST_FILE, EDITED_TEST);
+    let new = repo.commit("weaken test");
+
+    let run = repo.run(&["re-pin", "DELTA-001", "--force"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(repo
+        .read(&delta_part_path(1, "SPEC-001"))
+        .contains(&format!(
+            "  @ref {TEST_FILE}#reopen_keeps_prior@{new} [forced] (happy path)\n"
+        )));
+}
+
+#[test]
+fn repin_refuses_when_the_symbol_did_not_exist_at_the_pin() {
+    let repo = Repo::new();
+    repo.write(SYMBOL_FILE, "#[test]\nfn other_test() {}\n");
+    repo.commit("symbol not there yet");
+    let (_, path) = pinned_at_head(&repo);
+    repo.write(SYMBOL_FILE, TEST_SRC);
+    repo.commit("symbol appears after the pin");
+    let before = repo.read(&path);
+
+    let run = repo.run(&["re-pin", "DELTA-001"], "");
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.has_message("re-pin refused"));
+    assert_eq!(repo.read(&path), before);
+}
+
+fn delta_receipting_a_plain_file(repo: &Repo, sha: &str) -> String {
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        &format!("- [AC-D1-1] works\n  @ref tests/notes.txt#alpha@{sha}\n"),
+    );
+    repo.spec_file(1, "active", &["src/**"], "## Intent\n\nA.\n");
+    repo.commit("delta");
+    delta_part_path(1, "SPEC-001")
+}
+
+#[test]
+fn repin_compares_whole_files_when_no_extractor_exists() {
+    let repo = Repo::new();
+    repo.write("tests/notes.txt", "alpha\nbeta\n");
+    let old = repo.commit("notes");
+    let path = delta_receipting_a_plain_file(&repo, &old);
+    repo.write("tests/notes.txt", "alpha\nbeta\ngamma\n");
+    repo.commit("edit another line");
+    let before = repo.read(&path);
+
+    let run = repo.run(&["re-pin", "DELTA-001"], "");
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.has_message("re-pin refused"));
+    assert_eq!(repo.read(&path), before);
+}
+
+#[test]
+fn repin_force_marks_the_receipt_line_as_forced() {
+    let repo = Repo::new();
+    let (_, path) = pinned_at_head(&repo);
+    repo.write(TEST_FILE, EDITED_TEST);
+    let new = repo.commit("weaken test");
+
+    let run = repo.run(&["re-pin", "DELTA-001", "--force"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    let line = format!("  @ref {TEST_FILE}#reopen_keeps_prior@{new} [forced]");
+    assert!(repo.read(&path).contains(&format!("{line}\n")));
+    assert_eq!(run.json()["wrote"][0]["text"], line);
+}
+
+#[test]
+fn repin_force_does_not_mark_a_pin_that_had_not_drifted() {
+    let repo = Repo::new();
+    let (_, path) = pinned_at_head(&repo);
+    repo.write("src/lib.rs", "pub fn changed() {}\n");
+    repo.commit("code moved");
+
+    let run = repo.run(&["re-pin", "DELTA-001", "--force"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(!repo.read(&path).contains("[forced]"));
+}
+
+#[test]
+fn repin_keeps_an_existing_forced_marker() {
+    let repo = Repo::new();
+    let old = repo.head();
+    let path = delta_with_receipt(&repo, &old, "works");
+    let marked = repo.read(&path).replace(&old, &format!("{old} [forced]"));
+    repo.write(&path, &marked);
+    repo.commit("forced pin");
+    repo.write("src/lib.rs", "pub fn changed() {}\n");
+    let new = repo.commit("code moved");
+
+    let run = repo.run(&["re-pin", "DELTA-001"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(repo.read(&path).contains(&format!("@{new} [forced]\n")));
+}
+
+#[test]
+fn repin_lists_each_rewritten_line() {
+    let repo = Repo::new();
+    let old = repo.head();
+    let path = sibling_claims_delta(&repo, &old);
+    repo.write("src/lib.rs", "pub fn changed() {}\n");
+    let new = repo.commit("code moved");
+
+    let run = repo.run(&["re-pin", "DELTA-001", "AC-D1-2"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert_eq!(
+        run.json()["wrote"],
+        serde_json::json!([{
+            "id": "AC-D1-2",
+            "part": "behaviour.SPEC-001",
+            "line": 4,
+            "text": format!("  @ref {TEST_FILE}#reopen_keeps_prior@{new}"),
+        }])
+    );
+    assert_eq!(
+        repo.read(&path).lines().nth(3).unwrap(),
+        run.json()["wrote"][0]["text"]
+    );
+}

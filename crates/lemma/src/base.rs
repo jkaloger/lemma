@@ -3,7 +3,7 @@ use crate::claims::{
 };
 use crate::claims::{is_behaviour_part, BEHAVIOUR_PART};
 use crate::outcome::Outcome;
-use crate::payload::{tests_or_default, Attributes, Finding};
+use crate::payload::{tests_or_default, Attributes, Finding, Written};
 use anyhow::Result;
 use lazyspec::engine::document::{DocMeta, Part};
 use lazyspec::engine::fs::RealFileSystem;
@@ -81,6 +81,7 @@ pub fn run(store: &Store, root: &Path, delta: &str, claims: &[String]) -> Result
     }
 
     let mut writes = Vec::new();
+    let mut wrote = Vec::new();
     for Loaded { part, body, .. } in &loaded {
         let Some(target) = target_of(&part.name) else {
             continue;
@@ -114,13 +115,19 @@ pub fn run(store: &Store, root: &Path, delta: &str, claims: &[String]) -> Result
             }
         }
         if !edits.is_empty() {
-            writes.push((&part.path, write_bases(body, &edits)));
+            let (text, written) = write_bases(body, &edits);
+            wrote.extend(
+                written
+                    .iter()
+                    .map(|(id, line, text)| Written::new(id, &part.name, *line, text)),
+            );
+            writes.push((&part.path, text));
         }
     }
     for (path, text) in writes {
         std::fs::write(root.join(path), text)?;
     }
-    Ok(Outcome::done(Vec::new()))
+    Ok(Outcome::done(Vec::new()).wrote(wrote))
 }
 
 fn holds_claim(loaded: &[Loaded], claim_id: &str) -> bool {
@@ -136,15 +143,22 @@ fn holds_targeted_claim(loaded: &[Loaded], claim_id: &str) -> bool {
         .any(|l| l.claims.iter().any(|c| c.id == claim_id))
 }
 
-fn write_bases(body: &str, edits: &[(&Claim, String)]) -> String {
+fn write_bases(body: &str, edits: &[(&Claim, String)]) -> (String, Vec<(String, usize, String)>) {
     let mut lines = owned_lines(body);
-    for (claim, hash) in edits.iter().rev() {
+    let mut written = Vec::new();
+    let mut shift = 0isize;
+    for (claim, hash) in edits {
         let eol = eol_of(&claim.block[0]);
         let mut block = without_base(&claim.block);
         block.push(format!("{}{eol}", base_line(hash)));
-        lines.splice(claim.start..claim.end, block);
+        let at = (claim.start as isize + shift) as usize;
+        let end = (claim.end as isize + shift) as usize;
+        let text = block[block.len() - 1].clone();
+        shift += block.len() as isize - (end - at) as isize;
+        written.push((claim.id.clone(), at + block.len(), text));
+        lines.splice(at..end, block);
     }
-    lines.join("\n")
+    (lines.join("\n"), written)
 }
 
 pub fn doc_tests(doc: &DocMeta) -> Result<Vec<String>, String> {

@@ -202,11 +202,32 @@ pub struct Update {
     pub body: String,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct Written {
+    pub id: String,
+    pub part: String,
+    pub line: usize,
+    pub text: String,
+}
+
+impl Written {
+    pub fn new(id: &str, part: &str, line: usize, text: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            part: part.to_string(),
+            line,
+            text: text.trim_end_matches('\r').to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct Output {
     pub findings: Vec<Finding>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub updates: Vec<Update>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wrote: Vec<Written>,
 }
 
 impl Output {
@@ -214,6 +235,7 @@ impl Output {
         Self {
             findings,
             updates: Vec::new(),
+            wrote: Vec::new(),
         }
     }
 }
@@ -222,6 +244,8 @@ impl Output {
 pub struct StopInput {
     #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
     #[serde(default)]
     pub stop_hook_active: bool,
 }

@@ -1,24 +1,49 @@
 use crate::payload::Finding;
 use crate::receipt::{git_output, touched_files};
+use crate::session::recorded_base;
 use lazyspec::engine::document::DocMeta;
 use lazyspec::engine::store::Store;
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub fn run(store: &Store, root: &Path) -> Vec<Finding> {
-    let touched = touched_files(root);
+pub fn run(store: &Store, root: &Path, session_id: Option<&str>) -> Vec<Finding> {
+    let base = session_id.and_then(|id| recorded_base(root, id));
+    let touched = session_touched(root, base.as_deref());
     let mut findings = Vec::new();
-    findings.extend(cross_governs(store, root, &touched));
+    findings.extend(cross_governs(store, root, &touched, base.as_deref()));
     findings.extend(pending_tests(root, &touched));
     findings.extend(unapproved_completions(store, root, &touched));
     findings
 }
 
-fn status_at_head(root: &Path, doc_path: &Path) -> Option<String> {
-    let spec = format!("HEAD:./{}", doc_path.to_string_lossy());
+fn session_touched(root: &Path, base: Option<&str>) -> Vec<String> {
+    let current = touched_files(root);
+    let Some(base) = base else {
+        return current;
+    };
+    let committed = git_output(
+        root,
+        &["diff", "--name-only", "--relative", "-z", base, "HEAD"],
+    )
+    .unwrap_or_default();
+    let all: BTreeSet<String> = committed
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .chain(current)
+        .collect();
+    all.into_iter().collect()
+}
+
+fn status_at(root: &Path, rev: &str, doc_path: &Path) -> Option<String> {
+    let spec = format!("{rev}:./{}", doc_path.to_string_lossy());
     let text = git_output(root, &["show", &spec])?;
     Some(DocMeta::parse(&text).ok()?.status.to_string())
+}
+
+fn was_complete_at(root: &Path, rev: &str, doc_path: &Path) -> bool {
+    status_at(root, rev, doc_path).as_deref() == Some("complete")
 }
 
 fn unapproved_completions(store: &Store, root: &Path, touched: &[String]) -> Vec<Finding> {
@@ -27,7 +52,7 @@ fn unapproved_completions(store: &Store, root: &Path, touched: &[String]) -> Vec
         .into_iter()
         .filter(|d| d.doc_type.to_string() == "delta" && d.status.to_string() == "complete")
         .filter(|d| touched.iter().any(|f| Path::new(f) == d.path))
-        .filter(|d| status_at_head(root, &d.path).as_deref() != Some("complete"))
+        .filter(|d| !was_complete_at(root, "HEAD", &d.path))
         .map(|d| {
             Finding::bare_error(format!(
                 "{} is complete in the working tree but not at HEAD. If a human moved it, leave it and ask them to commit; never change the status back",
@@ -45,11 +70,17 @@ fn governing_ids(store: &Store, root: &Path, file: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn covered_specs(store: &Store) -> BTreeSet<String> {
+fn covered_specs(store: &Store, root: &Path, base: Option<&str>) -> BTreeSet<String> {
+    let rev = base.unwrap_or("HEAD");
     store
         .all_docs()
         .into_iter()
-        .filter(|d| d.doc_type.to_string() == "delta" && d.status.to_string() == "in-progress")
+        .filter(|d| d.doc_type.to_string() == "delta")
+        .filter(|d| match d.status.to_string().as_str() {
+            "in-progress" => true,
+            "complete" => !was_complete_at(root, rev, &d.path),
+            _ => false,
+        })
         .flat_map(|d| {
             d.related
                 .iter()
@@ -60,7 +91,12 @@ fn covered_specs(store: &Store) -> BTreeSet<String> {
         .collect()
 }
 
-fn cross_governs(store: &Store, root: &Path, touched: &[String]) -> Option<Finding> {
+fn cross_governs(
+    store: &Store,
+    root: &Path,
+    touched: &[String],
+    base: Option<&str>,
+) -> Option<Finding> {
     let governed: Vec<BTreeSet<String>> = touched
         .iter()
         .map(|f| governing_ids(store, root, f))
@@ -71,7 +107,7 @@ fn cross_governs(store: &Store, root: &Path, touched: &[String]) -> Option<Findi
     if !common.is_empty() {
         return None;
     }
-    let covered = covered_specs(store);
+    let covered = covered_specs(store, root, base);
     if governed.iter().all(|ids| !ids.is_disjoint(&covered)) {
         return None;
     }

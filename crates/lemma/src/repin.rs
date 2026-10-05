@@ -1,9 +1,10 @@
 use crate::base::{load_behaviour_parts, Loaded};
-use crate::claims::{is_annotation, owned_lines, parse, Claim, Receipt};
+use crate::claims::{is_annotation, is_forced, owned_lines, parse, Claim, Receipt, FORCED_MARKER};
 use crate::outcome::Outcome;
-use crate::payload::Finding;
-use crate::receipt::{git_lines, git_output, is_dirty, Checker};
+use crate::payload::{Finding, Written};
+use crate::receipt::{git_lines, git_output, is_dirty, symbol_text, Checker};
 use anyhow::Result;
+use lazyspec::engine::document::Part;
 use lazyspec::engine::store::Store;
 use std::path::Path;
 
@@ -56,14 +57,16 @@ pub fn run(
     if !drifted.is_empty() && !force {
         return Ok(Outcome::refuse(drifted));
     }
+    let mut wrote = Vec::new();
     for l in &loaded {
-        let receipts: Vec<&Receipt> = selected(l, claims).map(|(_, r)| r).collect();
-        std::fs::write(
-            root.join(&l.part.path),
-            repinned_body(&l.body, &receipts, &head),
-        )?;
+        let receipts: Vec<(&Claim, &Receipt)> = selected(l, claims).collect();
+        let (body, written) = repinned_body(l, &receipts, &head, |claim, receipt| {
+            force && pin_drifted(root, l.part, &l.body, claim, receipt)
+        });
+        std::fs::write(root.join(&l.part.path), body)?;
+        wrote.extend(written);
     }
-    Ok(Outcome::done(drifted))
+    Ok(Outcome::done(drifted).wrote(wrote))
 }
 
 fn unknown_claims(doc_id: &str, loaded: &[Loaded], wanted: &[String]) -> Vec<Finding> {
@@ -152,18 +155,18 @@ fn commits_touching(root: &Path, sha: &str, file: &str) -> Vec<String> {
     git_lines(root, &["log", "--format=%H", &range, "--", file]).unwrap_or_default()
 }
 
-fn claim_moved_with_file(root: &Path, loaded: &Loaded, claim: &Claim, commits: &[String]) -> bool {
-    let part = loaded.part.path.to_string_lossy();
+fn claim_moved_with_file(root: &Path, part: &Part, claim: &Claim, commits: &[String]) -> bool {
+    let part = part.path.to_string_lossy();
     commits.iter().any(|c| {
         claim_text(show(root, &format!("{c}^"), &part), &claim.id)
             != claim_text(show(root, c, &part), &claim.id)
     })
 }
 
-fn claim_edited_in_worktree(root: &Path, loaded: &Loaded, claim: &Claim) -> bool {
-    let part = loaded.part.path.to_string_lossy();
+fn claim_edited_in_worktree(root: &Path, part: &Part, body: &str, claim: &Claim) -> bool {
+    let part = part.path.to_string_lossy();
     claim_text(show(root, "HEAD", &part), &claim.id)
-        != claim_text(Some(loaded.body.clone()), &claim.id)
+        != claim_text(Some(body.to_string()), &claim.id)
 }
 
 fn drifted_pins(
@@ -174,7 +177,7 @@ fn drifted_pins(
     force: bool,
 ) -> Vec<Finding> {
     selected(loaded, wanted)
-        .filter(|(claim, receipt)| pin_drifted(root, loaded, claim, receipt))
+        .filter(|(claim, receipt)| pin_drifted(root, loaded.part, &loaded.body, claim, receipt))
         .map(|(claim, receipt)| {
             let sha = receipt.sha.as_deref().unwrap_or_default();
             let what = format!(
@@ -199,11 +202,11 @@ fn drifted_pins(
         .collect()
 }
 
-fn pin_drifted(root: &Path, loaded: &Loaded, claim: &Claim, receipt: &Receipt) -> bool {
+pub fn pin_drifted(root: &Path, part: &Part, body: &str, claim: &Claim, receipt: &Receipt) -> bool {
     let Some(sha) = receipt.sha.as_deref() else {
         return false;
     };
-    if claim_edited_in_worktree(root, loaded, claim) {
+    if claim_edited_in_worktree(root, part, body, claim) {
         return false;
     }
     let file = receipt.path.trim_start_matches("./");
@@ -211,7 +214,34 @@ fn pin_drifted(root: &Path, loaded: &Loaded, claim: &Claim, receipt: &Receipt) -
     if committed.is_empty() {
         return false;
     }
-    !claim_moved_with_file(root, loaded, claim, &committed)
+    if claim_moved_with_file(root, part, claim, &committed) {
+        return false;
+    }
+    symbol_changed(root, sha, file, receipt.symbol.as_deref())
+}
+
+fn symbol_changed(root: &Path, sha: &str, file: &str, symbol: Option<&str>) -> bool {
+    let at = |rev: &str| show(root, rev, file).and_then(|src| symbol_text(file, &src, symbol));
+    match at(sha) {
+        Some(pinned) => at("HEAD") != Some(pinned),
+        None => true,
+    }
+}
+
+fn forced_line(line: &str, receipt: &Receipt) -> String {
+    let mut out = line.to_string();
+    let mut refs = lazyspec::engine::refs::parse_refs(line);
+    refs.sort_by_key(|r| std::cmp::Reverse(r.span.0));
+    let drifted =
+        |r: &&lazyspec::engine::refs::Ref| r.path == receipt.path && r.symbol == receipt.symbol;
+    for r in refs
+        .iter()
+        .filter(drifted)
+        .filter(|r| !is_forced(&line[r.span.1..]))
+    {
+        out.insert_str(r.span.1, &format!(" {FORCED_MARKER}"));
+    }
+    out
 }
 
 pub fn repinned_line(line: &str, head: &str) -> String {
@@ -232,11 +262,26 @@ pub fn repinned_line(line: &str, head: &str) -> String {
     out
 }
 
-fn repinned_body(body: &str, receipts: &[&Receipt], head: &str) -> String {
-    let mut lines = owned_lines(body);
-    for receipt in receipts {
+fn repinned_body(
+    loaded: &Loaded,
+    receipts: &[(&Claim, &Receipt)],
+    head: &str,
+    mark: impl Fn(&Claim, &Receipt) -> bool,
+) -> (String, Vec<Written>) {
+    let mut lines = owned_lines(&loaded.body);
+    let mut written = Vec::new();
+    for (claim, receipt) in receipts {
         let idx = receipt.line - 1;
         lines[idx] = repinned_line(&lines[idx], head);
+        if mark(claim, receipt) {
+            lines[idx] = forced_line(&lines[idx], receipt);
+        }
+        written.push(Written::new(
+            &claim.id,
+            &loaded.part.name,
+            receipt.line,
+            &lines[idx],
+        ));
     }
-    lines.join("\n")
+    (lines.join("\n"), written)
 }

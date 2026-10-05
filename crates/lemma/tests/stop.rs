@@ -244,3 +244,162 @@ fn a_new_delta_already_complete_in_the_working_tree_errors() {
 
     assert_eq!(stop(&repo, false).code, 2);
 }
+
+fn session_start(repo: &Repo, id: &str) -> Run {
+    let input = json!({ "session_id": id, "cwd": repo.root(), "source": "startup" });
+    repo.run(&["session-start"], &input.to_string())
+}
+
+fn base_file(repo: &Repo, id: &str) -> std::path::PathBuf {
+    repo.path(&format!(".git/lemma/sessions/{id}"))
+}
+
+fn full_head(repo: &Repo) -> String {
+    repo.git(&["rev-parse", "HEAD"])
+}
+
+#[test]
+fn session_start_records_the_base_once() {
+    let repo = two_specs();
+    let first = full_head(&repo);
+
+    let run = session_start(&repo, "s");
+    assert_eq!(run.code, 0);
+    assert!(run.stdout.is_empty() && run.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(base_file(&repo, "s")).unwrap(),
+        first
+    );
+
+    repo.write("a/x.rs", "fn x() { 1; }\n");
+    repo.commit("later");
+    session_start(&repo, "s");
+
+    assert_eq!(
+        std::fs::read_to_string(base_file(&repo, "s")).unwrap(),
+        first
+    );
+}
+
+#[test]
+fn session_start_ignores_unsafe_session_ids() {
+    let repo = two_specs();
+
+    let run = session_start(&repo, "../escape");
+
+    assert_eq!(run.code, 0);
+    assert!(!repo.path(".git/lemma/escape").exists());
+}
+
+#[test]
+fn session_start_outside_a_repo_is_silent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
+        .arg("session-start")
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let input = json!({ "session_id": "s", "cwd": dir.path() }).to_string();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+}
+
+#[test]
+fn a_cross_governs_commit_inside_the_session_still_errors() {
+    let repo = two_specs();
+    session_start(&repo, "s");
+    touch_both(&repo);
+    repo.commit("both");
+
+    assert_eq!(stop(&repo, false).code, 2);
+}
+
+#[test]
+fn the_same_commit_without_a_base_file_passes() {
+    let repo = two_specs();
+    touch_both(&repo);
+    repo.commit("both");
+
+    assert_eq!(stop(&repo, false).code, 0);
+}
+
+#[test]
+fn a_delta_completed_and_committed_in_the_session_passes() {
+    let repo = Repo::new();
+    complete_delta_setup(&repo, "in-progress");
+    session_start(&repo, "s");
+    set_status(&repo, "in-progress", "complete");
+    repo.commit("complete it");
+
+    assert_eq!(stop(&repo, false).code, 0);
+}
+
+#[test]
+fn session_start_in_a_repo_without_a_lazyspec_project_writes_no_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+    let input = json!({ "session_id": "s", "cwd": dir.path() }).to_string();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
+        .arg("session-start")
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(!dir.path().join(".git/lemma/sessions/s").exists());
+}
+
+#[test]
+fn a_delta_completed_in_the_session_covers_its_specs() {
+    let repo = two_specs();
+    repo.delta_file(
+        1,
+        "in-progress",
+        &["SPEC-001", "SPEC-002"],
+        "## Intent\n\nBoth.\n",
+    );
+    repo.commit("delta");
+    session_start(&repo, "s");
+    set_status(&repo, "in-progress", "complete");
+    touch_both(&repo);
+    repo.commit("both and complete");
+
+    let run = stop(&repo, false);
+
+    assert!(
+        !run.stderr.contains("more than one governs area"),
+        "{}",
+        run.stderr
+    );
+}

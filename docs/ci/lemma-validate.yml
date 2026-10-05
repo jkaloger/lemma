@@ -15,7 +15,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install lazyspec lemma --locked
+      # Hook trust is per machine, so the job runs it.
       - run: lazyspec hook trust
-      # lazyspec validate exits 2 on any error finding (lemma invariants), so this step fails the job on them.
+      # lazyspec validate exits 2 on any error finding. Errors are invariants, so this step fails the job on them.
+      # An unreceipted claim on an in-progress delta is a warning, so a feature-branch push is not red.
       # --warnings also prints drift findings (stale receipts, @base mismatch), which do not fail it.
       - run: lazyspec validate --warnings
