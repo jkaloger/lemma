@@ -1,7 +1,6 @@
-use crate::claims::{
-    base_line, block_hash, eol_of, owned_lines, parse, target_of, without_base, Claim,
-};
+use crate::claims::{eol_of, owned_lines, parse, target_of, Claim};
 use crate::claims::{is_behaviour_part, BEHAVIOUR_PART};
+use crate::legacy::{base_line, block_hash, without_base};
 use crate::outcome::Outcome;
 use crate::payload::{tests_or_default, Attributes, Finding, Written};
 use anyhow::Result;

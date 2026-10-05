@@ -1,15 +1,22 @@
 mod attach;
 mod base;
 mod claims;
+#[allow(dead_code)]
+mod evidence;
 mod fold;
+mod legacy;
 mod outcome;
 mod payload;
 mod project;
+#[allow(dead_code)]
+mod range;
 mod receipt;
 mod repin;
 mod session;
 mod stop;
 mod targets;
+#[cfg(test)]
+mod testgit;
 mod transition;
 mod validate;
 mod version;

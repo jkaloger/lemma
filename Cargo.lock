@@ -2058,6 +2058,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
 use crate::claims::{Claim, BEHAVIOUR_PART};
-use crate::fold::BaseKind;
+use crate::legacy::BaseKind;
 use crate::payload::{BehaviourPart, Doc, Finding, Output, Payload};
 use crate::project::specs_from_store;
 use crate::receipt::{forced_warnings, invalid_glob_findings, non_test_receipts, Checker, Verdict};

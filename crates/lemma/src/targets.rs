@@ -1,5 +1,5 @@
 use crate::claims::{part_for, Claim, BEHAVIOUR_PART};
-use crate::fold::{base_issues, BaseIssue};
+use crate::legacy::{base_issues, BaseIssue};
 use crate::payload::{BehaviourPart, Doc, Finding};
 
 pub struct Targets<'a> {

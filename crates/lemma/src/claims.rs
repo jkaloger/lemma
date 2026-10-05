@@ -1,3 +1,4 @@
+use crate::legacy::{base_in, is_base_line, is_forced};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -9,6 +10,7 @@ pub struct Receipt {
     pub sha: Option<String>,
     pub checked_by: Option<String>,
     pub forced: bool,
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +23,39 @@ pub struct Claim {
     pub intent: bool,
     pub receipts: Vec<Receipt>,
     pub base: Option<String>,
+    pub legacy: Vec<LegacyLine>,
     pub block: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyKind {
+    PinnedRef,
+    Base,
+    Checked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyLine {
+    pub line: usize,
+    pub kind: LegacyKind,
+}
+
+impl LegacyLine {
+    pub fn message(&self) -> &'static str {
+        match self.kind {
+            LegacyKind::PinnedRef => "pinned ref; run lemma migrate",
+            LegacyKind::Base => "`@base` line; run lemma migrate",
+            LegacyKind::Checked => "`@checked` line; run lemma migrate",
+        }
+    }
+}
+
+impl Claim {
+    pub fn refs(&self) -> impl Iterator<Item = &Receipt> {
+        self.receipts
+            .iter()
+            .filter(|r| r.checked_by.is_none() && r.sha.is_none() && !r.forced && !r.pinned)
+    }
 }
 
 struct Section {
@@ -171,12 +205,6 @@ fn checked_pattern() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"@checked\s+([^@\s]+)@([0-9a-fA-F]+)").unwrap())
 }
 
-pub const FORCED_MARKER: &str = "[forced]";
-
-pub fn is_forced(after_ref: &str) -> bool {
-    after_ref.trim_start().starts_with(FORCED_MARKER)
-}
-
 fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<Receipt> {
     (start..end)
         .filter(|&i| live[i])
@@ -185,6 +213,7 @@ fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<R
                 .into_iter()
                 .map(move |r| Receipt {
                     forced: is_forced(&lines[i][r.span.1..]),
+                    pinned: r.blob_hash.is_some(),
                     line: i + 1,
                     path: r.path,
                     symbol: r.symbol,
@@ -200,60 +229,40 @@ fn receipts_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<R
                     sha: Some(c[2].to_string()),
                     checked_by: Some(c[1].to_string()),
                     forced: false,
+                    pinned: false,
                 });
             refs.chain(checks).collect::<Vec<_>>()
         })
         .collect()
 }
 
-fn base_pattern() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*@base\s+([0-9a-f]+)").unwrap())
-}
-
-fn base_in(lines: &[&str], live: &[bool], start: usize, end: usize) -> Option<String> {
-    (start..end)
-        .filter(|&i| live[i] && is_base_line(lines[i]))
-        .find_map(|i| base_pattern().captures(lines[i]))
-        .map(|c| c[1].to_string())
-}
-
-const BASE_MARKER: &str = "@base";
-const HASH_LEN: usize = 12;
-
-pub fn is_base_line(line: &str) -> bool {
-    line.trim_start()
-        .strip_prefix(BASE_MARKER)
-        .is_some_and(|rest| rest.starts_with(' '))
-}
-
-pub fn is_annotation(line: &str) -> bool {
-    let line = line.trim_start();
-    is_base_line(line) || line.starts_with("@ref ") || line.starts_with("@checked ")
-}
-
-pub fn without_base(block: &[String]) -> Vec<String> {
-    block
+fn legacy_in(
+    lines: &[&str],
+    live: &[bool],
+    start: usize,
+    end: usize,
+    receipts: &[Receipt],
+) -> Vec<LegacyLine> {
+    let mut found: Vec<LegacyLine> = receipts
         .iter()
-        .filter(|line| !is_base_line(line))
-        .cloned()
-        .collect()
-}
-
-pub fn block_hash(claim: &Claim) -> String {
-    let text = without_base(&claim.block)
-        .iter()
-        .enumerate()
-        .map(|(i, line)| if i == 0 { line.trim() } else { line.trim_end() })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut hash = lazyspec::engine::hashing::sha256_hex(text.as_bytes());
-    hash.truncate(HASH_LEN);
-    hash
-}
-
-pub fn base_line(hash: &str) -> String {
-    format!("  {BASE_MARKER} {hash}")
+        .filter(|r| r.checked_by.is_some())
+        .map(|r| (r.line, LegacyKind::Checked))
+        .chain(
+            receipts
+                .iter()
+                .filter(|r| r.checked_by.is_none() && (r.sha.is_some() || r.forced || r.pinned))
+                .map(|r| (r.line, LegacyKind::PinnedRef)),
+        )
+        .chain(
+            (start..end)
+                .filter(|&i| live[i] && is_base_line(lines[i]))
+                .map(|i| (i + 1, LegacyKind::Base)),
+        )
+        .map(|(line, kind)| LegacyLine { line, kind })
+        .collect();
+    found.sort_by_key(|l| l.line);
+    found.dedup();
+    found
 }
 
 fn marks_intent(lines: &[&str], live: &[bool], start: usize, end: usize) -> bool {
@@ -275,6 +284,7 @@ pub fn parse(body: &str) -> Behaviour {
             continue;
         };
         let end = claim_end(&lines, cursor);
+        let receipts = receipts_in(&lines, &live, cursor, end);
         claims.push(Claim {
             id: caps[2].to_string(),
             line: cursor + 1,
@@ -282,7 +292,8 @@ pub fn parse(body: &str) -> Behaviour {
             end,
             struck: caps.get(1).is_some(),
             intent: marks_intent(&lines, &live, cursor, end),
-            receipts: receipts_in(&lines, &live, cursor, end),
+            legacy: legacy_in(&lines, &live, cursor, end, &receipts),
+            receipts,
             base: base_in(&lines, &live, cursor, end),
             block: lines[cursor..end].iter().map(|s| s.to_string()).collect(),
         });
@@ -398,69 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn base_line_is_parsed() {
-        let b = parse("- [A-1] one\n  @ref a.rs#f@abc\n  @base 0123abcdef45\n- [A-2] two\n");
-        assert_eq!(b.claims[0].base.as_deref(), Some("0123abcdef45"));
-        assert_eq!(b.claims[1].base, None);
-    }
-
-    fn hash_of(body: &str) -> String {
-        block_hash(&parse(body).claims[0])
-    }
-
-    #[test]
-    fn hash_is_twelve_hex_chars_and_ignores_id_indentation_and_trailing_space() {
-        let plain = hash_of("- [A-1] one\n  @ref a.rs#f@abc\n");
-        assert_eq!(plain.len(), 12);
-        assert!(plain.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(plain, hash_of("- [A-1] one   \n  @ref a.rs#f@abc\t\n"));
-        let indented = block_hash(&Claim {
-            block: vec!["  - [A-1] one".into(), "  @ref a.rs#f@abc".into()],
-            ..parse("- [A-1] one\n").claims.remove(0)
-        });
-        assert_eq!(plain, indented);
-    }
-
-    #[test]
-    fn hash_ignores_the_base_line_and_tracks_text_and_receipts() {
-        let plain = hash_of("- [A-1] one\n  @ref a.rs#f@abc\n");
-        assert_eq!(
-            plain,
-            hash_of("- [A-1] one\n  @ref a.rs#f@abc\n  @base 111111111111\n")
-        );
-        assert_ne!(plain, hash_of("- [A-1] uno\n  @ref a.rs#f@abc\n"));
-        assert_ne!(plain, hash_of("- [A-1] one\n  @ref a.rs#f@abd\n"));
-    }
-
-    #[test]
-    fn a_claim_that_mentions_base_in_its_text_keeps_its_id_line() {
-        let body =
-            "- [A-1] the fold strips `@base` lines\n  @ref a.rs#f@abc\n  @base 111111111111\n";
-        let claim = &parse(body).claims[0];
-        assert_eq!(
-            without_base(&claim.block),
-            vec!["- [A-1] the fold strips `@base` lines", "  @ref a.rs#f@abc"]
-        );
-        assert_eq!(claim.base.as_deref(), Some("111111111111"));
-        assert_eq!(
-            block_hash(claim),
-            hash_of("- [A-1] the fold strips `@base` lines\n  @ref a.rs#f@abc\n")
-        );
-        assert_ne!(block_hash(claim), hash_of("- [A-1] \n  @ref a.rs#f@abc\n"));
-    }
-
-    #[test]
-    fn annotation_lines_are_ref_checked_and_base() {
-        assert!(is_annotation("  @ref a.rs#f@abc"));
-        assert!(is_annotation("\t@checked jack@abc"));
-        assert!(is_annotation("  @base 0123"));
-        assert!(is_base_line("  @base 0123"));
-        assert!(!is_base_line("  @ref a.rs#f@abc"));
-        assert!(!is_annotation("- [A-1] strips `@base` lines"));
-        assert!(!is_annotation("  prose"));
-    }
-
-    #[test]
     fn behaviour_part_names() {
         assert!(is_behaviour_part("behaviour"));
         assert!(is_behaviour_part("behaviour.SPEC-003"));
@@ -471,14 +419,58 @@ mod tests {
         assert_eq!(part_for("SPEC-003"), "behaviour.SPEC-003");
     }
 
-    #[test]
-    fn forced_follows_the_ref_it_marks() {
-        let marked = parse("- [AC-1] x\n  @ref a.rs#f@abc [forced]\n");
-        let trailing = parse("- [AC-1] x\n  @ref a.rs#f@abc trailing\n");
+    fn legacy_of(body: &str) -> Vec<(usize, &'static str)> {
+        parse(body).claims[0]
+            .legacy
+            .iter()
+            .map(|l| (l.line, l.message()))
+            .collect()
+    }
 
-        assert_eq!(marked.claims[0].receipts[0].sha.as_deref(), Some("abc"));
-        assert!(marked.claims[0].receipts[0].forced);
-        assert_eq!(trailing.claims[0].receipts[0].sha.as_deref(), Some("abc"));
-        assert!(!trailing.claims[0].receipts[0].forced);
+    #[test]
+    fn unpinned_refs_are_the_only_clean_form() {
+        let b = parse("- [A-1] one\n  @ref tests/a.rs#f\n  @ref tests/a.rs#g\n");
+        let claim = &b.claims[0];
+        assert!(claim.legacy.is_empty());
+        assert_eq!(claim.refs().count(), 2);
+        assert_eq!(claim.refs().next().unwrap().symbol.as_deref(), Some("f"));
+    }
+
+    #[test]
+    fn commit_pinned_ref_is_a_legacy_line() {
+        let body = "- [A-1] one\n  @ref tests/a.rs#f@3f9c2e1\n";
+        assert_eq!(legacy_of(body), vec![(2, "pinned ref; run lemma migrate")]);
+        assert_eq!(parse(body).claims[0].refs().count(), 0);
+    }
+
+    #[test]
+    fn blob_pinned_ref_is_a_legacy_line() {
+        let body = "- [A-1] one\n  @ref tests/a.rs#f@{blob:3f9c2e1}\n";
+        assert_eq!(legacy_of(body), vec![(2, "pinned ref; run lemma migrate")]);
+        assert_eq!(parse(body).claims[0].refs().count(), 0);
+    }
+
+    #[test]
+    fn forced_marker_is_a_legacy_line() {
+        let body = "- [A-1] one\n  @ref tests/a.rs#f@abc [forced]\n";
+        assert_eq!(legacy_of(body), vec![(2, "pinned ref; run lemma migrate")]);
+    }
+
+    #[test]
+    fn base_and_checked_lines_are_legacy_lines_in_line_order() {
+        let body = "- [A-1] one\n  @checked jack@3f9c2e1\n  @base 0123abcdef45\n";
+        assert_eq!(
+            legacy_of(body),
+            vec![
+                (2, "`@checked` line; run lemma migrate"),
+                (3, "`@base` line; run lemma migrate")
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_markers_in_fences_comments_and_prose_are_ignored() {
+        let body = "- [A-1] strips `@base` lines\n  ```\n  @base 0123abcdef45\n  @ref a.rs#f@abc\n  ```\n  <!-- @checked jack@abc -->\n";
+        assert!(parse(body).claims[0].legacy.is_empty());
     }
 }

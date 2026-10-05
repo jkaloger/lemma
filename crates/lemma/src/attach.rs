@@ -1,7 +1,8 @@
 use crate::base::{
     base_hash_for, doc_tests, load_behaviour_parts, spec_claims, spec_tests, Loaded,
 };
-use crate::claims::{base_line, eol_of, owned_lines, target_of, Claim, Receipt};
+use crate::claims::{eol_of, owned_lines, target_of, Claim, Receipt};
+use crate::legacy::base_line;
 use crate::outcome::Outcome;
 use crate::payload::{Finding, Written};
 use crate::receipt::{is_dirty, names_a_test, Checker};

@@ -103,7 +103,7 @@ fn text_has_word(source: &str, symbol: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn symbol_in(path: &str, source: &str, symbol: &str) -> bool {
+pub fn symbol_in(path: &str, source: &str, symbol: &str) -> bool {
     let extension = Path::new(path).extension().and_then(|e| e.to_str());
     match extension {
         Some("rs") => RustSymbolExtractor::new().extract(source, symbol).is_some(),

@@ -1,5 +1,6 @@
 use crate::base::{load_behaviour_parts, Loaded};
-use crate::claims::{is_annotation, is_forced, owned_lines, parse, Claim, Receipt, FORCED_MARKER};
+use crate::claims::{owned_lines, parse, Claim, Receipt};
+use crate::legacy::{is_annotation, is_forced, FORCED_MARKER};
 use crate::outcome::Outcome;
 use crate::payload::{Finding, Written};
 use crate::receipt::{git_lines, git_output, is_dirty, symbol_text, Checker};

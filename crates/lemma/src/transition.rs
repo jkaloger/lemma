@@ -1,5 +1,5 @@
 use crate::claims::{has_intent, Claim, BEHAVIOUR_PART};
-use crate::fold::fold;
+use crate::legacy::fold;
 use crate::payload::{BehaviourPart, Doc, Finding, Output, Payload, Update};
 use crate::project::specs_from_store;
 use crate::receipt::{
