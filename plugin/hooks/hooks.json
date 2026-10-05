@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v lemma >/dev/null 2>&1 || exit 0; lemma stop"
+          }
+        ]
+      }
+    ]
+  }
+}

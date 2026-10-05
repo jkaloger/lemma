@@ -1,0 +1,74 @@
+[[types]]
+name = "spec"
+plural = "specs"
+dir = "docs/specs"
+prefix = "SPEC"
+staleness = "drift"
+lifecycle = { states = ["draft", "active"], edges = [{ from = "draft", to = "active" }] }
+
+[[types]]
+name = "delta"
+plural = "deltas"
+dir = "docs/deltas"
+prefix = "DELTA"
+staleness = "age"
+lifecycle = { states = ["draft", "in-progress", "complete", "archived"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }, { from = "complete", to = "archived" }] }
+
+[[types]]
+name = "decision"
+plural = "decisions"
+dir = "docs/decisions"
+prefix = "DECISION"
+staleness = "age"
+lifecycle = { states = ["proposed", "accepted", "superseded"], edges = [{ from = "proposed", to = "accepted" }, { from = "accepted", to = "superseded" }] }
+
+[[relationships]]
+name = "folds-into"
+inverse = "folded-from"
+
+[[relationships]]
+name = "affects"
+inverse = "affected-by"
+
+[[relationships]]
+name = "supersedes"
+inverse = "superseded-by"
+
+[[edges]]
+name = "delta-folds-into-spec"
+from = "delta"
+to = "spec"
+via = "folds-into"
+required = "error"
+
+[[edges]]
+name = "decision-affects-spec"
+from = "decision"
+to = "spec"
+via = "affects"
+
+[[edges]]
+name = "decision-supersedes-decision"
+from = "decision"
+to = "decision"
+via = "supersedes"
+
+# `unowned` is omitted: the ungoverned-file check is off.
+[governs]
+scope = ["src/**", "crates/**", "lib/**"]
+
+[templates]
+dir = ".lazyspec/templates"
+
+[[hooks]]
+name = "lemma-validate"
+event = "validate"
+types = ["spec", "delta", "decision"]
+run = ["lemma", "validate"]
+
+[[hooks]]
+name = "lemma-pre-transition"
+event = "pre-transition"
+types = ["delta"]
+context_types = ["spec", "delta"]
+run = ["lemma", "pre-transition"]

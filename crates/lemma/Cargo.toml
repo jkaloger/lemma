@@ -1,0 +1,18 @@
+[package]
+name = "lemma"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Hooks binary for the lemma lazyspec workflow pack."
+
+[dependencies]
+lazyspec = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+globset = "0.4"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

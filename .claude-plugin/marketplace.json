@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "lemma",
+  "description": "lemma: a lazyspec workflow pack for LLM-driven development.",
+  "owner": {
+    "name": "Jack Kaloger"
+  },
+  "plugins": [
+    {
+      "name": "lemma",
+      "source": "./plugin",
+      "description": "Claims, receipts and fold for agent-driven delivery. Prerequisites: the `lemma` binary on PATH and lazyspec."
+    }
+  ]
+}

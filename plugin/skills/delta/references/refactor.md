@@ -1,0 +1,8 @@
+# Refactor
+
+Change structure, preserve the observable contract.
+
+1. Identify the contract: the spec claims and tests covering the code.
+2. Where existing behaviour is not verified enough to trust, add characterisation tests first. Commit them before restructuring.
+3. Restructure with those tests green throughout. No claim changes; if one must change, it is not a refactor, open a delta.
+4. Stay inside one `governs` area. After moving or renaming test symbols, fix receipts, then `lemma re-pin <id>`.

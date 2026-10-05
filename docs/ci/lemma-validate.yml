@@ -1,0 +1,19 @@
+# Copy to .github/workflows/lemma-validate.yml in an adopting repository.
+name: lemma-validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # receipts resolve pinned shas and diff against history
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install lazyspec lemma --locked
+      - run: lazyspec hook trust
+      - run: lazyspec validate --warnings

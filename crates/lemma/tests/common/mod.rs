@@ -1,0 +1,235 @@
+#![allow(dead_code)]
+
+use serde_json::{json, Value};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use tempfile::TempDir;
+
+const CONFIG: &str = r#"
+[[types]]
+name = "spec"
+plural = "specs"
+dir = "docs/specs"
+prefix = "SPEC"
+authorship = "generated"
+staleness = "drift"
+lifecycle = { states = ["draft", "active"], edges = [{ from = "draft", to = "active" }] }
+
+[[types]]
+name = "delta"
+plural = "deltas"
+dir = "docs/deltas"
+prefix = "DELTA"
+authorship = "generated"
+lifecycle = { states = ["draft", "in-progress", "complete", "archived"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }, { from = "complete", to = "archived" }] }
+
+[[relationships]]
+name = "folds-into"
+inverse = "folded-from"
+"#;
+
+pub const TEST_FILE: &str = "tests/store_test.rs";
+pub const TEST_SRC: &str = "#[test]\nfn reopen_keeps_prior() {}\n\n#[test]\nfn other_test() {}\n";
+
+pub struct Run {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl Run {
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.stdout)
+            .unwrap_or_else(|e| panic!("stdout is not json ({e}): {}", self.stdout))
+    }
+
+    pub fn findings(&self) -> Vec<Value> {
+        self.json()["findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn messages(&self) -> Vec<String> {
+        self.findings()
+            .iter()
+            .map(|f| f["message"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    pub fn has_message(&self, needle: &str) -> bool {
+        self.messages().iter().any(|m| m.contains(needle))
+    }
+}
+
+pub struct Repo {
+    dir: TempDir,
+}
+
+impl Repo {
+    pub fn new() -> Self {
+        let repo = Self {
+            dir: tempfile::tempdir().unwrap(),
+        };
+        repo.git(&["init", "-q"]);
+        repo.write(".lazyspec.toml", CONFIG);
+        repo.write(TEST_FILE, TEST_SRC);
+        repo.write("src/lib.rs", "pub fn a() {}\n");
+        repo.commit("init");
+        repo
+    }
+
+    pub fn root(&self) -> &Path {
+        self.dir.path()
+    }
+
+    pub fn path(&self, rel: &str) -> PathBuf {
+        self.root().join(rel)
+    }
+
+    pub fn write(&self, rel: &str, content: &str) {
+        let path = self.path(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    pub fn read(&self, rel: &str) -> String {
+        std::fs::read_to_string(self.path(rel)).unwrap()
+    }
+
+    pub fn git(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(self.root())
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    pub fn commit(&self, message: &str) -> String {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "--allow-empty", "-m", message]);
+        self.head()
+    }
+
+    pub fn head(&self) -> String {
+        self.git(&["rev-parse", "--short", "HEAD"])
+    }
+
+    pub fn run(&self, args: &[&str], stdin: &str) -> Run {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_lemma"))
+            .args(args)
+            .current_dir(self.root())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        Run {
+            code: out.status.code().unwrap(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    }
+
+    pub fn spec_file(&self, n: u32, status: &str, governs: &[&str], body: &str) {
+        let globs = governs
+            .iter()
+            .map(|g| format!("\"{g}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let content = format!(
+            "---\ntitle: \"Spec {n}\"\ntype: spec\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n---\n\n{body}"
+        );
+        self.write(&format!("docs/specs/SPEC-00{n}-s.md"), &content);
+    }
+
+    pub fn delta_file(&self, n: u32, status: &str, folds: &[&str], body: &str) {
+        let related: String = folds
+            .iter()
+            .map(|f| format!("- folds-into: {f}\n"))
+            .collect();
+        let related = if related.is_empty() {
+            String::new()
+        } else {
+            format!("related:\n{related}")
+        };
+        let content = format!(
+            "---\ntitle: \"Delta {n}\"\ntype: delta\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\n{related}---\n\n{body}"
+        );
+        self.write(&format!("docs/deltas/DELTA-00{n}-d.md"), &content);
+    }
+}
+
+pub fn doc(
+    id: &str,
+    doc_type: &str,
+    status: &str,
+    governs: &[&str],
+    folds: &[&str],
+    body: &str,
+) -> Value {
+    let related: Vec<Value> = folds
+        .iter()
+        .map(|t| json!({"type": "folds-into", "target": t}))
+        .collect();
+    json!({
+        "id": id,
+        "path": format!("docs/{doc_type}s/{id}-x.md"),
+        "title": id,
+        "type": doc_type,
+        "status": status,
+        "governs": governs,
+        "related": related,
+        "body": body,
+        "content_hash": format!("hash-{id}"),
+    })
+}
+
+pub fn validate_payload(docs: Vec<Value>) -> String {
+    json!({"event": "validate", "hook": "lemma", "documents": docs}).to_string()
+}
+
+pub fn transition_payload(from: &str, to: &str, moved: Value, context: Vec<Value>) -> String {
+    json!({
+        "event": "pre-transition",
+        "hook": "lemma",
+        "transition": {"from": from, "to": to},
+        "documents": [moved],
+        "context": context,
+    })
+    .to_string()
+}
+
+pub fn claim(id: &str, text: &str, sha: Option<&str>) -> String {
+    match sha {
+        Some(sha) => format!("- [{id}] {text}\n  @ref {TEST_FILE}#reopen_keeps_prior@{sha}\n"),
+        None => format!("- [{id}] {text}\n"),
+    }
+}
+
+pub fn delta_body(behaviour: &str) -> String {
+    format!("## Intent\n\nBecause.\n\n## Behaviour\n\n{behaviour}")
+}
