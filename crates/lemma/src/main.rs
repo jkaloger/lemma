@@ -1,38 +1,30 @@
 mod apply;
-mod attach;
-mod base;
 mod check;
 mod claims;
-#[allow(dead_code)]
 mod evidence;
 mod fold;
-mod legacy;
-mod outcome;
+mod git;
+mod migrate;
 mod payload;
 mod project;
-#[allow(dead_code)]
 mod range;
-mod receipt;
 mod refs;
-mod repin;
 mod session;
+mod signal;
 mod stop;
 mod targets;
 #[cfg(test)]
 mod testgit;
-mod transition;
-mod validate;
 mod version;
 mod world;
 
-use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use lazyspec::engine::store::Store;
-use outcome::Outcome;
-use payload::{Finding, Output, Payload, StopInput};
+use payload::{Finding, Output, Payload};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use stop::StopInput;
 
 #[derive(Parser)]
 #[command(
@@ -75,31 +67,14 @@ enum Command {
     Apply { delta: Option<String> },
     /// List the refs of a claim and whether each resolves
     Refs { claim: String },
-    /// Report claim and receipt problems (lazyspec validate hook)
-    Validate,
-    /// Gate a delta status transition and run the fold (lazyspec pre-transition hook)
-    PreTransition,
     /// Bound a session's changes (Claude Code Stop hook)
     Stop,
+    /// Per-edit context and findings (Claude Code PostToolUse hook)
+    Signal,
     /// Record the session's base commit (Claude Code SessionStart hook)
     SessionStart,
-    /// Update the receipt commits on one document, or on the named claims only
-    RePin {
-        id: String,
-        claims: Vec<String>,
-        /// Re-pin even when a receipt file changed and its claim did not
-        #[arg(long)]
-        force: bool,
-    },
-    /// Record the spec block a delta claim replaces or strikes (`@base <hash>`)
-    Base { delta: String, claims: Vec<String> },
-    /// Pin a test as a claim's receipt at the current HEAD
-    Receipt {
-        delta: String,
-        claim: String,
-        /// <path>#<symbol>
-        target: String,
-    },
+    /// Rewrite 1.x specs and deltas to the 2.0 claim format
+    Migrate,
 }
 
 fn read_stdin() -> String {
@@ -117,17 +92,6 @@ fn print(output: &Output) {
         "{}",
         serde_json::to_string(output).expect("output serialises")
     );
-}
-
-fn with_payload(run: impl FnOnce(&Payload) -> Output) -> ExitCode {
-    let output = match serde_json::from_str::<Payload>(&read_stdin()) {
-        Ok(payload) => run(&payload),
-        Err(e) => Output::findings(vec![Finding::bare_error(format!(
-            "lemma: invalid hook payload: {e}"
-        ))]),
-    };
-    print(&output);
-    ExitCode::SUCCESS
 }
 
 fn hook_with_store(run: impl FnOnce(&Store, &Path, &Payload) -> Output) -> ExitCode {
@@ -169,11 +133,13 @@ fn check_command(
     let options = check::Options {
         base: base.as_deref(),
         trunk: Some(&trunk),
+        report_intent: json || hook,
         require: check::Require {
             claims: require.iter().any(|r| matches!(r, RequireArg::Claims)),
             evidence: require.iter().any(|r| matches!(r, RequireArg::Evidence)),
             clean: require.iter().any(|r| matches!(r, RequireArg::Clean)),
         },
+        ..check::Options::default()
     };
     if hook {
         return hook_with_store(|store, root, payload| {
@@ -255,10 +221,27 @@ fn stop_command() -> ExitCode {
     if findings.is_empty() {
         return ExitCode::SUCCESS;
     }
-    findings
-        .iter()
-        .for_each(|f| eprintln!("lemma: {}", f.message));
+    findings.iter().for_each(|f| eprintln!("{}", f.render()));
     ExitCode::from(2)
+}
+
+fn signal_command() -> ExitCode {
+    let input = serde_json::from_str(&read_stdin()).unwrap_or_default();
+    if let Some(output) = signal::run(input, current_dir()) {
+        println!("{output}");
+    }
+    ExitCode::SUCCESS
+}
+
+fn migrate_command() -> ExitCode {
+    let (root, store) = match cli_store() {
+        Ok(found) => found,
+        Err(message) => return fail(message),
+    };
+    migrate::run(&store, &root)
+        .iter()
+        .for_each(|path| println!("{path}"));
+    ExitCode::SUCCESS
 }
 
 fn session_start_command() -> ExitCode {
@@ -271,34 +254,6 @@ fn session_start_command() -> ExitCode {
         session::record_base(&dir, &id);
     }
     ExitCode::SUCCESS
-}
-
-fn refuse_with(message: String) -> ExitCode {
-    print(&Output::findings(vec![Finding::bare_error(message)]));
-    ExitCode::from(2)
-}
-
-fn store_command(run: impl FnOnce(&Store, &Path) -> Result<Outcome>) -> ExitCode {
-    let Some(root) = project::find_root(&current_dir()) else {
-        return refuse_with("no .lazyspec.toml found".to_string());
-    };
-    if let Err(message) = version::require_lazyspec() {
-        return refuse_with(message);
-    }
-    match project::load_store(&root).and_then(|store| run(&store, &root)) {
-        Ok(outcome) => {
-            print(&Output {
-                wrote: outcome.wrote,
-                ..Output::findings(outcome.findings)
-            });
-            if outcome.refused {
-                ExitCode::from(2)
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Err(e) => refuse_with(format!("{e:#}")),
-    }
 }
 
 fn main() -> ExitCode {
@@ -315,20 +270,9 @@ fn main() -> ExitCode {
         }
         Command::Apply { delta: Some(name) } => apply_preview(&name),
         Command::Refs { claim } => refs_command(&claim),
-        Command::Validate => with_payload(|p| validate::run(p, &current_dir())),
-        Command::PreTransition => with_payload(|p| transition::run(p, &current_dir())),
         Command::Stop => stop_command(),
         Command::SessionStart => session_start_command(),
-        Command::RePin { id, claims, force } => {
-            store_command(|store, root| repin::run(store, root, &id, &claims, force))
-        }
-        Command::Base { delta, claims } => {
-            store_command(|store, root| base::run(store, root, &delta, &claims))
-        }
-        Command::Receipt {
-            delta,
-            claim,
-            target,
-        } => store_command(|store, root| attach::run(store, root, &delta, &claim, &target)),
+        Command::Signal => signal_command(),
+        Command::Migrate => migrate_command(),
     }
 }

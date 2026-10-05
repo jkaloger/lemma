@@ -155,6 +155,45 @@ mod coverage {
     }
 
     #[test]
+    fn one_file_governed_by_two_overlapping_specs_is_one_area() {
+        let repo = project();
+        repo.spec_file(3, "active", &["a/**", "b/**"], INTENT);
+        repo.write("a/x.rs", "fn x() { 1; }\n");
+        repo.commit("overlapping spec");
+        repo.write("a/x.rs", "fn x() { 2; }\n");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 0);
+        assert_eq!(run.stdout, "");
+    }
+
+    #[test]
+    fn files_sharing_a_governing_spec_stay_within_one_area() {
+        let repo = project();
+        repo.spec_file(3, "active", &["a/**", "b/**"], INTENT);
+        repo.commit("overlapping spec");
+        touch_both(&repo);
+
+        assert_eq!(check(&repo, &[]).stdout, "");
+    }
+
+    #[test]
+    fn disjoint_areas_error_for_each_touched_spec() {
+        let repo = project();
+        repo.write("c/z.rs", "fn z() {}\n");
+        repo.spec_file(3, "active", &["c/**"], INTENT);
+        repo.commit("third area");
+        touch_both(&repo);
+        repo.write("c/z.rs", "fn z() { 1; }\n");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert_eq!(lines(&run).len(), 3);
+    }
+
+    #[test]
     fn untracked_files_count() {
         let repo = project();
         repo.write("a/new.rs", "fn n() {}\n");
@@ -386,23 +425,39 @@ mod claims_have_evidence {
         assert!(run.stdout.contains(": error: AC-S1-2: claim has no `@ref`"));
     }
 
-    #[test]
-    fn an_intent_claim_is_exempt_but_counted() {
+    fn intent_project() -> Repo {
         let repo = project();
         repo.spec_behaviour(
             1,
             &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Feels fast.\n"),
         );
         repo.commit("intent");
+        repo
+    }
 
-        let run = check(&repo, &["--require", "evidence"]);
+    #[test]
+    fn an_intent_claim_is_exempt_and_text_output_stays_silent() {
+        let run = check(&intent_project(), &["--require", "evidence"]);
 
         assert_eq!(run.code, 0);
-        assert!(
-            run.stdout.contains("1 of 2 claims are [intent]"),
-            "{}",
-            run.stdout
-        );
+        assert_eq!(run.stdout, "");
+    }
+
+    #[test]
+    fn the_intent_count_is_reported_in_json_and_hook_output() {
+        let repo = intent_project();
+        let counted = |run: &Run| run.has_message("1 of 2 claims are [intent]");
+
+        let json = check(&repo, &["--json"]);
+        let payload = validate_payload(vec![with_parts(
+            doc("SPEC-001", "spec", "active", &["a/**"], &[], INTENT),
+            &[("behaviour", &repo.read(SPEC_PART))],
+        )]);
+        let hook = repo.run(&["check", "--hook"], &payload);
+
+        assert_eq!(json.code, 0);
+        assert!(counted(&json), "{}", json.stdout);
+        assert!(counted(&hook), "{}", hook.stdout);
     }
 
     #[test]

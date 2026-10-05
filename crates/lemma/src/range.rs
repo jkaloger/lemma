@@ -1,4 +1,4 @@
-use crate::receipt::git_output;
+use crate::git::git_output;
 use crate::session::recorded_base;
 use std::path::Path;
 

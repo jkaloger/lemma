@@ -158,7 +158,6 @@ pub fn hook(store: &Store, payload: &Payload) -> Output {
     Output {
         findings,
         updates: plan.folded.into_iter().map(|f| f.update).collect(),
-        ..Output::default()
     }
 }
 

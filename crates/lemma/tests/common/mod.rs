@@ -163,23 +163,6 @@ impl Repo {
         self.git(&["rev-parse", "--short", "HEAD"])
     }
 
-    pub fn run_real(&self, program: &str, args: &[&str]) -> Run {
-        let state = self.fake_bin.path().join("state");
-        std::fs::create_dir_all(&state).unwrap();
-        let out = Command::new(program)
-            .args(args)
-            .env("LAZYSPEC_STATE_DIR", state)
-            .current_dir(self.root())
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        Run {
-            code: out.status.code().unwrap(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        }
-    }
-
     pub fn run(&self, args: &[&str], stdin: &str) -> Run {
         let mut child = Command::new(env!("CARGO_BIN_EXE_lemma"))
             .args(args)
@@ -335,56 +318,4 @@ pub fn transition_payload(from: &str, to: &str, moved: Value, context: Vec<Value
     .to_string()
 }
 
-pub fn claim(id: &str, text: &str, sha: Option<&str>) -> String {
-    match sha {
-        Some(sha) => format!("- [{id}] {text}\n  @ref {TEST_FILE}#reopen_keeps_prior@{sha}\n"),
-        None => format!("- [{id}] {text}\n"),
-    }
-}
-
 pub const INTENT: &str = "## Intent\n\nBecause.\n";
-
-impl Repo {
-    pub fn claim_line(&self, rel: &str, id: &str) -> usize {
-        let needle = format!("- [{id}]");
-        self.read(rel)
-            .lines()
-            .position(|l| l.starts_with(&needle))
-            .map(|i| i + 1)
-            .unwrap_or_else(|| panic!("{id} not in {rel}"))
-    }
-}
-
-pub fn raw_body_of(file: &str) -> &str {
-    let closing = file[3..].find("\n---").unwrap() + 3 + 4;
-    &file[closing..]
-}
-
-pub fn spec_block_hash(spec_body: &str, id: &str) -> String {
-    let lines: Vec<&str> = spec_body.lines().collect();
-    let needle = format!("- [{id}]");
-    let start = lines
-        .iter()
-        .position(|l| l.trim_start().starts_with(&needle) || l.contains(&format!("[{id}]")))
-        .unwrap_or_else(|| panic!("{id} not in spec body"));
-    let block: Vec<&str> = std::iter::once(lines[start])
-        .chain(
-            lines[start + 1..]
-                .iter()
-                .copied()
-                .take_while(|l| l.starts_with(' ') || l.starts_with('\t')),
-        )
-        .filter(|l| !l.trim_start().starts_with("@base "))
-        .collect();
-    let text = block
-        .iter()
-        .enumerate()
-        .map(|(i, l)| if i == 0 { l.trim() } else { l.trim_end() })
-        .collect::<Vec<_>>()
-        .join("\n");
-    lazyspec::engine::hashing::sha256_hex(text.as_bytes())[..12].to_string()
-}
-
-pub fn base_line_for(spec_body: &str, id: &str) -> String {
-    format!("  @base {}\n", spec_block_hash(spec_body, id))
-}

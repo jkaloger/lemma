@@ -1,7 +1,9 @@
-use crate::receipt::{git_output, names_a_test, symbol_in};
+use crate::git::git_output;
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use lazyspec::engine::symbols::{
     normalize_ast, RustSymbolExtractor, SymbolExtractor, TypeScriptSymbolExtractor,
 };
+use regex::Regex;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,12 +13,53 @@ pub enum RefStatus {
     NotATest,
 }
 
-fn clean(path: &str) -> &str {
+pub fn clean(path: &str) -> &str {
     path.trim_start_matches("./")
 }
 
 fn extension(path: &str) -> Option<&str> {
     Path::new(path).extension().and_then(|e| e.to_str())
+}
+
+pub fn invalid_globs(patterns: &[String]) -> Vec<(String, String)> {
+    patterns
+        .iter()
+        .filter_map(|p| {
+            let err = Glob::new(clean(p)).err()?;
+            Some((p.clone(), err.to_string()))
+        })
+        .collect()
+}
+
+pub fn glob_set(patterns: &[String]) -> GlobSet {
+    let mut builder = GlobSetBuilder::new();
+    patterns
+        .iter()
+        .filter_map(|p| Glob::new(clean(p)).ok())
+        .for_each(|g| {
+            builder.add(g);
+        });
+    builder.build().unwrap_or_else(|_| GlobSet::empty())
+}
+
+fn names_a_test(path: &str, globs: &[String]) -> bool {
+    glob_set(globs).is_match(clean(path))
+}
+
+fn text_has_word(source: &str, symbol: &str) -> bool {
+    Regex::new(&format!(r"\b{}\b", regex::escape(symbol)))
+        .map(|re| re.is_match(source))
+        .unwrap_or(false)
+}
+
+fn symbol_in(path: &str, source: &str, symbol: &str) -> bool {
+    match extension(path) {
+        Some("rs") => RustSymbolExtractor::new().extract(source, symbol).is_some(),
+        Some("ts") | Some("tsx") => TypeScriptSymbolExtractor::new()
+            .extract(source, symbol)
+            .is_some(),
+        _ => text_has_word(source, symbol),
+    }
 }
 
 pub fn resolve(root: &Path, path: &str, symbol: Option<&str>, tests: &[String]) -> RefStatus {
@@ -86,6 +129,32 @@ mod tests {
         repo.write(path, content);
         let base = repo.commit("base");
         (repo, base)
+    }
+
+    #[test]
+    fn default_globs_accept_test_paths_and_reject_production_paths() {
+        for path in [
+            "tests/foo.rs",
+            "src/tests/x.rs",
+            "foo.test.ts",
+            "foo_test.go",
+            "a/b.spec.tsx",
+            "./tests/foo.rs",
+        ] {
+            assert!(names_a_test(path, &globs()), "{path}");
+        }
+        for path in ["src/store.rs", "src/lib.rs", "docs/specs/x.md"] {
+            assert!(!names_a_test(path, &globs()), "{path}");
+        }
+    }
+
+    #[test]
+    fn leading_dot_slash_is_ignored_and_invalid_globs_are_reported() {
+        let globs = vec!["./checks/**".to_string(), "src/[".to_string()];
+        assert!(names_a_test("checks/foo.rs", &globs));
+        let bad = invalid_globs(&globs);
+        assert_eq!(bad.len(), 1);
+        assert_eq!(bad[0].0, "src/[");
     }
 
     #[test]
@@ -218,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn typescript_regions_are_extracted_and_normalised() {
+    fn typescript_regions_are_extracted_and_clean() {
         let src = "function a() { return 1; }\nfunction b() { return 2; }\n";
         let (repo, base) = repo_with("tests/a.ts", src);
         repo.write("tests/a.ts", &src.replace("return 2", "return 3"));

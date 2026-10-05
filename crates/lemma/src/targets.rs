@@ -1,5 +1,4 @@
-use crate::claims::{part_for, Claim, BEHAVIOUR_PART};
-use crate::legacy::{base_issues, BaseIssue};
+use crate::claims::part_for;
 use crate::payload::{BehaviourPart, Doc, Finding};
 
 pub struct Targets<'a> {
@@ -42,47 +41,6 @@ impl<'a> Targets<'a> {
         self.declared.contains(&target) || self.resolved.iter().any(|s| s.is_named(target))
     }
 
-    pub fn spec_named(&self, target: &str) -> Option<&'a Doc> {
-        self.resolved.iter().copied().find(|s| s.is_named(target))
-    }
-
-    pub fn spec_of(&self, part: &BehaviourPart) -> Option<&'a Doc> {
-        self.spec_named(part.target?)
-    }
-
-    pub fn governs_of(&self, part: &BehaviourPart) -> Vec<String> {
-        part.target
-            .and_then(|t| self.spec_named(t))
-            .map(|s| s.governs.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn claims_for<'c>(&self, spec: &Doc, parts: &'c [BehaviourPart]) -> Vec<&'c Claim> {
-        parts
-            .iter()
-            .filter(|p| p.target.is_some_and(|t| spec.is_named(t)))
-            .flat_map(|p| &p.claims)
-            .collect()
-    }
-
-    pub fn base_issues(&self, parts: &[BehaviourPart]) -> Vec<PartIssue> {
-        parts
-            .iter()
-            .filter_map(|part| Some((part, self.spec_named(part.target?)?)))
-            .flat_map(|(part, spec)| {
-                let body = spec.part(BEHAVIOUR_PART).map_or("", |p| p.body.as_str());
-                base_issues(body, &part.claims)
-                    .into_iter()
-                    .map(|issue| PartIssue {
-                        part: part.name.to_string(),
-                        spec: spec.id.clone(),
-                        issue,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
-
     pub fn missing_parts(&self, delta: &Doc, blocking: bool) -> Vec<Finding> {
         self.resolved
             .iter()
@@ -115,14 +73,4 @@ impl<'a> Targets<'a> {
             })
             .collect()
     }
-}
-
-pub struct PartIssue {
-    pub part: String,
-    pub spec: String,
-    pub issue: BaseIssue,
-}
-
-pub fn specs_in<'a>(docs: impl IntoIterator<Item = &'a Doc>) -> Vec<&'a Doc> {
-    docs.into_iter().filter(|d| d.doc_type == "spec").collect()
 }

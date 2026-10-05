@@ -1,5 +1,7 @@
-use crate::receipt::git_output;
+use crate::git::git_output;
 use serde::Deserialize;
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Default)]
@@ -44,4 +46,28 @@ pub fn recorded_base(root: &Path, session_id: &str) -> Option<String> {
     }
     git_output(root, &["merge-base", "--is-ancestor", base, "HEAD"])?;
     Some(base.to_string())
+}
+
+fn said_file(root: &Path, session_id: &str) -> Option<PathBuf> {
+    if !is_safe_file_name(session_id) {
+        return None;
+    }
+    Some(sessions_dir(root)?.join(format!("{session_id}.said")))
+}
+
+pub fn said_hashes(root: &Path, session_id: &str) -> Option<HashSet<String>> {
+    let file = said_file(root, session_id)?;
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    Some(text.lines().map(str::to_string).collect())
+}
+
+pub fn record_said(root: &Path, session_id: &str, hashes: &[String]) -> Option<()> {
+    let file = said_file(root, session_id)?;
+    std::fs::create_dir_all(file.parent()?).ok()?;
+    let mut out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)
+        .ok()?;
+    hashes.iter().try_for_each(|h| writeln!(out, "{h}")).ok()
 }

@@ -41,7 +41,7 @@ pub fn run(store: &Store, root: &Path, claim_id: &str) -> Option<Listing> {
         let tests = governing
             .map(Doc::tests_globs)
             .unwrap_or_else(|| tests_or_default(&Attributes::default()));
-        for r in claim.refs() {
+        for r in &claim.receipts {
             let status = resolve(root, &r.path, r.symbol.as_deref(), &tests);
             all_ok &= status == RefStatus::Ok;
             lines.push(format!(

@@ -51,18 +51,3 @@ pub fn docs_from_store(store: &Store) -> Vec<Doc> {
     docs.sort_by(|a, b| a.id.cmp(&b.id));
     docs
 }
-
-pub fn specs_from_store(root: &Path, names: &[&str]) -> Vec<Doc> {
-    if names.is_empty() {
-        return Vec::new();
-    }
-    let Ok(store) = load_store(root) else {
-        return Vec::new();
-    };
-    names
-        .iter()
-        .filter_map(|name| store.resolve_shorthand(name).ok())
-        .filter_map(|meta| stored_doc(&store, meta))
-        .filter(|doc| doc.doc_type == "spec")
-        .collect()
-}

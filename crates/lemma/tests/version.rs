@@ -30,9 +30,11 @@ fn run_without_lazyspec(repo: &Repo, args: &[&str]) -> Run {
     run_with_path(repo, args, bin_dir.path().as_os_str())
 }
 
-const STORE_COMMANDS: [&[&str]; 2] = [
-    &["re-pin", "DELTA-001"],
-    &["receipt", "DELTA-001", "AC-D1-1", "a.rs#f"],
+const STORE_COMMANDS: [&[&str]; 4] = [
+    &["check"],
+    &["migrate"],
+    &["refs", "AC-D1-1"],
+    &["apply", "DELTA-001"],
 ];
 
 #[test]
@@ -42,8 +44,8 @@ fn store_commands_refuse_an_old_lazyspec_with_an_install_hint() {
         let run = run_with_lazyspec(&repo, args, "lazyspec 0.14.2");
 
         assert_eq!(run.code, 2, "{args:?}");
-        assert!(run.has_message("0.15"), "{args:?}: {}", run.stdout);
-        assert!(run.has_message("cargo install lazyspec"));
+        assert!(run.stderr.contains("0.15"), "{args:?}: {}", run.stderr);
+        assert!(run.stderr.contains("cargo install lazyspec"));
     }
 }
 
@@ -54,7 +56,7 @@ fn store_commands_refuse_a_missing_lazyspec() {
         let run = run_without_lazyspec(&repo, args);
 
         assert_eq!(run.code, 2, "{args:?}");
-        assert!(run.has_message("not found"));
+        assert!(run.stderr.contains("not found"), "{args:?}: {}", run.stderr);
     }
 }
 
@@ -83,8 +85,8 @@ fn stop_warns_about_a_missing_lazyspec_without_blocking() {
 fn a_current_lazyspec_passes_the_check() {
     let repo = Repo::new();
 
-    let run = run_with_lazyspec(&repo, &["re-pin", "DELTA-001"], "lazyspec 0.15.1");
+    let run = run_with_lazyspec(&repo, &["check"], "lazyspec 0.15.1");
 
-    assert_eq!(run.code, 2);
-    assert!(run.has_message("no document matches DELTA-001"));
+    assert_eq!(run.code, 0);
+    assert_eq!(run.stderr, "");
 }

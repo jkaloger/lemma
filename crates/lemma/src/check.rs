@@ -1,9 +1,9 @@
 use crate::claims::{has_intent, parse, Claim, BEHAVIOUR_PART};
-use crate::evidence::{changed, resolve, RefStatus};
+use crate::evidence::{changed, clean, glob_set, invalid_globs, resolve, RefStatus};
 use crate::fold::fold;
+use crate::git::{changed_since, git_output, touched_files};
 use crate::payload::{tests_or_default, Attributes, Doc, Finding as Wire, Payload};
 use crate::range::{self, Inputs, Rule};
-use crate::receipt::{git_output, glob_set, invalid_glob_findings, touched_files};
 use crate::targets::Targets;
 use crate::world::{in_flight, Site, World};
 use lazyspec::engine::store::Store;
@@ -18,11 +18,21 @@ pub struct Require {
     pub clean: bool,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Suite {
+    #[default]
+    Full,
+    Session,
+}
+
 #[derive(Debug, Default)]
 pub struct Options<'a> {
     pub base: Option<&'a str>,
     pub trunk: Option<&'a str>,
+    pub session: Option<&'a str>,
     pub require: Require,
+    pub suite: Suite,
+    pub report_intent: bool,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -149,19 +159,28 @@ pub fn run(
 ) -> Vec<Finding> {
     let world = World::load(store, payload);
     let scope = scope_of(&world, payload);
+    let full = options.suite == Suite::Full;
     let mut findings = match resolve_base(root, options, payload) {
         Ok(base) => {
-            let mut found = coverage(store, root, &world, &changed_files(root, &base));
-            found.extend(evidence_changes(root, &world, &base));
+            let mut found = coverage(store, root, &world, &changed_since(root, &base));
+            found.extend(evidence_changes(root, &world, &base, None));
             found
         }
         Err(message) => vec![Finding::bare_error(message)],
     };
     for doc in &scope {
-        findings.extend(doc_findings(root, &world, doc, options.require));
+        if full {
+            findings.extend(integrity_findings(root, &world, doc, options.require));
+        }
+        findings.extend(evidence_findings(root, &world, doc, options.require));
+        if options.report_intent {
+            findings.extend(intent_count(doc, &world.sites(doc)));
+        }
     }
-    findings.extend(double_strikes(&world, &scope));
-    if options.require.clean {
+    if full {
+        findings.extend(double_strikes(&world, &scope));
+    }
+    if full && options.require.clean {
         findings.extend(uncommitted(root, &world, &scope));
     }
     findings.sort();
@@ -182,7 +201,7 @@ fn scope_of<'a>(world: &'a World, payload: Option<&Payload>) -> Vec<&'a Doc> {
     }
 }
 
-fn resolve_base(
+pub fn resolve_base(
     root: &Path,
     options: &Options,
     payload: Option<&Payload>,
@@ -195,7 +214,7 @@ fn resolve_base(
         &Inputs {
             explicit: options.base,
             trunk: options.trunk,
-            session: None,
+            session: options.session,
             delta_index,
         },
     );
@@ -211,29 +230,27 @@ fn resolve_base(
     }
 }
 
-fn nul_separated(root: &Path, args: &[&str]) -> Vec<String> {
-    git_output(root, args)
-        .unwrap_or_default()
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(str::to_string)
-        .collect()
+fn within_one_area(per_file: &[BTreeSet<String>]) -> bool {
+    let mut governed = per_file.iter().filter(|ids| !ids.is_empty());
+    let Some(first) = governed.next() else {
+        return true;
+    };
+    !governed
+        .fold(first.clone(), |common, ids| &common & ids)
+        .is_empty()
 }
 
-pub fn changed_files(root: &Path, base: &str) -> Vec<String> {
-    let tracked = nul_separated(root, &["diff", "--name-only", "--relative", "-z", base]);
-    let untracked = nul_separated(root, &["ls-files", "--others", "--exclude-standard", "-z"]);
-    let all: BTreeSet<String> = tracked.into_iter().chain(untracked).collect();
-    all.into_iter().collect()
-}
-
-fn coverage(store: &Store, root: &Path, world: &World, files: &[String]) -> Vec<Finding> {
+pub fn coverage(store: &Store, root: &Path, world: &World, files: &[String]) -> Vec<Finding> {
     let mut touched: BTreeMap<String, (String, Vec<&str>)> = BTreeMap::new();
+    let mut per_file: Vec<BTreeSet<String>> = Vec::new();
     for file in files {
-        for (meta, _) in store.governing(&root.join(file)) {
-            if meta.doc_type.to_string() != "spec" {
-                continue;
-            }
+        let specs: Vec<_> = store
+            .governing(&root.join(file))
+            .into_iter()
+            .filter(|(meta, _)| meta.doc_type.to_string() == "spec")
+            .collect();
+        per_file.push(specs.iter().map(|(meta, _)| meta.id.clone()).collect());
+        for (meta, _) in specs {
             touched
                 .entry(meta.id.clone())
                 .or_insert_with(|| (meta.path.to_string_lossy().into_owned(), Vec::new()))
@@ -241,7 +258,7 @@ fn coverage(store: &Store, root: &Path, world: &World, files: &[String]) -> Vec<
                 .push(file);
         }
     }
-    if touched.len() < 2 {
+    if within_one_area(&per_file) {
         return Vec::new();
     }
     let covered: BTreeSet<&str> = world
@@ -289,7 +306,12 @@ fn struck_by_in_flight(world: &World) -> BTreeSet<String> {
         .collect()
 }
 
-fn evidence_changes(root: &Path, world: &World, base: &str) -> Vec<Finding> {
+pub fn evidence_changes(
+    root: &Path,
+    world: &World,
+    base: &str,
+    only: Option<&str>,
+) -> Vec<Finding> {
     let struck = struck_by_in_flight(world);
     let short = &base[..base.len().min(8)];
     let mut findings = Vec::new();
@@ -297,6 +319,9 @@ fn evidence_changes(root: &Path, world: &World, base: &str) -> Vec<Finding> {
         let Some(part) = spec.part(BEHAVIOUR_PART) else {
             continue;
         };
+        if only.is_some_and(|file| !part.body.contains(file)) {
+            continue;
+        }
         let path = spec.part_path(BEHAVIOUR_PART);
         let Some(at_base) = git_output(root, &["show", &format!("{base}:./{path}")]) else {
             continue;
@@ -309,11 +334,10 @@ fn evidence_changes(root: &Path, world: &World, base: &str) -> Vec<Finding> {
             if struck.contains(&old.id) {
                 continue;
             }
-            for r in old
-                .receipts
-                .iter()
-                .filter(|r| r.checked_by.is_none() && !r.path.is_empty())
-            {
+            for r in &old.receipts {
+                if only.is_some_and(|file| clean(&r.path) != file) {
+                    continue;
+                }
                 if !changed(root, base, &r.path, r.symbol.as_deref()) {
                     continue;
                 }
@@ -349,7 +373,7 @@ pub fn ref_name(path: &str, symbol: Option<&str>) -> String {
     }
 }
 
-fn doc_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
+pub fn integrity_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
     let sites = world.sites(doc);
     let mut findings = Vec::new();
     findings.extend(index_claims(root, doc));
@@ -363,12 +387,35 @@ fn doc_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<
         findings.extend(delta_structure(world, doc, require));
         findings.extend(fold_findings(doc, &sites));
     }
-    for site in &sites {
-        findings.extend(legacy_lines(site));
-        findings.extend(claims_have_evidence(root, site, require));
-    }
-    findings.extend(intent_count(doc, &sites));
+    findings.extend(sites.iter().flat_map(legacy_lines));
     findings
+}
+
+pub fn evidence_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
+    world
+        .sites(doc)
+        .iter()
+        .flat_map(|site| claims_have_evidence(root, site, require))
+        .collect()
+}
+
+fn invalid_glob_findings(spec: &Doc) -> Vec<Wire> {
+    let governs = invalid_globs(&spec.governs)
+        .into_iter()
+        .map(|g| ("governs", g));
+    let tests = invalid_globs(&spec.tests_globs())
+        .into_iter()
+        .map(|g| ("tests", g));
+    governs
+        .chain(tests)
+        .map(|(key, (glob, err))| {
+            Wire::error(
+                &spec.id,
+                None,
+                format!("{key} glob `{glob}` is invalid: {err}"),
+            )
+        })
+        .collect()
 }
 
 fn from_wire(doc: &Doc, wire: Wire) -> Finding {
@@ -506,7 +553,7 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
     };
     let mut findings = Vec::new();
     for claim in site.claims.iter().filter(|c| !c.struck) {
-        for r in claim.refs() {
+        for r in &claim.receipts {
             let name = ref_name(&r.path, r.symbol.as_deref());
             match resolve(root, &r.path, r.symbol.as_deref(), &tests) {
                 RefStatus::Ok => {}
@@ -528,7 +575,7 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
                 )),
             }
         }
-        let unevidenced = !claim.intent && claim.refs().next().is_none() && claim.legacy.is_empty();
+        let unevidenced = !claim.intent && claim.receipts.is_empty() && claim.legacy.is_empty();
         if unevidenced {
             findings.push(finding(
                 require.evidence,
@@ -561,7 +608,7 @@ fn intent_count(doc: &Doc, sites: &[Site]) -> Option<Finding> {
     ))
 }
 
-fn double_strikes(world: &World, scope: &[&Doc]) -> Vec<Finding> {
+pub fn double_strikes(world: &World, scope: &[&Doc]) -> Vec<Finding> {
     let mut strikes: BTreeMap<String, Vec<(&Doc, String, String, usize)>> = BTreeMap::new();
     for delta in world.in_flight() {
         for site in world.sites(delta) {
@@ -620,8 +667,9 @@ fn uncommitted(root: &Path, world: &World, scope: &[&Doc]) -> Vec<Finding> {
                 .flat_map(|s| s.claims)
                 .filter(|c| !c.struck)
                 .flat_map(|c| {
-                    c.refs()
-                        .map(|r| r.path.trim_start_matches("./").to_string())
+                    c.receipts
+                        .iter()
+                        .map(|r| clean(&r.path).to_string())
                         .collect::<Vec<_>>()
                 })
                 .collect();
