@@ -54,5 +54,12 @@ Out: extractor fixes (upstream to lazyspec, `.scratch/lazyspec-contract.md`; lem
   - `migrate` rewrites a replacement (`@base` on an id the target spec holds) as a strike plus `<id>-R`, printing a line per rewrite.
   - Trunk defaults to `main`, else `master`, else `origin/HEAD`; the CI template handles new-branch pushes and force-pushes.
   - README and skills: legacy `migrate` messages, chore and refactor wording, intent count as a warning in `--json` and `--hook`.
+  - Re-review fixes:
+    - Default trunk prefers `origin/main`, `origin/master`, then the `origin/HEAD` target, alongside local `main`/`master`; when both exist the merge-base nearer to HEAD wins (stale local trunk, merged `origin/main`).
+    - CI template: push to the default branch uses `--base "$before"` only when it is an ancestor of HEAD, else `HEAD^`, else no check; other branches use `--trunk origin/<default>`.
+    - The moved delta's strikes count in a pre-transition payload (draft to in-progress gate) for check 2.
+    - Check 4 keeps folding only deltas completed in the range. Folding every `complete` delta re-added claims an earlier replacement had struck (a replacement whose new id already exists at base fails to re-fold and is dropped). The transition writes status and fold together; a fold committed apart from its completion is reported.
+    - Check 4 claim identity is the whole block minus `@ref`/`@base`/`@checked` lines, pins and `[intent]`; a ref held at the base (or by the fold) that is gone is an error, added refs are allowed.
+    - `migrate` rewrites `@base` replacements only in `draft`/`in-progress` deltas, and `-R` ids assigned earlier in the run are taken.
 - [ ] W47 review: whole-diff review against DECISION-001 and this plan.
 - [ ] W48 acceptance (human): hydra on 2.0 after `lemma migrate`; compare refusals and token cost against the 1.5 W37 baseline.

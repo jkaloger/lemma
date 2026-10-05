@@ -1,5 +1,6 @@
-use crate::check::Finding;
-use crate::claims::{parse, Claim, BEHAVIOUR_PART};
+use crate::check::{ref_name, Finding};
+use crate::claims::{checked_pattern, is_base_line, parse, Claim, BEHAVIOUR_PART};
+use crate::evidence::clean;
 use crate::fold::fold;
 use crate::git::git_output;
 use crate::payload::Doc;
@@ -39,14 +40,37 @@ pub fn completed_since<'a>(
     completed
 }
 
+fn behaviour_text(claim: &Claim) -> String {
+    let lines = claim.block.iter().enumerate().filter_map(|(at, line)| {
+        let line = checked_pattern().replace_all(line, "");
+        let line = line.replace("[intent]", "");
+        let trimmed = line.trim();
+        let dropped = trimmed.is_empty() || is_base_line(trimmed) || trimmed.starts_with("@ref");
+        (at == 0 || !dropped).then(|| trimmed.to_string())
+    });
+    lines
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn identity_of(claim: &Claim) -> (String, String) {
-    let text = claim.block[0].replace("[intent]", "");
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    (claim.id.clone(), text)
+    (claim.id.clone(), behaviour_text(claim))
 }
 
 fn identity(claims: &[Claim]) -> BTreeSet<(String, String)> {
     claims.iter().map(identity_of).collect()
+}
+
+fn ref_names(claim: &Claim) -> BTreeSet<String> {
+    claim
+        .receipts
+        .iter()
+        .chain(&claim.pinned)
+        .map(|r| ref_name(clean(&r.path), r.symbol.as_deref()))
+        .collect()
 }
 
 fn folded_by(world: &World, spec: &Doc, completed: &[&Doc], base_body: &str) -> String {
@@ -93,27 +117,11 @@ fn scope_changed(root: &Path, base: &str, spec: &Doc, files: &[String]) -> Optio
     ))
 }
 
-fn edited_outside_a_fold(
-    root: &Path,
-    world: &World,
-    base: &str,
-    files: &[String],
-    completed: &[&Doc],
-    spec: &Doc,
-) -> Option<Finding> {
-    let part = spec.part(BEHAVIOUR_PART)?;
-    let path = spec.part_path(BEHAVIOUR_PART);
-    if !files.contains(&path) {
+fn text_edit(spec: &Doc, path: &str, now: &[Claim], expected: &[Claim]) -> Option<Finding> {
+    let wanted = identity(expected);
+    if identity(now) == wanted {
         return None;
     }
-    at_base(root, base, &spec.path)?;
-    let base_body = at_base(root, base, &path).unwrap_or_default();
-    let now = parse(&part.body).claims;
-    let expected = parse(&folded_by(world, spec, completed, &base_body)).claims;
-    if identity(&now) == identity(&expected) {
-        return None;
-    }
-    let wanted = identity(&expected);
     let line = now
         .iter()
         .find(|c| !wanted.contains(&identity_of(c)))
@@ -121,7 +129,7 @@ fn edited_outside_a_fold(
     Some(
         Finding::error(
             spec,
-            &path,
+            path,
             line,
             "spec behaviour edited outside a fold; change it through a delta",
         )
@@ -129,19 +137,65 @@ fn edited_outside_a_fold(
     )
 }
 
-pub fn spec_edits(
+fn removed_refs(spec: &Doc, path: &str, now: &[Claim], expected: &[Claim]) -> Vec<Finding> {
+    expected
+        .iter()
+        .filter(|want| !want.struck)
+        .filter_map(|want| Some((want, now.iter().find(|c| c.id == want.id && !c.struck)?)))
+        .flat_map(|(want, live)| {
+            let kept = ref_names(live);
+            ref_names(want)
+                .into_iter()
+                .filter(|name| !kept.contains(name))
+                .map(|name| {
+                    Finding::error(
+                        spec,
+                        path,
+                        Some(live.line),
+                        format!(
+                            "{}: ref {name} removed from the spec outside a fold; change it through a delta",
+                            live.id
+                        ),
+                    )
+                    .in_part(BEHAVIOUR_PART)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn edited_outside_a_fold(
     root: &Path,
     world: &World,
     base: &str,
     files: &[String],
-    completed: &[&Doc],
+    spec: &Doc,
 ) -> Vec<Finding> {
+    let Some(part) = spec.part(BEHAVIOUR_PART) else {
+        return Vec::new();
+    };
+    let path = spec.part_path(BEHAVIOUR_PART);
+    if !files.contains(&path) || at_base(root, base, &spec.path).is_none() {
+        return Vec::new();
+    }
+    let base_body = at_base(root, base, &path).unwrap_or_default();
+    let completed = completed_since(root, world, base, files);
+    let now = parse(&part.body).claims;
+    let expected = parse(&folded_by(world, spec, &completed, &base_body)).claims;
+    text_edit(spec, &path, &now, &expected)
+        .into_iter()
+        .chain(removed_refs(spec, &path, &now, &expected))
+        .collect()
+}
+
+pub fn spec_edits(root: &Path, world: &World, base: &str, files: &[String]) -> Vec<Finding> {
     world
         .specs()
         .into_iter()
         .flat_map(|spec| {
-            let edit = edited_outside_a_fold(root, world, base, files, completed, spec);
-            edit.into_iter()
+            let edits = edited_outside_a_fold(root, world, base, files, spec);
+            edits
+                .into_iter()
                 .chain(scope_changed(root, base, spec, files))
         })
         .collect()

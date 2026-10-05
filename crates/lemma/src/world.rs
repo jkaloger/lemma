@@ -5,6 +5,7 @@ use lazyspec::engine::store::Store;
 
 pub struct World {
     docs: Vec<Doc>,
+    moving: Option<String>,
 }
 
 pub struct Site<'a> {
@@ -23,9 +24,10 @@ impl World {
     pub fn load(store: &Store, payload: Option<&Payload>) -> Self {
         let mut docs = docs_from_store(store);
         let Some(payload) = payload else {
-            return Self { docs };
+            return Self { docs, moving: None };
         };
         let moved = payload.documents.first().map(|d| d.id.as_str());
+        let moving = payload.transition.as_ref().and(moved).map(str::to_string);
         for supplied in payload.documents.iter().chain(&payload.context) {
             if !matches!(supplied.doc_type.as_str(), "spec" | "delta") {
                 continue;
@@ -38,7 +40,11 @@ impl World {
             docs.retain(|d| d.id != doc.id);
             docs.push(doc);
         }
-        Self { docs }
+        Self { docs, moving }
+    }
+
+    pub fn is_moving(&self, doc: &Doc) -> bool {
+        self.moving.as_deref() == Some(doc.id.as_str())
     }
 
     pub fn docs(&self) -> &[Doc] {

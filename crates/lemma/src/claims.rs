@@ -17,6 +17,7 @@ pub struct Claim {
     pub struck: bool,
     pub intent: bool,
     pub receipts: Vec<Receipt>,
+    pub pinned: Vec<Receipt>,
     pub legacy: Vec<LegacyLine>,
     pub block: Vec<String>,
 }
@@ -200,20 +201,25 @@ fn scan(
     live: &[bool],
     start: usize,
     end: usize,
-) -> (Vec<Receipt>, Vec<LegacyLine>) {
+) -> (Vec<Receipt>, Vec<Receipt>, Vec<LegacyLine>) {
     let mut receipts = Vec::new();
+    let mut pinned = Vec::new();
     let mut legacy = Vec::new();
     for i in (start..end).filter(|&i| live[i]) {
         let line = lines[i];
         let mut found = |kind| legacy.push(LegacyLine { line: i + 1, kind });
         for r in lazyspec::engine::refs::parse_refs(line) {
+            let receipt = Receipt {
+                line: i + 1,
+                path: r.path.clone(),
+                symbol: r.symbol.clone(),
+            };
             match is_pinned(&r, line) {
-                true => found(LegacyKind::PinnedRef),
-                false => receipts.push(Receipt {
-                    line: i + 1,
-                    path: r.path,
-                    symbol: r.symbol,
-                }),
+                true => {
+                    found(LegacyKind::PinnedRef);
+                    pinned.push(receipt);
+                }
+                false => receipts.push(receipt),
             }
         }
         if checked_pattern().is_match(line) {
@@ -224,7 +230,7 @@ fn scan(
         }
     }
     legacy.dedup();
-    (receipts, legacy)
+    (receipts, pinned, legacy)
 }
 
 fn marks_intent(lines: &[&str], live: &[bool], start: usize, end: usize) -> bool {
@@ -246,7 +252,7 @@ pub fn parse(body: &str) -> Behaviour {
             continue;
         };
         let end = claim_end(&lines, cursor);
-        let (receipts, legacy) = scan(&lines, &live, cursor, end);
+        let (receipts, pinned, legacy) = scan(&lines, &live, cursor, end);
         claims.push(Claim {
             id: caps[2].to_string(),
             line: cursor + 1,
@@ -255,6 +261,7 @@ pub fn parse(body: &str) -> Behaviour {
             struck: caps.get(1).is_some(),
             intent: marks_intent(&lines, &live, cursor, end),
             receipts,
+            pinned,
             legacy,
             block: lines[cursor..end].iter().map(|s| s.to_string()).collect(),
         });

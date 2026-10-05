@@ -31,25 +31,41 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
     Some(out.trim().to_string())
 }
 
-fn default_trunk(root: &Path) -> Option<String> {
-    let exists = |name: &str| rev_parse(root, name).is_some();
-    if exists("main") {
-        return Some("main".to_string());
-    }
-    if exists("master") {
-        return Some("master".to_string());
-    }
-    let target = git_output(
-        root,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )?;
-    Some(target.trim().to_string())
+fn trunk_candidates(root: &Path) -> Vec<String> {
+    let first_existing = |names: [&str; 2]| {
+        names
+            .into_iter()
+            .find(|name| rev_parse(root, name).is_some())
+            .map(str::to_string)
+    };
+    let remote = first_existing(["origin/main", "origin/master"]).or_else(|| {
+        let target = git_output(
+            root,
+            &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        )?;
+        let target = target.trim();
+        rev_parse(root, target).map(|_| target.to_string())
+    });
+    let local = first_existing(["main", "master"]);
+    remote.into_iter().chain(local).collect()
 }
 
-fn merge_base_off_head(root: &Path, trunk: &str, head: &str) -> Option<String> {
-    let base = git_output(root, &["merge-base", "HEAD", trunk])?;
-    let base = base.trim();
-    (base != head).then(|| base.to_string())
+fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> bool {
+    git_output(root, &["merge-base", "--is-ancestor", ancestor, descendant]).is_some()
+}
+
+fn nearest_merge_base(root: &Path, trunks: &[String]) -> Option<String> {
+    let bases = trunks
+        .iter()
+        .filter_map(|trunk| git_output(root, &["merge-base", "HEAD", trunk]));
+    bases
+        .map(|base| base.trim().to_string())
+        .reduce(
+            |best, base| match best != base && is_ancestor(root, &best, &base) {
+                true => base,
+                false => best,
+            },
+        )
 }
 
 fn delta_origin_parent(root: &Path, index: &Path) -> Option<String> {
@@ -69,14 +85,11 @@ pub fn resolve(root: &Path, inputs: &Inputs) -> Range {
     }
     let head = rev_parse(root, "HEAD");
     let head_rev = head.clone().unwrap_or_else(|| "HEAD".to_string());
-    let trunk = inputs
-        .trunk
-        .map(str::to_string)
-        .or_else(|| default_trunk(root));
-    if let Some(base) = head
-        .as_deref()
-        .zip(trunk.as_deref())
-        .and_then(|(head, trunk)| merge_base_off_head(root, trunk, head))
+    let trunks = match inputs.trunk {
+        Some(trunk) => vec![trunk.to_string()],
+        None => trunk_candidates(root),
+    };
+    if let Some(base) = nearest_merge_base(root, &trunks).filter(|base| Some(base) != head.as_ref())
     {
         return found(base, Rule::MergeBase);
     }
@@ -191,6 +204,31 @@ mod tests {
         repo.write("b.txt", "2");
         repo.commit("work");
         merge_base_range(&repo, first);
+    }
+
+    #[test]
+    fn a_remote_trunk_ahead_of_a_stale_local_main_is_preferred() {
+        let (repo, _) = trunk_with_history();
+        repo.git(&["checkout", "-q", "-b", "upstream"]);
+        repo.write("u.txt", "u");
+        let upstream = repo.commit("upstream work");
+        repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("b.txt", "2");
+        repo.commit("work");
+        merge_base_range(&repo, upstream);
+    }
+
+    #[test]
+    fn a_local_main_ahead_of_the_remote_trunk_is_preferred() {
+        let (repo, _) = trunk_with_history();
+        repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repo.write("u.txt", "u");
+        let local = repo.commit("unpushed trunk work");
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("b.txt", "2");
+        repo.commit("work");
+        merge_base_range(&repo, local);
     }
 
     #[test]

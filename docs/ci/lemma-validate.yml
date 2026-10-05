@@ -20,19 +20,21 @@ jobs:
       - name: lemma check (pull request)
         if: github.event_name == 'pull_request'
         run: lemma check --base origin/${{ github.base_ref }}
-      - name: lemma check (push)
-        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+      - name: lemma check (push to the default branch)
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
         run: |
           before=${{ github.event.before }}
           git fetch --no-tags origin "$before" || true
-          if git cat-file -e "$before^{commit}" 2>/dev/null; then
+          if git cat-file -e "$before^{commit}" 2>/dev/null && git merge-base --is-ancestor "$before" HEAD; then
             lemma check --base "$before"
-          else
-            # after a force-push the old tip may be unreachable
-            lemma check --trunk origin/${{ github.event.repository.default_branch }}
+          elif git rev-parse --verify --quiet "HEAD^" >/dev/null; then
+            # first push or force-push: the old tip is unusable, so check the tip commit alone
+            lemma check --base "$(git rev-parse HEAD^)"
           fi
-      - name: lemma check (new branch)
-        if: github.event_name == 'push' && github.event.before == '0000000000000000000000000000000000000000'
-        run: lemma check --trunk origin/${{ github.event.repository.default_branch }}
+      - name: lemma check (push to another branch)
+        if: github.event_name == 'push' && github.ref_name != github.event.repository.default_branch
+        run: |
+          git fetch --no-tags origin ${{ github.event.repository.default_branch }}
+          lemma check --trunk origin/${{ github.event.repository.default_branch }}
       # lazyspec validate exits 2 on any error finding, including those from the lemma validate hook.
       - run: lazyspec validate

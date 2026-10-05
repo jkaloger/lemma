@@ -1035,6 +1035,19 @@ mod hook {
         assert_eq!(plain.stdout, "");
     }
 
+    #[test]
+    fn the_moved_deltas_own_strikes_count_at_the_draft_gate() {
+        let repo = project();
+        edit_reopen_body(&repo);
+        let mut moved = delta_doc("draft", "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n");
+        moved["path"] = json!("docs/deltas/DELTA-001-d/index.md");
+        let payload = transition_payload("draft", "in-progress", moved, vec![spec_doc()]);
+
+        let gate = repo.run(&["check", "--hook", "--require", "claims"], &payload);
+
+        assert!(!gate.has_message("AC-S1-1: evidence"), "{}", gate.stdout);
+    }
+
     fn moved_delta(status: &str) -> Value {
         let mut moved = delta_doc(
             status,
@@ -1089,6 +1102,38 @@ mod hook {
 
         assert_eq!(run.code, 0);
         assert!(run.has_message("invalid hook payload"));
+    }
+}
+
+mod trunk {
+    use super::*;
+
+    #[test]
+    fn merging_an_advanced_remote_trunk_into_a_branch_is_clean() {
+        let repo = project();
+        repo.git(&["checkout", "-q", "-b", "upstream"]);
+        touch_both(&repo);
+        repo.commit("trunk work in two areas");
+        repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repo.git(&["checkout", "-q", "main"]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("c.txt", "c");
+        repo.commit("branch work");
+        repo.git(&["merge", "-q", "--no-ff", "-m", "merge trunk", "origin/main"]);
+
+        let run = check(&repo, &[]);
+
+        assert_eq!((run.code, run.stdout.as_str()), (0, ""));
+    }
+
+    #[test]
+    fn a_plain_branch_still_ranges_from_the_merge_base() {
+        let repo = project();
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        touch_both(&repo);
+        repo.commit("two areas");
+
+        assert!(says(&check(&repo, &[]), "governed area"));
     }
 }
 
@@ -1148,6 +1193,82 @@ mod spec_edits {
         assert!(says(&check(&repo, &[]), EDITED));
     }
 
+    fn spec_on_trunk(repo: &Repo, behaviour: &str) {
+        repo.spec_behaviour(1, behaviour);
+        repo.commit("spec behaviour");
+        branch(repo);
+    }
+
+    #[test]
+    fn a_hand_edit_to_a_continuation_line_is_an_error() {
+        let repo = project();
+        spec_on_trunk(
+            &repo,
+            "- [AC-S1-1] Reopen keeps\n  the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] Reopen keeps\n  nothing at all.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("edit the detail");
+
+        assert!(says(&check(&repo, &[]), EDITED));
+    }
+
+    #[test]
+    fn a_repointed_ref_is_an_error() {
+        let repo = project();
+        branch(&repo);
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#other_test\n",
+        );
+        repo.commit("repoint");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            says(
+                &run,
+                "AC-S1-1: ref tests/store_test.rs#reopen_keeps_prior removed from the spec outside a fold; change it through a delta"
+            ),
+            "{}",
+            run.stdout
+        );
+    }
+
+    #[test]
+    fn adding_a_ref_to_an_intent_claim_and_dropping_the_marker_is_silent() {
+        let repo = project();
+        spec_on_trunk(
+            &repo,
+            &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Feels fast.\n"),
+        );
+        repo.spec_behaviour(
+            1,
+            &format!(
+                "{SPEC_CLAIM}- [AC-S1-2] Feels fast.\n  @ref tests/store_test.rs#other_test\n"
+            ),
+        );
+        repo.commit("evidence the intent claim");
+
+        assert_eq!(check(&repo, &[]).stdout, "");
+    }
+
+    #[test]
+    fn stripping_a_pin_the_way_migrate_does_is_silent() {
+        let repo = project();
+        spec_on_trunk(
+            &repo,
+            "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior@3f9c2e1 [forced]\n  @checked tests/store_test.rs@3f9c2e1\n",
+        );
+        repo.spec_behaviour(1, SPEC_CLAIM);
+        repo.commit("migrate");
+
+        assert_eq!(check(&repo, &[]).stdout, "");
+    }
+
     #[test]
     fn a_fold_from_a_delta_completed_in_the_range_is_silent() {
         let repo = project();
@@ -1156,6 +1277,46 @@ mod spec_edits {
         let strike = "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n";
         delta(&repo, 1, "complete", "SPEC-001", &format!("{strike}{new}"));
         repo.spec_behaviour(1, new);
+        repo.commit("delta completed and folded");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!((run.code, run.stdout.as_str()), (0, ""));
+    }
+
+    #[test]
+    fn a_fold_committed_apart_from_its_completion_is_an_error() {
+        let repo = project();
+        branch(&repo);
+        let new = "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n";
+        let strike = "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n";
+        delta(&repo, 1, "complete", "SPEC-001", &format!("{strike}{new}"));
+        let completed = repo.commit("delta completed");
+        repo.spec_behaviour(1, new);
+        repo.commit("spec folded");
+
+        assert!(says(&check(&repo, &["--base", &completed]), EDITED));
+    }
+
+    #[test]
+    fn a_claim_replaced_before_the_range_is_not_refolded() {
+        let repo = project();
+        let added = "- [AC-D1-1] Added.\n  @ref tests/store_test.rs#other_test\n";
+        delta(&repo, 1, "complete", "SPEC-001", added);
+        delta(
+            &repo,
+            2,
+            "complete",
+            "SPEC-001",
+            "- ~~[AC-D1-1]~~ Added.\n- [AC-D2-1] Replaced.\n  @ref tests/store_test.rs#other_test\n",
+        );
+        let replaced = "- [AC-D2-1] Replaced.\n  @ref tests/store_test.rs#other_test\n";
+        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}{replaced}"));
+        repo.commit("added, then replaced, on main");
+        branch(&repo);
+        let new = "- [AC-D3-1] New.\n  @ref tests/store_test.rs#other_test\n";
+        delta(&repo, 3, "complete", "SPEC-001", new);
+        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}{replaced}{new}"));
         repo.commit("delta completed and folded");
 
         let run = check(&repo, &[]);

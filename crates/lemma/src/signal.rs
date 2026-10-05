@@ -104,7 +104,7 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
             }
             if let Some(spec) = owner.filter(|doc| doc.doc_type == "spec") {
                 findings.extend(
-                    spec_edits(root, &world, &span.base, &span.files, &completed)
+                    spec_edits(root, &world, &span.base, &span.files)
                         .into_iter()
                         .filter(|f| f.id.as_deref() == Some(spec.id.as_str())),
                 );

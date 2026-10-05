@@ -249,7 +249,7 @@ fn range_findings(
     let mut found = coverage(store, root, &covered, &span.files);
     found.extend(evidence_changes(root, world, span, &completed, None));
     if full {
-        found.extend(spec_edits(root, world, &span.base, &span.files, &completed));
+        found.extend(spec_edits(root, world, &span.base, &span.files));
     }
     if let Some(targets) = moved_targets(world, payload) {
         found.retain(|f| f.id.as_ref().is_some_and(|id| targets.contains(id)));
@@ -405,7 +405,9 @@ pub fn coverage(
 fn struck_for(world: &World, spec: &Doc, completed: &[&Doc]) -> BTreeSet<String> {
     let counts = |delta: &&Doc| {
         delta.doc_type == "delta"
-            && (delta.status == "in-progress" || completed.iter().any(|c| c.id == delta.id))
+            && (delta.status == "in-progress"
+                || world.is_moving(delta)
+                || completed.iter().any(|c| c.id == delta.id))
     };
     world
         .docs()

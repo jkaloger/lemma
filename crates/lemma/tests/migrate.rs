@@ -269,3 +269,38 @@ fn without_a_lazyspec_project_it_exits_two_with_a_message() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("no .lazyspec.toml"));
     assert!(out.stdout.is_empty());
 }
+
+const BASED: &str =
+    "- [A-1] one, reworded\n  @ref tests/store_test.rs#other_test\n  @base 0123456789ab\n";
+
+#[test]
+fn a_completed_delta_only_loses_its_base_line() {
+    let repo = project();
+    repo.spec_behaviour(1, OLD);
+    repo.delta_file(1, "complete", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", BASED);
+
+    migrate(&repo);
+
+    assert_eq!(
+        repo.read(&delta_part_path(1, "SPEC-001")),
+        "- [A-1] one, reworded\n  @ref tests/store_test.rs#other_test\n"
+    );
+}
+
+#[test]
+fn in_progress_deltas_replacing_one_id_get_distinct_replacements() {
+    let repo = project();
+    repo.spec_behaviour(1, OLD);
+    repo.delta_file(1, "draft", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", BASED);
+    repo.delta_file(2, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(2, "SPEC-001", BASED);
+
+    migrate(&repo);
+
+    let first = repo.read(&delta_part_path(1, "SPEC-001"));
+    let second = repo.read(&delta_part_path(2, "SPEC-001"));
+    assert!(first.contains("- [A-1-R] one, reworded"), "{first}");
+    assert!(second.contains("- [A-1-R2] one, reworded"), "{second}");
+}

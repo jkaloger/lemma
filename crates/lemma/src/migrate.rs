@@ -1,7 +1,7 @@
 use crate::claims::{
     checked_pattern, is_pinned, lines_of, parse, Claim, LegacyKind, FORCED_MARKER,
 };
-use crate::world::{Site, World};
+use crate::world::{in_flight, Site, World};
 use lazyspec::engine::refs::parse_refs;
 use lazyspec::engine::store::Store;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,10 +21,11 @@ pub fn run(store: &Store, root: &Path) -> Vec<String> {
         let existing = replaceable(&site);
         sites.entry(site.path).or_default().extend(existing);
     }
+    let mut assigned = BTreeSet::new();
     sites
         .into_iter()
         .filter_map(|(path, existing)| {
-            let replaced = migrate_file(&root.join(&path), &existing)?;
+            let replaced = migrate_file(&root.join(&path), &existing, &mut assigned)?;
             let notes = replaced
                 .iter()
                 .map(|r| format!("  {} struck; replacement re-added as {}", r.old, r.new));
@@ -35,7 +36,7 @@ pub fn run(store: &Store, root: &Path) -> Vec<String> {
 }
 
 fn replaceable(site: &Site) -> Existing {
-    if site.doc.doc_type != "delta" {
+    if !in_flight(site.doc) {
         return Existing::new();
     }
     let Some(spec) = site.governing else {
@@ -47,9 +48,13 @@ fn replaceable(site: &Site) -> Existing {
         .collect()
 }
 
-fn migrate_file(file: &Path, existing: &Existing) -> Option<Vec<Replacement>> {
+fn migrate_file(
+    file: &Path,
+    existing: &Existing,
+    assigned: &mut BTreeSet<String>,
+) -> Option<Vec<Replacement>> {
     let text = std::fs::read_to_string(file).ok()?;
-    let (migrated, replaced) = rewrite(&text, existing);
+    let (migrated, replaced) = rewrite(&text, existing, assigned);
     if migrated == text {
         return None;
     }
@@ -73,7 +78,11 @@ fn struck_line(old_line: &str, id: &str) -> String {
     format!("- ~~[{id}]~~{rest}")
 }
 
-pub fn rewrite(text: &str, existing: &Existing) -> (String, Vec<Replacement>) {
+pub fn rewrite(
+    text: &str,
+    existing: &Existing,
+    assigned: &mut BTreeSet<String>,
+) -> (String, Vec<Replacement>) {
     let mut lines: Vec<String> = lines_of(text).into_iter().map(str::to_string).collect();
     let mut dropped = BTreeSet::new();
     let mut inserted: BTreeMap<usize, String> = BTreeMap::new();
@@ -81,6 +90,7 @@ pub fn rewrite(text: &str, existing: &Existing) -> (String, Vec<Replacement>) {
     let claims = parse(text).claims;
     let mut taken: BTreeSet<String> = existing.keys().cloned().collect();
     taken.extend(claims.iter().map(|c| c.id.clone()));
+    taken.extend(assigned.iter().cloned());
     for claim in &claims {
         for legacy in &claim.legacy {
             let at = legacy.line - 1;
@@ -106,6 +116,7 @@ pub fn rewrite(text: &str, existing: &Existing) -> (String, Vec<Replacement>) {
         };
         let new = fresh_id(&claim.id, &taken);
         taken.insert(new.clone());
+        assigned.insert(new.clone());
         lines[claim.start] =
             lines[claim.start].replacen(&format!("[{}]", claim.id), &format!("[{new}]"), 1);
         inserted.insert(claim.start, struck_line(old_line, &claim.id));
