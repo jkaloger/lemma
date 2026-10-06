@@ -45,8 +45,8 @@ fn adopted() -> Repo {
 }
 
 fn delta_from_template(repo: &Repo, intent: Option<&str>) {
-    let mut body = render(DELTA_TEMPLATE, "Retry")
-        .replace("related: []", "related:\n- folds-into: SPEC-001");
+    let mut body =
+        render(DELTA_TEMPLATE, "Retry").replace("related: []", "related:\n- folds-into: SPEC-001");
     if let Some(text) = intent {
         body = body.replace("## Intent\n", &format!("## Intent\n{text}\n"));
     }
@@ -60,7 +60,10 @@ fn a_repo_adopted_from_the_pack_checks_clean() {
 
     let run = repo.run(&["check", "--require", "evidence"], "");
 
-    assert_eq!((run.code, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""));
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", "")
+    );
 }
 
 #[test]
@@ -70,7 +73,11 @@ fn a_delta_template_with_only_guidance_has_no_intent() {
 
     let run = repo.run(&["check", "--json", "--require", "claims"], "");
 
-    assert!(run.has_message("missing or empty `## Intent` section"), "{}", run.stdout);
+    assert!(
+        run.has_message("missing or empty `## Intent` section"),
+        "{}",
+        run.stdout
+    );
 }
 
 #[test]
