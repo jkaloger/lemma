@@ -2,14 +2,15 @@ use crate::check::{legacy_lines, Finding, UNRESOLVED_ASSUMPTION};
 use crate::claims::{Claim, BEHAVIOUR_PART};
 use crate::fold::fold;
 use crate::payload::{Doc, Output, Payload, Update};
+use crate::review::{base_of, review, TargetReview};
 use crate::targets::Targets;
 use crate::world::{Site, World};
 use anyhow::{bail, Result};
 use lazyspec::engine::store::Store;
+use std::path::Path;
 
 struct Folded {
     update: Update,
-    lines: Vec<String>,
 }
 
 struct Plan {
@@ -21,31 +22,6 @@ impl Plan {
     fn failed(&self) -> bool {
         self.findings.iter().any(Finding::is_error)
     }
-}
-
-fn claim_text(claim: &Claim) -> &str {
-    let first = claim.block.first().map_or("", String::as_str);
-    first
-        .split_once(']')
-        .map_or("", |(_, rest)| rest.trim_start_matches('~').trim())
-}
-
-fn summary(spec: &Doc, claims: &[&Claim]) -> Vec<String> {
-    let existing = spec.spec_claims();
-    claims
-        .iter()
-        .map(|claim| match claim.struck {
-            true => {
-                let text = existing
-                    .iter()
-                    .find(|e| e.id == claim.id)
-                    .map_or_else(|| claim_text(claim), claim_text);
-                format!("-{} {text}", claim.id)
-            }
-            false => format!("+{} {}", claim.id, claim_text(claim)),
-        })
-        .map(|line| format!("{}: {line}", spec.id))
-        .collect()
 }
 
 fn unresolved_assumptions(site: &Site) -> Vec<Finding> {
@@ -143,7 +119,6 @@ fn plan(world: &World, delta: &Doc, writable: bool) -> Plan {
         let claims: Vec<&Claim> = mine.iter().map(|(_, _, c)| *c).collect();
         match fold(&behaviour.body, &claims) {
             Ok(body) => folded.push(Folded {
-                lines: summary(spec, &claims),
                 update: Update {
                     id: spec.id.clone(),
                     part: Some(BEHAVIOUR_PART.to_string()),
@@ -159,7 +134,33 @@ fn plan(world: &World, delta: &Doc, writable: bool) -> Plan {
     Plan { folded, findings }
 }
 
-pub fn hook(store: &Store, payload: &Payload) -> Output {
+fn reviews(world: &World, delta: &Doc, root: &Path) -> Vec<TargetReview> {
+    let specs = world.specs();
+    let targets = Targets::of(delta, &specs);
+    let sites = world.sites(delta);
+    let base = base_of(root, delta);
+    targets
+        .resolved
+        .iter()
+        .filter_map(|spec| {
+            let mine: Vec<&Site> = sites
+                .iter()
+                .filter(|s| s.governing.is_some_and(|g| g.id == spec.id))
+                .collect();
+            let review = review(root, &base, spec, &mine);
+            (!review.is_empty()).then_some(review)
+        })
+        .collect()
+}
+
+fn at_complete_gate(payload: &Payload) -> bool {
+    payload
+        .transition
+        .as_ref()
+        .is_some_and(|t| t.from == "in-progress" && t.to == "complete")
+}
+
+pub fn hook(store: &Store, root: &Path, payload: &Payload) -> Output {
     let Some(moved) = payload.documents.first() else {
         return Output::default();
     };
@@ -168,9 +169,17 @@ pub fn hook(store: &Store, payload: &Payload) -> Output {
         return Output::default();
     };
     let plan = plan(&world, delta, true);
-    let findings = plan.findings.iter().map(|f| f.for_hook(payload)).collect();
+    let mut findings: Vec<_> = plan.findings.iter().map(|f| f.for_hook(payload)).collect();
     if plan.failed() {
         return Output::findings(findings);
+    }
+    if at_complete_gate(payload) {
+        let reviewed = reviews(&world, delta, root);
+        let accountability = reviewed
+            .iter()
+            .flat_map(|r| r.findings(delta))
+            .map(|f| f.for_hook(payload));
+        findings.extend(accountability);
     }
     Output {
         findings,
@@ -183,17 +192,18 @@ pub struct Preview {
     pub findings: Vec<Finding>,
 }
 
-pub fn preview(store: &Store, name: &str) -> Result<Preview> {
+pub fn preview(store: &Store, root: &Path, name: &str) -> Result<Preview> {
     let meta = store.resolve_shorthand(name)?;
     let world = World::load(store, None);
     let Some(delta) = world.doc(&meta.id).filter(|d| d.doc_type == "delta") else {
         bail!("{name} is not a delta");
     };
     let plan = plan(&world, delta, false);
-    let lines = match plan.failed() {
-        true => Vec::new(),
-        false => plan.folded.into_iter().flat_map(|f| f.lines).collect(),
-    };
+    let failed = plan.failed();
+    let lines = reviews(&world, delta, root)
+        .iter()
+        .flat_map(|r| r.render(failed))
+        .collect();
     Ok(Preview {
         lines,
         findings: plan.findings,

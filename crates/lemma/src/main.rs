@@ -10,6 +10,7 @@ mod payload;
 mod project;
 mod range;
 mod refs;
+mod review;
 mod session;
 mod signal;
 mod stop;
@@ -181,11 +182,11 @@ fn check_command(
 }
 
 fn apply_preview(name: &str) -> ExitCode {
-    let (_, store) = match cli_store() {
+    let (root, store) = match cli_store() {
         Ok(found) => found,
         Err(message) => return fail(message),
     };
-    let preview = match apply::preview(&store, name) {
+    let preview = match apply::preview(&store, &root, name) {
         Ok(preview) => preview,
         Err(e) => return fail(format!("{e:#}")),
     };
@@ -283,9 +284,7 @@ fn main() -> ExitCode {
             json,
             hook,
         } => check_command(base, trunk, &require, json, hook),
-        Command::Apply { delta: None } => {
-            hook_with_store(|store, _, payload| apply::hook(store, payload))
-        }
+        Command::Apply { delta: None } => hook_with_store(apply::hook),
         Command::Apply { delta: Some(name) } => apply_preview(&name),
         Command::Refs { claim } => refs_command(&claim),
         Command::Stop => stop_command(),

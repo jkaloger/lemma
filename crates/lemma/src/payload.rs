@@ -140,6 +140,8 @@ impl Doc {
 #[derive(Debug, Deserialize)]
 pub struct Transition {
     pub from: String,
+    #[serde(default)]
+    pub to: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
