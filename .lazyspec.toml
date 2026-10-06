@@ -103,13 +103,13 @@ types = ["spec", "delta", "decision"]
 run = ["lemma", "check", "--hook"]
 
 [[hooks]]
-name = "lemma-claims-gate"
+name = "lemma-intent-gate"
 event = "pre-transition"
 types = ["delta"]
 from = "draft"
 to = "in-progress"
 context_types = ["spec", "delta"]
-run = ["lemma", "check", "--hook", "--require", "claims"]
+run = ["lemma", "check", "--hook", "--require", "intent"]
 
 [[hooks]]
 name = "lemma-check-gate"

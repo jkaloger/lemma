@@ -239,3 +239,44 @@ fn preview_of_something_that_is_not_a_delta_fails() {
     assert_eq!(run.code, 2);
     assert!(run.stderr.contains("not a delta"), "{}", run.stderr);
 }
+
+const ASSUMED_DELTA: &str = "- [AC-D1-1] [assumed] Probably retries.\n";
+
+#[test]
+fn the_hook_refuses_a_delta_with_an_assumed_claim_and_writes_no_update() {
+    let repo = repo();
+
+    let run = complete(
+        &repo,
+        delta_doc(ASSUMED_DELTA),
+        vec![spec_doc("active", Some(SPEC_BEHAVIOUR))],
+    );
+
+    assert!(
+        run.has_message("AC-D1-1: assumption unresolved;"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(run.findings()[0]["severity"], "error");
+    assert!(run.json().get("updates").is_none());
+}
+
+#[test]
+fn preview_refuses_a_delta_with_an_assumed_claim_and_writes_nothing() {
+    let repo = repo();
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+    repo.delta_part(1, "SPEC-001", ASSUMED_DELTA);
+    repo.commit("assumed delta");
+    let before = repo.read("docs/specs/SPEC-001-s/behaviour.md");
+
+    let run = repo.run(&["apply", "DELTA-001"], "");
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stdout.contains("AC-D1-1: assumption unresolved;"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("SPEC-001: +"), "{}", run.stdout);
+    assert_eq!(repo.read("docs/specs/SPEC-001-s/behaviour.md"), before);
+}

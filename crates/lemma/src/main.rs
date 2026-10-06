@@ -40,6 +40,8 @@ struct Cli {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum RequireArg {
+    Intent,
+    /// Deprecated alias for intent
     Claims,
     Evidence,
     Clean,
@@ -124,6 +126,9 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
     ExitCode::from(2)
 }
 
+const CLAIMS_DEPRECATED: &str =
+    "`--require claims` is deprecated and will be removed; use `--require intent`";
+
 fn check_command(
     base: Option<String>,
     trunk: Option<String>,
@@ -134,17 +139,21 @@ fn check_command(
     let options = check::Options {
         base: base.as_deref(),
         trunk: trunk.as_deref(),
-        report_intent: json || hook,
         require: check::Require {
-            claims: require.iter().any(|r| matches!(r, RequireArg::Claims)),
+            intent: require
+                .iter()
+                .any(|r| matches!(r, RequireArg::Intent | RequireArg::Claims)),
             evidence: require.iter().any(|r| matches!(r, RequireArg::Evidence)),
             clean: require.iter().any(|r| matches!(r, RequireArg::Clean)),
         },
         ..check::Options::default()
     };
+    let deprecated = require.iter().any(|r| matches!(r, RequireArg::Claims));
+    let hint = deprecated.then(|| check::Finding::bare_warning(CLAIMS_DEPRECATED));
     if hook {
         return hook_with_store(|store, root, payload| {
             let findings = check::run(store, root, &options, Some(payload));
+            let findings: Vec<_> = hint.iter().cloned().chain(findings).collect();
             Output::findings(findings.iter().map(|f| f.for_hook(payload)).collect())
         });
     }
@@ -153,6 +162,14 @@ fn check_command(
         Err(message) => return fail(message),
     };
     let findings = check::run(&store, &root, &options, None);
+    let findings: Vec<_> = match (json, hint) {
+        (true, Some(hint)) => std::iter::once(hint).chain(findings).collect(),
+        (false, Some(hint)) => {
+            eprintln!("lemma: {}", hint.message);
+            findings
+        }
+        (_, None) => findings,
+    };
     match json {
         true => println!("{}", serde_json::json!({ "findings": findings })),
         false => findings.iter().for_each(|f| println!("{}", f.render())),

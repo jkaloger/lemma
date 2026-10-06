@@ -71,7 +71,7 @@ fn a_delta_template_with_only_guidance_has_no_intent() {
     let repo = adopted();
     delta_from_template(&repo, None);
 
-    let run = repo.run(&["check", "--json", "--require", "claims"], "");
+    let run = repo.run(&["check", "--json", "--require", "intent"], "");
 
     assert!(
         run.has_message("missing or empty `## Intent` section"),
@@ -85,7 +85,7 @@ fn a_filled_delta_template_has_intent() {
     let repo = adopted();
     delta_from_template(&repo, Some("Flaky upstream."));
 
-    let run = repo.run(&["check", "--json", "--require", "claims"], "");
+    let run = repo.run(&["check", "--json", "--require", "intent"], "");
 
     assert!(!run.has_message("`## Intent`"), "{}", run.stdout);
 }

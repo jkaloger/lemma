@@ -1,9 +1,9 @@
-use crate::check::{legacy_lines, Finding};
+use crate::check::{legacy_lines, Finding, UNRESOLVED_ASSUMPTION};
 use crate::claims::{Claim, BEHAVIOUR_PART};
 use crate::fold::fold;
 use crate::payload::{Doc, Output, Payload, Update};
 use crate::targets::Targets;
-use crate::world::World;
+use crate::world::{Site, World};
 use anyhow::{bail, Result};
 use lazyspec::engine::store::Store;
 
@@ -48,6 +48,22 @@ fn summary(spec: &Doc, claims: &[&Claim]) -> Vec<String> {
         .collect()
 }
 
+fn unresolved_assumptions(site: &Site) -> Vec<Finding> {
+    site.claims
+        .iter()
+        .filter(|c| c.assumed && !c.struck)
+        .map(|c| {
+            Finding::error(
+                site.doc,
+                &site.path,
+                Some(c.line),
+                format!("{}: {UNRESOLVED_ASSUMPTION}", c.id),
+            )
+            .in_part(site.part)
+        })
+        .collect()
+}
+
 fn plan(world: &World, delta: &Doc, writable: bool) -> Plan {
     let specs = world.specs();
     let targets = Targets::of(delta, &specs);
@@ -81,6 +97,7 @@ fn plan(world: &World, delta: &Doc, writable: bool) -> Plan {
             );
         }
         findings.extend(legacy_lines(site));
+        findings.extend(unresolved_assumptions(site));
     }
     for spec in &targets.resolved {
         let mine: Vec<(&str, &str, &Claim)> = sites

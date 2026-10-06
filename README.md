@@ -12,7 +12,7 @@ lazyspec hook trust
 claude plugin install lemma@lemma
 cargo install lemma
 
-lemma check [--base <rev>] [--trunk <name>] [--require claims|evidence|clean]... [--json|--hook]
+lemma check [--base <rev>] [--trunk <name>] [--require intent|evidence|clean]... [--json|--hook]
 lemma apply [<delta>]
 lemma refs <claim>
 lemma stop
@@ -64,7 +64,7 @@ A **claim** is a tagged list item with a stable id inside a `behaviour` part. Th
   @ref src/store.rs#reopen_keeps_prior
 ```
 
-Ids are namespaced by the delta that introduced them. The spec governing a delta claim is the target its part names; for a spec claim it is the spec. A claim carrying the marker `[intent]` is excluded from check 3. lemma reports the count per document as `<n> of <m> claims are [intent]`, in `--json` and `--hook` output only; text mode is silent when clean.
+Ids are namespaced by the delta that introduced them. The spec governing a delta claim is the target its part names; for a spec claim it is the spec. A claim carrying the marker `[intent]` is excluded from check 3.
 
 A **ref** is an `@ref <path>#<symbol>` line indented under a claim. It carries no commit and no hash. The path must match the `tests` globs of the governing spec, and the symbol must resolve in that file. A symbol in production code is not a ref. Code carries no spec ids. A ref is not evidence that the test ran or passed.
 
@@ -92,19 +92,21 @@ The fold writes the merged claim list to the spec's `behaviour` part through the
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1. Coverage  | The changed governed files in the range are not all within one area, and a touched spec is not covered. A spec is covered when an in-flight (`draft` or `in-progress`) delta folds into it, or a delta folding into it became `complete` within the range (its `index.md` changed in the range and was not `complete` at the base). A change is within one area when some spec governs every changed governed file, so overlapping globs do not count as two areas; a change inside one area needs no delta.                           |
 | 2. Evidence  | For a claim present in a spec's `behaviour` part at the base, a ref whose evidence region was present at the base and is now absent or differs, unless a delta strikes that claim. Only a delta that folds into the claim's spec, in its `behaviour.<spec-id>` part, and is `in-progress` or became `complete` in the range, counts; a `draft` delta does not. At a pre-transition gate the moved delta counts as if already at its target status. A region absent at the base is not a change, so a ref that was already broken on trunk is left to check 3. Formatting and comments are normalised away. |
-| 3. Claims have evidence | A live claim, not marked `[intent]`, with no ref that resolves to a symbol in a file matching the governing spec's `tests` globs.                                                              |
+| 3. Claims have evidence | A live claim, not marked `[intent]` or `[assumed]`, with no ref that resolves to a symbol in a file matching the governing spec's `tests` globs.                                                              |
 | 4. Integrity | A delta claim reusing a spec claim id without a strike; a struck id the spec lacks; a fold target that does not resolve; a fold target without its part; a part naming no fold target; a claim-shaped item in `index.md`; an invalid glob; a pinned ref; a spec's `behaviour` part edited outside a fold (below). |
 
 Check 4 also compares each spec's `behaviour` part with the base. The claims in the working tree must equal the base claims folded with every delta that became `complete` in the range (folded in id order). A delta counts only when its `index.md` changed in the range and it was not `complete` at the base, so the transition's status change and spec fold must be committed together; a fold committed apart from its completion is reported as an edit outside a fold. Claims are compared as id and the whole claim block, ignoring `@ref`, `@base` and `@checked` lines, pins and `[intent]` markers. Any difference is an error on the spec part: `spec behaviour edited outside a fold; change it through a delta`. Each ref a claim should hold (pins ignored) must still be present; adding refs is allowed. A removed or repointed ref is an error: `<claim>: ref <path>#<symbol> removed from the spec outside a fold; change it through a delta`. A change in the range to a spec's `governs` or `tests` frontmatter is a warning: `governs/tests changed in this range; review`. A spec that did not exist at the base is not compared.
 
-Two in-flight deltas striking one id produce a warning. Checks 2 and 4 and refs that do not resolve are errors. Check 3 is a warning unless required.
+Two in-flight deltas striking one id produce a warning. Checks 2 and 4 and refs that do not resolve are errors. Check 3 is a warning unless required. A claim marked `[assumed]` is excluded from check 3; `--require evidence` makes each remaining `[assumed]` claim in a delta an error, and `lemma apply` refuses to fold one. An `[assumed]` claim in a spec's `behaviour` part is an error (check 4). A changed test under an `[observed]` claim reports `characterised behaviour changed; confirm the change is intended` (check 2, error).
 
 `--require` is repeatable and turns readiness into errors:
 
+`--require claims` is a deprecated alias for `intent` for one release; it prints a deprecation hint (a warning finding with `--json` and `--hook`, a stderr line otherwise).
+
 | Value      | Requires                                                                                          |
 | ---------- | ------------------------------------------------------------------------------------------------- |
-| `claims`   | `Intent` present, every fold target has its part, at least one claim across the parts             |
-| `evidence` | Check 3 findings are errors                                                                       |
+| `intent`   | `Intent` present and non-empty, every fold target resolves and has its `behaviour` part (empty allowed); no claim required |
+| `evidence` | Check 3 findings are errors; every remaining `[assumed]` claim in a delta is an error             |
 | `clean`    | No uncommitted changes in ref files or under a target's `governs` globs                           |
 
 Output is `path:line: severity: message` lines, one per finding, with the next command where one applies. Output is empty when clean. `--json` prints `{"findings": [...]}`. `--hook` reads a lazyspec payload on stdin, prints findings JSON, exits 0 and is scoped to the payload's documents.
@@ -168,7 +170,7 @@ The pack's `[[hooks]]` entries compose lemma commands. lazyspec runs the entries
 | Event            | Transition                   | Runs                                                                |
 | ---------------- | ---------------------------- | ------------------------------------------------------------------- |
 | `validate`       |                              | `lemma check --hook`                                                |
-| `pre-transition` | `draft` → `in-progress`      | `lemma check --hook --require claims`                               |
+| `pre-transition` | `draft` → `in-progress`      | `lemma check --hook --require intent`                               |
 | `pre-transition` | `in-progress` → `complete`   | `lemma check --hook --require evidence --require clean`, then `lemma apply` |
 
 The `validate` entry applies to `spec`, `delta` and `decision`. The `pre-transition` entries apply to `delta` and load `spec` and `delta` as context. `lazyspec validate` exits 2 when any finding has error severity.

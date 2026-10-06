@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 const SPEC_CLAIM: &str =
     "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n";
+const UNRESOLVED: &str = "assumption unresolved; accept it as a claim, mark it [observed] with a test, delete it, or move it to the spec's open questions";
 const SPEC_PART: &str = "docs/specs/SPEC-001-s/behaviour.md";
 
 fn project() -> Repo {
@@ -554,20 +555,84 @@ mod claims_have_evidence {
     }
 
     #[test]
-    fn the_intent_count_is_reported_in_json_and_hook_output() {
+    fn the_intent_count_is_not_reported_in_any_output_mode() {
         let repo = intent_project();
-        let counted = |run: &Run| run.has_message("1 of 2 claims are [intent]");
-
-        let json = check(&repo, &["--json"]);
         let payload = validate_payload(vec![with_parts(
             doc("SPEC-001", "spec", "active", &["a/**"], &[], INTENT),
             &[("behaviour", &repo.read(SPEC_PART))],
         )]);
+
+        let json = check(&repo, &["--json"]);
         let hook = repo.run(&["check", "--hook"], &payload);
 
-        assert_eq!(json.code, 0);
-        assert!(counted(&json), "{}", json.stdout);
-        assert!(counted(&hook), "{}", hook.stdout);
+        assert!(!json.has_message("[intent]"), "{}", json.stdout);
+        assert!(!hook.has_message("[intent]"), "{}", hook.stdout);
+    }
+
+    const ASSUMED_D: &str = "- [AC-D1-1] [assumed] Probably retries.\n";
+
+    fn assumed_delta(repo: &Repo, claim: &str) {
+        delta(repo, 1, "in-progress", "SPEC-001", claim);
+        repo.commit("assumed delta");
+    }
+
+    #[test]
+    fn an_observed_claim_without_a_ref_is_flagged_like_a_normative_one() {
+        let repo = project();
+        repo.spec_behaviour(
+            1,
+            &format!("{SPEC_CLAIM}- [AC-S1-2] [observed] Characterised.\n"),
+        );
+        repo.commit("observed without ref");
+
+        let run = check(&repo, &[]);
+
+        assert!(
+            says(&run, "warning: AC-S1-2: claim has no `@ref`"),
+            "{}",
+            run.stdout
+        );
+    }
+
+    #[test]
+    fn an_assumed_claim_is_excluded_from_the_missing_ref_finding() {
+        let repo = project();
+        assumed_delta(&repo, ASSUMED_D);
+
+        let run = check(&repo, &[]);
+
+        assert!(!says(&run, "no `@ref`"), "{}", run.stdout);
+        assert_eq!(run.code, 0);
+    }
+
+    #[test]
+    fn require_evidence_errors_on_an_assumed_claim_without_a_ref() {
+        let repo = project();
+        assumed_delta(&repo, ASSUMED_D);
+
+        let run = check(&repo, &["--require", "evidence"]);
+
+        assert_eq!(run.code, 2);
+        assert!(says(&run, UNRESOLVED), "{}", run.stdout);
+        assert!(!says(&run, "no `@ref`"), "{}", run.stdout);
+    }
+
+    #[test]
+    fn require_evidence_errors_on_an_assumed_claim_that_has_a_ref() {
+        let repo = project();
+        assumed_delta(
+            &repo,
+            "- [AC-D1-1] [assumed] Probably retries.\n  @ref tests/store_test.rs#other_test\n",
+        );
+
+        let run = check(&repo, &["--require", "evidence"]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            says(&run, &format!("AC-D1-1: {UNRESOLVED}")),
+            "{}",
+            run.stdout
+        );
     }
 
     #[test]
@@ -841,30 +906,71 @@ mod require {
     use super::*;
 
     #[test]
-    fn claims_needs_intent_claims_and_every_part() {
+    fn intent_needs_intent_and_every_part_but_no_claim() {
         let repo = project();
         repo.delta_file(1, "draft", &["SPEC-001"], "## Intent\n\n");
 
         let lax = check(&repo, &[]);
-        let strict = check(&repo, &["--require", "claims"]);
+        let strict = check(&repo, &["--require", "intent"]);
 
         assert_eq!(lax.code, 0);
         assert_eq!(strict.code, 2);
         assert!(says(&strict, "missing or empty `## Intent` section"));
-        assert!(says(&strict, "no claims in the delta's behaviour parts"));
         assert!(says(
             &strict,
             "fold target SPEC-001 has no `behaviour.SPEC-001` part"
         ));
         assert!(strict.stdout.contains(": error: fold target SPEC-001"));
+        assert!(!says(&strict, "no claims"));
     }
 
     #[test]
-    fn claims_is_satisfied_by_intent_a_part_and_a_claim() {
+    fn intent_is_satisfied_by_intent_and_an_empty_part() {
         let repo = project();
-        delta(&repo, 1, "draft", "SPEC-001", "- [AC-D1-1] New.\n");
+        delta(&repo, 1, "draft", "SPEC-001", "");
 
-        assert_eq!(check(&repo, &["--require", "claims"]).stdout, "");
+        assert_eq!(check(&repo, &["--require", "intent"]).stdout, "");
+    }
+
+    #[test]
+    fn require_claims_is_an_alias_for_intent_with_a_deprecation_hint() {
+        let repo = project();
+        repo.delta_file(1, "draft", &["SPEC-001"], "## Intent\n\n");
+
+        let text = check(&repo, &["--require", "claims"]);
+        let json = check(&repo, &["--json", "--require", "claims"]);
+
+        assert_eq!(text.code, 2);
+        assert!(says(&text, "missing or empty `## Intent` section"));
+        assert!(
+            text.stderr.contains("`--require claims` is deprecated"),
+            "{}",
+            text.stderr
+        );
+        let hint = json
+            .findings()
+            .into_iter()
+            .find(|f| f["message"].as_str().unwrap().contains("deprecated"))
+            .unwrap();
+        assert_eq!(hint["severity"], "warning");
+    }
+
+    #[test]
+    fn require_claims_hint_is_a_warning_finding_in_hook_mode() {
+        let repo = project();
+        let payload = validate_payload(vec![with_parts(
+            doc("DELTA-001", "delta", "draft", &[], &["SPEC-001"], INTENT),
+            &[("behaviour.SPEC-001", "")],
+        )]);
+
+        let run = repo.run(&["check", "--hook", "--require", "claims"], &payload);
+
+        let hint = run
+            .findings()
+            .into_iter()
+            .find(|f| f["message"].as_str().unwrap().contains("deprecated"))
+            .unwrap();
+        assert_eq!(hint["severity"], "warning");
     }
 
     #[test]
@@ -1076,7 +1182,7 @@ mod hook {
         moved["path"] = json!("docs/deltas/DELTA-001-d/index.md");
         let payload = transition_payload("draft", "in-progress", moved, vec![spec_doc()]);
 
-        let gate = repo.run(&["check", "--hook", "--require", "claims"], &payload);
+        let gate = repo.run(&["check", "--hook", "--require", "intent"], &payload);
 
         assert!(!gate.has_message("AC-S1-1: evidence"), "{}", gate.stdout);
     }
@@ -1429,5 +1535,54 @@ mod spec_edits {
 
         assert_eq!(run.code, 0);
         assert!(says(&run, "governs/tests changed in this range; review"));
+    }
+}
+
+mod assumption_and_characterisation {
+    use super::*;
+
+    #[test]
+    fn a_changed_test_under_an_observed_claim_asks_for_confirmation_as_an_error() {
+        let repo = project();
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] [observed] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("observed claim");
+        edit_reopen_body(&repo);
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            says(
+                &run,
+                &format!(
+                    "{SPEC_PART}:2: error: AC-S1-1: characterised behaviour changed; confirm the change is intended"
+                )
+            ),
+            "{}",
+            run.stdout
+        );
+        assert!(!says(&run, "strike AC-S1-1"), "{}", run.stdout);
+    }
+
+    #[test]
+    fn an_assumed_claim_in_a_spec_is_an_error() {
+        let repo = project();
+        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-S1-2] [assumed] Probably.\n"));
+        repo.commit("assumed in spec");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            says(
+                &run,
+                &format!("{SPEC_PART}:3: error: AC-S1-2: [assumed] claim in a spec")
+            ),
+            "{}",
+            run.stdout
+        );
     }
 }
