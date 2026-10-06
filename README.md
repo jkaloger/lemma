@@ -25,7 +25,7 @@ lemma migrate
 
 lemma has three parts, released together under one version number.
 
-The **pack** is a `.lazyspec.toml`, a set of document templates, two dictum files and a `[[hooks]]` table. `lazyspec init --template` copies it into a project, from a URL or from a directory checkout. The pack defines three document types in two families.
+The **pack** is a `.lazyspec.toml`, a set of document templates, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies it into a project, from a URL or from a directory checkout. The pack defines three document types in two families.
 
 The **plugin** is a Claude Code plugin carrying two skills and the Claude Code hook entries. The lazyspec plugin is not a dependency.
 
@@ -204,7 +204,7 @@ The human decision point is the transition `in-progress` → `complete`. The age
 | ----------------------- | -------------------------------------------------------------------------------------------------- |
 | `.lazyspec.toml`        | type definitions, `[governs]`, `[[hooks]]` entries pointing at `lemma`                             |
 | `.lazyspec/templates/`  | one template per type, with the spec `tests` key; `spec/` (`index.md`, `behaviour.md`) and `delta/` (`index.md`) are directory templates |
-| `.lazyspec/dictums/`    | `testing`, `code-change`                                                                           |
+| `docs/convention/`      | seed `CONVENTION` and dictums `DICTUM-001-testing`, `DICTUM-002-code-change`                       |
 | `plugin/`               | Claude Code plugin: skills (the delta skill's `references/` hold one file per workflow) and hook entries |
 | `crates/lemma/`         | the binary                                                                                         |
 | `docs/decisions/`       | DECISION-001, the scope of 2.0                                                                     |

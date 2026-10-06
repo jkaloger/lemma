@@ -24,6 +24,24 @@ prefix = "DECISION"
 staleness = "age"
 lifecycle = { states = ["proposed", "accepted", "superseded"], edges = [{ from = "proposed", to = "accepted" }, { from = "accepted", to = "superseded" }] }
 
+[[types]]
+name = "convention"
+plural = "convention"
+dir = "docs/convention"
+prefix = "CONVENTION"
+singleton = true
+staleness = "drift"
+lifecycle = { states = ["draft", "accepted"], edges = [{ from = "draft", to = "accepted" }] }
+
+[[types]]
+name = "dictum"
+plural = "dicta"
+dir = "docs/convention"
+prefix = "DICTUM"
+parent_type = "convention"
+staleness = "drift"
+lifecycle = { states = ["draft", "accepted"], edges = [{ from = "draft", to = "accepted" }] }
+
 [[relationships]]
 name = "folds-into"
 inverse = "folded-from"
@@ -31,6 +49,10 @@ inverse = "folded-from"
 [[relationships]]
 name = "affects"
 inverse = "affected-by"
+
+[[relationships]]
+name = "constrains"
+inverse = "constrained-by"
 
 [[relationships]]
 name = "supersedes"
@@ -48,6 +70,18 @@ name = "decision-affects-spec"
 from = "decision"
 to = "spec"
 via = "affects"
+
+[[edges]]
+name = "decision-constrains-spec"
+from = "decision"
+to = "spec"
+via = "constrains"
+
+[[edges]]
+name = "dictum-constrains-spec"
+from = "dictum"
+to = "spec"
+via = "constrains"
 
 [[edges]]
 name = "decision-supersedes-decision"

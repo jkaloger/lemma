@@ -11,7 +11,7 @@ Dispatch only. Do not classify the work as fix, chore or refactor; that is the d
 
 1. `lazyspec --version`. If below 0.15 or missing, tell the user to install lazyspec 0.15 or later (`cargo install lazyspec`) and stop.
 2. `command -v lemma`. If missing, tell the user to run `cargo install lemma` and stop. Hooks silently do nothing without it.
-3. If `.lazyspec/dictums/` is missing, copy it from `.lazyspec/cache/config/.lazyspec/dictums/` after a URL adopt, or from `<pack-dir>/.lazyspec/dictums/` after a directory adopt (until lazyspec copies them).
+3. If `docs/convention/` is empty or missing, copy the pack's seed documents into it: from `.lazyspec/cache/config/docs/convention/` after a URL adopt, or from `<pack-dir>/docs/convention/` after a directory adopt (until lazyspec copies them).
 4. Add `.lazyspec/cache/` to `.gitignore` if absent.
 5. `lazyspec hook trust`.
 6. If the plugin was installed this session, end setup by telling the user to restart the Claude Code session; skills and the SessionStart, PostToolUse and Stop hooks load only after restart. Do no delta work before then.

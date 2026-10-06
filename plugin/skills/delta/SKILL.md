@@ -7,7 +7,7 @@ description: Use when changing code in a lemma project - build, fix, chore, refa
 
 No unbounded code changes; no unverified completion. The delta is the unit of in-flight work: a set of claims, each settled by a test it names with `@ref`.
 
-Pick the workflow by judgement per `.lazyspec/dictums/code-change.md`, then load one reference: `references/build.md`, `fix.md`, `chore.md`, `refactor.md`, `spike.md` or `adopt.md`. Nothing classifies for you; misjudgement is caught by `lemma check`, the project's own checks and the Stop hook.
+Pick the workflow by judgement per the code-change dictum (`lazyspec convention`), then load one reference: `references/build.md`, `fix.md`, `chore.md`, `refactor.md`, `spike.md` or `adopt.md`. Nothing classifies for you; misjudgement is caught by `lemma check`, the project's own checks and the Stop hook.
 
 ## Vocabulary
 
