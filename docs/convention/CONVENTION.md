@@ -18,4 +18,4 @@ Rules a lemma project holds every change to. Each dictum states one area's rules
 
 ## Governance
 
-Dictums are human-edited and never folded. A rule's text never changes: strike its id (`- ~~[ID]~~`) and add a new id in the same change. Reusing an id is an error.
+Dictums are human-edited and never folded. Edit a rule in place; the commit says why. When a test a rule refs must change, strike the rule (`- ~~[ID]~~`) and add a new id in the same change, so the change is deliberate. Reusing an id is an error.
