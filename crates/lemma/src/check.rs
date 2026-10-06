@@ -656,10 +656,25 @@ fn fold_findings(delta: &Doc, sites: &[Site]) -> Vec<Finding> {
 }
 
 pub fn legacy_lines(site: &Site) -> Vec<Finding> {
-    site.claims
+    let legacy = site
+        .claims
         .iter()
         .flat_map(|c| &c.legacy)
-        .map(|l| Finding::error(site.doc, &site.path, Some(l.line), l.message()).in_part(site.part))
+        .map(|l| Finding::error(site.doc, &site.path, Some(l.line), l.message()));
+    let conflicts = site.claims.iter().filter(|c| c.marker_conflict).map(|c| {
+        Finding::error(
+            site.doc,
+            &site.path,
+            Some(c.line),
+            format!(
+                "{}: [intent], [observed] and [assumed] are mutually exclusive; keep one",
+                c.id
+            ),
+        )
+    });
+    legacy
+        .chain(conflicts)
+        .map(|f| f.in_part(site.part))
         .collect()
 }
 

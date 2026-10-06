@@ -673,6 +673,39 @@ mod integrity {
     }
 
     #[test]
+    fn a_claim_with_two_markers_is_an_error_on_its_line() {
+        let repo = project();
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] [observed] [assumed] x\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("two markers");
+
+        let run = check(&repo, &[]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            run.stdout.contains(&format!(
+                "{SPEC_PART}:1: error: AC-S1-1: [intent], [observed] and [assumed] are mutually exclusive; keep one"
+            )),
+            "{}",
+            run.stdout
+        );
+    }
+
+    #[test]
+    fn one_marker_per_claim_is_silent() {
+        let repo = project();
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] [observed] x\n  @ref tests/store_test.rs#reopen_keeps_prior\n- [AC-S1-2] [assumed] y\n  @ref tests/store_test.rs#other_test\n",
+        );
+        repo.commit("one marker each");
+
+        assert!(!says(&check(&repo, &[]), "mutually exclusive"));
+    }
+
+    #[test]
     fn a_delta_claim_reusing_a_spec_id_is_immutable() {
         let repo = project();
         delta(
@@ -1254,6 +1287,25 @@ mod spec_edits {
         repo.commit("evidence the intent claim");
 
         assert_eq!(check(&repo, &[]).stdout, "");
+    }
+
+    #[test]
+    fn adding_observed_assumed_and_per_to_a_claim_is_silent() {
+        let repo = project();
+        spec_on_trunk(&repo, SPEC_CLAIM);
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] [observed] Reopen keeps the prior answer.\n  @per DECISION-001\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("annotate");
+        assert!(!says(&check(&repo, &[]), EDITED));
+
+        repo.spec_behaviour(
+            1,
+            "- [AC-S1-1] [assumed] Reopen keeps the prior answer.\n  @per vendor contract\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+        );
+        repo.commit("assume");
+        assert!(!says(&check(&repo, &[]), EDITED));
     }
 
     #[test]

@@ -9,6 +9,12 @@ pub struct Receipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Citation {
+    pub line: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
     pub id: String,
     pub line: usize,
@@ -16,6 +22,10 @@ pub struct Claim {
     pub end: usize,
     pub struck: bool,
     pub intent: bool,
+    pub observed: bool,
+    pub assumed: bool,
+    pub marker_conflict: bool,
+    pub per: Vec<Citation>,
     pub receipts: Vec<Receipt>,
     pub pinned: Vec<Receipt>,
     pub legacy: Vec<LegacyLine>,
@@ -176,6 +186,7 @@ fn claim_end(lines: &[&str], start: usize) -> usize {
     end
 }
 
+pub const PER_MARKER: &str = "@per";
 pub const FORCED_MARKER: &str = "[forced]";
 const BASE_MARKER: &str = "@base";
 
@@ -233,8 +244,48 @@ fn scan(
     (receipts, pinned, legacy)
 }
 
-fn marks_intent(lines: &[&str], live: &[bool], start: usize, end: usize) -> bool {
-    (start..end).any(|i| live[i] && lines[i].contains("[intent]"))
+const CLAIM_MARKERS: [&str; 3] = ["[intent]", "[observed]", "[assumed]"];
+
+fn marker_token(text: &str) -> Option<(&'static str, &str)> {
+    let text = text.trim_start();
+    CLAIM_MARKERS.iter().find_map(|marker| {
+        let rest = text.strip_prefix(marker)?;
+        (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((*marker, rest))
+    })
+}
+
+/// Splits the marker tokens that directly follow a claim's `[ID]` off its first line.
+/// Returns the markers and the line with them removed.
+pub fn split_markers(first_line: &str) -> (Vec<&'static str>, String) {
+    let Some(caps) = item_pattern().captures(first_line) else {
+        return (Vec::new(), first_line.to_string());
+    };
+    let head_end = caps.get(0).map_or(0, |m| m.end());
+    let mut markers = Vec::new();
+    let mut rest = &first_line[head_end..];
+    while let Some((marker, after)) = marker_token(rest) {
+        markers.push(marker);
+        rest = after;
+    }
+    (markers, format!("{}{rest}", &first_line[..head_end]))
+}
+
+pub fn per_text(line: &str) -> Option<&str> {
+    line.trim_start()
+        .strip_prefix(PER_MARKER)?
+        .strip_prefix(char::is_whitespace)
+}
+
+fn citations(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<Citation> {
+    (start..end)
+        .filter(|&i| live[i])
+        .filter_map(|i| {
+            Some(Citation {
+                line: i + 1,
+                text: per_text(lines[i])?.trim().to_string(),
+            })
+        })
+        .collect()
 }
 
 pub fn parse(body: &str) -> Behaviour {
@@ -253,13 +304,22 @@ pub fn parse(body: &str) -> Behaviour {
         };
         let end = claim_end(&lines, cursor);
         let (receipts, pinned, legacy) = scan(&lines, &live, cursor, end);
+        let (markers, _) = split_markers(line);
+        let marked = |name| markers.contains(&name);
+        let intent = marked("[intent]");
+        let observed = marked("[observed]");
+        let assumed = marked("[assumed]");
         claims.push(Claim {
             id: caps[2].to_string(),
             line: cursor + 1,
             start: cursor,
             end,
             struck: caps.get(1).is_some(),
-            intent: marks_intent(&lines, &live, cursor, end),
+            intent,
+            observed,
+            assumed,
+            marker_conflict: [intent, observed, assumed].iter().filter(|m| **m).count() > 1,
+            per: citations(&lines, &live, cursor, end),
             receipts,
             pinned,
             legacy,
@@ -374,6 +434,80 @@ mod tests {
         assert_eq!(target_of("behaviour.SPEC-003"), Some("SPEC-003"));
         assert_eq!(target_of("behaviour"), None);
         assert_eq!(part_for("SPEC-003"), "behaviour.SPEC-003");
+    }
+
+    #[test]
+    fn each_marker_parses_on_its_own() {
+        let b = parse("- [A-1] [intent] a\n- [A-2] [observed] b\n- [A-3] [assumed] c\n- [A-4] d\n");
+        let flags: Vec<_> = b
+            .claims
+            .iter()
+            .map(|c| (c.intent, c.observed, c.assumed))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![
+                (true, false, false),
+                (false, true, false),
+                (false, false, true),
+                (false, false, false)
+            ]
+        );
+        assert!(b.claims.iter().all(|c| !c.marker_conflict));
+    }
+
+    #[test]
+    fn two_or_more_markers_are_a_conflict() {
+        for body in [
+            "- [A-1] [intent] [observed] x\n",
+            "- ~~[A-1]~~ [observed] [assumed] x\n",
+            "- [A-1] [intent] [observed] [assumed] x\n",
+        ] {
+            assert!(parse(body).claims[0].marker_conflict, "{body}");
+        }
+    }
+
+    #[test]
+    fn quoted_marker_words_are_prose_not_markers() {
+        for body in [
+            "- [A-1] [intent] apply refuses to fold `[assumed]` claims\n",
+            "- [A-1] [intent] an [assumed] claim is not yet normative\n",
+            "- [A-1] [intent] x\n  continues with [observed] and `[assumed]`\n",
+            "- [A-1] text then [intent]\n",
+            "- [A-1] one [observed] two\n",
+        ] {
+            let claim = &parse(body).claims[0];
+            assert!(!claim.marker_conflict, "{body}");
+            assert!(!claim.assumed && !claim.observed, "{body}");
+        }
+        assert!(!parse("- [A-1] text then [intent]\n").claims[0].intent);
+        assert!(parse("- [A-1] [intent] x `[assumed]`\n").claims[0].intent);
+    }
+
+    #[test]
+    fn a_struck_claim_keeps_its_leading_marker() {
+        let claim = &parse("- ~~[A-1]~~ [observed] gone\n").claims[0];
+        assert!(claim.struck && claim.observed);
+    }
+
+    #[test]
+    fn per_lines_parse_in_order_with_their_line_numbers() {
+        let b = parse("- [A-1] x\n  @per DECISION-003\n  @per RFC 7231 section 4\n  @ref a.rs#f\n");
+        let per: Vec<_> = b.claims[0]
+            .per
+            .iter()
+            .map(|c| (c.line, c.text.as_str()))
+            .collect();
+        assert_eq!(per, vec![(2, "DECISION-003"), (3, "RFC 7231 section 4")]);
+        assert_eq!(b.claims[0].receipts.len(), 1);
+    }
+
+    #[test]
+    fn fenced_and_commented_markers_and_per_lines_are_ignored() {
+        let body = "- [A-1] x\n  ```\n  [observed] [assumed]\n  @per DECISION-001\n  ```\n  <!-- [observed] @per DECISION-002 -->\n";
+        let claim = &parse(body).claims[0];
+        assert!(!claim.observed && !claim.assumed && !claim.marker_conflict);
+        assert!(claim.per.is_empty());
     }
 
     fn legacy_of(body: &str) -> Vec<(usize, &'static str)> {

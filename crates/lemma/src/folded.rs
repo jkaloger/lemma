@@ -1,5 +1,7 @@
 use crate::check::{ref_name, Finding};
-use crate::claims::{checked_pattern, is_base_line, parse, Claim, BEHAVIOUR_PART};
+use crate::claims::{
+    checked_pattern, is_base_line, parse, per_text, split_markers, Claim, BEHAVIOUR_PART,
+};
 use crate::evidence::clean;
 use crate::fold::fold;
 use crate::git::git_output;
@@ -43,9 +45,15 @@ pub fn completed_since<'a>(
 fn behaviour_text(claim: &Claim) -> String {
     let lines = claim.block.iter().enumerate().filter_map(|(at, line)| {
         let line = checked_pattern().replace_all(line, "");
-        let line = line.replace("[intent]", "");
+        let line = match at {
+            0 => split_markers(&line).1,
+            _ => line.to_string(),
+        };
         let trimmed = line.trim();
-        let dropped = trimmed.is_empty() || is_base_line(trimmed) || trimmed.starts_with("@ref");
+        let dropped = trimmed.is_empty()
+            || is_base_line(trimmed)
+            || trimmed.starts_with("@ref")
+            || per_text(trimmed).is_some();
         (at == 0 || !dropped).then(|| trimmed.to_string())
     });
     lines
@@ -199,4 +207,34 @@ pub fn spec_edits(root: &Path, world: &World, base: &str, files: &[String]) -> V
                 .chain(scope_changed(root, base, spec, files))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(body: &str) -> String {
+        behaviour_text(&parse(body).claims[0])
+    }
+
+    #[test]
+    fn identity_ignores_the_leading_marker() {
+        assert_eq!(text("- [A-1] [observed] x\n"), text("- [A-1] x\n"));
+        assert_eq!(text("- ~~[A-1]~~ [assumed] x\n"), text("- ~~[A-1]~~ x\n"));
+    }
+
+    #[test]
+    fn a_marker_word_added_to_prose_changes_identity() {
+        assert_ne!(text("- [A-1] a b\n"), text("- [A-1] a [observed] b\n"));
+        assert_ne!(text("- [A-1] a b\n"), text("- [A-1] a `[assumed]` b\n"));
+    }
+
+    #[test]
+    fn only_per_citations_are_dropped_from_identity() {
+        assert_eq!(text("- [A-1] x\n  @per DECISION-1\n"), text("- [A-1] x\n"));
+        assert_ne!(
+            text("- [A-1] x\n  @performance matters\n"),
+            text("- [A-1] x\n")
+        );
+    }
 }
