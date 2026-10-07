@@ -33,8 +33,6 @@ struct Section {
     end: usize,
 }
 
-pub const BEHAVIOUR_PART: &str = "behaviour";
-
 #[derive(Debug, Default)]
 pub struct Behaviour {
     pub claims: Vec<Claim>,

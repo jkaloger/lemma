@@ -2,9 +2,7 @@ mod common;
 use common::*;
 use serde_json::{json, Value};
 
-const CLAIM: &str =
-    "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n";
-const SPEC_PART: &str = "docs/specs/SPEC-001-s/behaviour.md";
+const SPEC_INDEX: &str = "docs/specs/SPEC-001-s/index.md";
 
 const DECISION_CONFIG: &str = r#"
 [[types]]
@@ -31,7 +29,7 @@ fn project() -> Repo {
     repo.write("scripts/tool.sh", "echo\n");
     repo.write("docs/decisions/DECISION-001-store.md", DECISION);
     repo.spec_file(1, "active", &["a/**"], INTENT);
-    repo.spec_behaviour(1, CLAIM);
+    repo.landed_delta(LANDED_CLAIM);
     repo.spec_file(2, "active", &["b/**"], INTENT);
     repo.commit("project");
     repo
@@ -152,7 +150,7 @@ fn a_clean_edit_to_an_ungoverned_file_is_silent() {
 }
 
 #[test]
-fn an_evidence_change_names_the_claim_and_is_said_once() {
+fn a_changed_test_names_the_landed_delta_and_is_said_once() {
     let repo = project();
     edit(&repo, "a/x.rs");
     repo.write(
@@ -164,7 +162,7 @@ fn an_evidence_change_names_the_claim_and_is_said_once() {
 
     let said = context_of(&run);
     assert!(
-        said.contains(&format!("{SPEC_PART}:2: error: AC-S1-1: evidence")),
+        said.contains(&format!("{LANDED_CLAIMS}:2: warning: {HISTORY}")),
         "{said}"
     );
     assert_eq!(said.lines().count(), 1);
@@ -239,26 +237,13 @@ fn a_covering_delta_silences_the_coverage_finding() {
 }
 
 #[test]
-fn editing_a_spec_part_reports_checks_three_and_four_for_that_document() {
+fn editing_a_spec_reports_its_invalid_globs() {
     let repo = project();
-    repo.spec_behaviour(
-        1,
-        &format!("{CLAIM}- [AC-S1-2] Gone.\n  @ref tests/store_test.rs#missing\n"),
-    );
-    repo.write(
-        "docs/specs/SPEC-002-s/behaviour.md",
-        "- [AC-S2-1] Elsewhere.\n  @ref tests/store_test.rs#missing\n",
-    );
+    repo.spec_file_with_tests(1, "active", &["a/**"], &["[bad"], INTENT);
 
-    let said = context_of(&edit(&repo, SPEC_PART));
+    let said = context_of(&edit(&repo, SPEC_INDEX));
 
-    assert!(
-        said.contains(&format!(
-            "{SPEC_PART}:4: error: AC-S1-2: ref tests/store_test.rs#missing does not resolve"
-        )),
-        "{said}"
-    );
-    assert!(!said.contains("AC-S2-1"), "{said}");
+    assert!(said.contains("tests glob `[bad` is invalid"), "{said}");
 }
 
 #[test]
@@ -276,10 +261,10 @@ fn editing_a_delta_part_reports_its_claims() {
 }
 
 #[test]
-fn a_clean_spec_part_is_silent() {
+fn a_clean_spec_is_silent() {
     let repo = project();
 
-    assert!(silent(&edit(&repo, SPEC_PART)));
+    assert!(silent(&edit(&repo, SPEC_INDEX)));
 }
 
 #[test]

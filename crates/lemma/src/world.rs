@@ -1,15 +1,23 @@
-use crate::claims::{Claim, BEHAVIOUR_PART};
+use crate::claims::{Claim, Receipt};
+use crate::evidence::clean;
 use crate::git::git_output;
 use crate::payload::{tests_or_default, Attributes, Doc, Payload, CLAIMS_PART};
 use crate::project::docs_from_store;
 use lazyspec::engine::doc_json::doc_to_json;
 use lazyspec::engine::document::DocMeta;
 use lazyspec::engine::store::Store;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub struct World {
     docs: Vec<Doc>,
-    moving: Option<String>,
+}
+
+/// One ref of a claim in a delta that had landed before the range.
+pub struct Landed<'a> {
+    pub delta: &'a Doc,
+    pub claim: String,
+    pub receipt: Receipt,
 }
 
 pub struct Site<'a> {
@@ -24,17 +32,13 @@ pub fn in_flight(doc: &Doc) -> bool {
     doc.doc_type == "delta" && matches!(doc.status.as_str(), "draft" | "in-progress")
 }
 
-pub fn changes(delta: &Doc, spec: &Doc) -> bool {
-    delta.changed_specs().iter().any(|t| spec.is_named(t))
-}
-
 pub fn doc_at(root: &Path, rev: &str, path: &str) -> Option<Doc> {
     let text = git_output(root, &["show", &format!("{rev}:./{path}")])?;
     let meta = DocMeta::parse(&text).ok()?;
     serde_json::from_value(doc_to_json(&meta)).ok()
 }
 
-pub fn carries_claims(doc: &Doc) -> bool {
+pub fn lints_on_edit(doc: &Doc) -> bool {
     matches!(doc.doc_type.as_str(), "spec" | "dictum") || in_flight(doc)
 }
 
@@ -42,10 +46,9 @@ impl World {
     pub fn load(store: &Store, payload: Option<&Payload>) -> Self {
         let mut docs = docs_from_store(store);
         let Some(payload) = payload else {
-            return Self { docs, moving: None };
+            return Self { docs };
         };
         let moved = payload.documents.first().map(|d| d.id.as_str());
-        let moving = payload.transition.as_ref().and(moved).map(str::to_string);
         for supplied in payload.documents.iter().chain(&payload.context) {
             if !matches!(supplied.doc_type.as_str(), "spec" | "delta" | "dictum") {
                 continue;
@@ -58,19 +61,11 @@ impl World {
             docs.retain(|d| d.id != doc.id);
             docs.push(doc);
         }
-        Self { docs, moving }
-    }
-
-    pub fn is_moving(&self, doc: &Doc) -> bool {
-        self.moving.as_deref() == Some(doc.id.as_str())
+        Self { docs }
     }
 
     pub fn docs(&self) -> &[Doc] {
         &self.docs
-    }
-
-    pub fn specs(&self) -> Vec<&Doc> {
-        self.docs.iter().filter(|d| d.doc_type == "spec").collect()
     }
 
     pub fn in_flight(&self) -> Vec<&Doc> {
@@ -122,11 +117,6 @@ impl World {
         };
         match doc.doc_type.as_str() {
             "dictum" => vec![site("", &doc.body, doc.tests_globs())],
-            "spec" => doc
-                .part(BEHAVIOUR_PART)
-                .map(|part| site(BEHAVIOUR_PART, &part.body, doc.tests_globs()))
-                .into_iter()
-                .collect(),
             "delta" => vec![site(
                 CLAIMS_PART,
                 doc.part_body(CLAIMS_PART),
@@ -136,12 +126,32 @@ impl World {
         }
     }
 
-    pub fn all_sites(&self) -> Vec<Site<'_>> {
-        self.docs
-            .iter()
-            .filter(|d| carries_claims(d))
-            .flat_map(|d| self.sites(d))
-            .collect()
+    /// The refs of every complete delta's live claims, by test file, leaving out deltas
+    /// that completed within the range: their tests are the range's own work.
+    pub fn landed_by_ref(&self, completed_in_range: &[&Doc]) -> BTreeMap<String, Vec<Landed<'_>>> {
+        let mut by_file: BTreeMap<String, Vec<Landed>> = BTreeMap::new();
+        let landed = self.docs.iter().filter(|d| {
+            d.doc_type == "delta"
+                && d.status == "complete"
+                && completed_in_range.iter().all(|c| c.id != d.id)
+        });
+        for delta in landed {
+            for site in self.sites(delta) {
+                for claim in site.claims.into_iter().filter(|c| !c.struck) {
+                    for receipt in claim.receipts {
+                        by_file
+                            .entry(clean(&receipt.path).to_string())
+                            .or_default()
+                            .push(Landed {
+                                delta,
+                                claim: claim.id.clone(),
+                                receipt,
+                            });
+                    }
+                }
+            }
+        }
+        by_file
     }
 
     /// Deltas that are `complete` now, whose `index.md` changed in the range and was not

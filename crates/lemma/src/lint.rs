@@ -1,10 +1,10 @@
-use crate::claims::{parse, Claim, BEHAVIOUR_PART};
+use crate::claims::{parse, Claim};
 use crate::evidence::{clean, glob_set, invalid_globs, resolve, RefStatus, Regions};
 use crate::git::{changed_since, git_output};
-use crate::payload::{Doc, Finding as Wire, Payload};
+use crate::payload::{Doc, Finding as Wire, Payload, CLAIMS_PART};
 use crate::range::{self, Inputs, Rule};
 use crate::shape::{self, Gate};
-use crate::world::{changes, in_flight, Site, World};
+use crate::world::{in_flight, Site, World};
 use lazyspec::engine::store::Store;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -196,7 +196,7 @@ pub fn run_with(
         Some(Ok(span)) => {
             let found = range_findings(store, root, &world, span, payload);
             if !full {
-                scope.retain(|doc| touched_by(doc, &span.files));
+                scope.retain(|doc| touched_by(&world, doc, &span.files));
             }
             found
         }
@@ -228,10 +228,11 @@ fn range_findings(
     let completed = world.completed_since(root, &span.base, &span.files);
     let covered = covered_specs(world, &completed);
     let mut found = coverage(store, root, &covered, &span.files);
-    found.extend(evidence_changes(root, world, span, &completed, None));
+    found.extend(dictum_changes(root, world, span, None));
     if let Some(targets) = moved_targets(world, payload) {
         found.retain(|f| f.id.as_ref().is_some_and(|id| targets.contains(id)));
     }
+    found.extend(history(root, world, span, &completed, None));
     found
 }
 
@@ -251,13 +252,22 @@ fn moved_targets(world: &World, payload: Option<&Payload>) -> Option<BTreeSet<St
     }
 }
 
-fn touched_by(doc: &Doc, files: &[String]) -> bool {
+/// A delta is touched through its own files or any file its specs govern; a spec or
+/// dictum through its files or its own `governs`.
+fn touched_by(world: &World, doc: &Doc, files: &[String]) -> bool {
     let dir = Path::new(&doc.path).parent().unwrap_or(Path::new(""));
-    let governed = glob_set(&doc.governs);
-    let governs = matches!(doc.doc_type.as_str(), "spec" | "dictum") && !doc.governs.is_empty();
-    files
-        .iter()
-        .any(|f| Path::new(f).starts_with(dir) || (governs && governed.is_match(f.as_str())))
+    let globs: Vec<String> = match doc.doc_type.as_str() {
+        "delta" => world
+            .changed_specs(doc)
+            .into_iter()
+            .flat_map(|spec| spec.governs.clone())
+            .collect(),
+        _ => doc.governs.clone(),
+    };
+    let governed = glob_set(&globs);
+    files.iter().any(|f| {
+        Path::new(f).starts_with(dir) || (!globs.is_empty() && governed.is_match(f.as_str()))
+    })
 }
 
 /// The documents linted one by one: every spec and dictum, plus the named delta, or every
@@ -388,82 +398,25 @@ pub fn coverage(
         .collect()
 }
 
-fn struck_for(world: &World, spec: &Doc, completed: &[&Doc]) -> BTreeSet<String> {
-    let counts = |delta: &&Doc| {
-        delta.doc_type == "delta"
-            && (delta.status == "in-progress"
-                || world.is_moving(delta)
-                || completed.iter().any(|c| c.id == delta.id))
-    };
-    world
-        .docs()
-        .iter()
-        .filter(counts)
-        .filter(|delta| changes(delta, spec))
-        .flat_map(|delta| world.sites(delta))
-        .flat_map(|site| site.claims)
-        .filter(|c| c.struck)
-        .map(|c| c.id)
-        .collect()
-}
-
-struct ChangeSite<'a> {
-    doc: &'a Doc,
-    part: &'static str,
-    path: String,
-    now: Vec<Claim>,
-    hand_edited: bool,
-}
-
-fn change_sites<'a>(root: &Path, world: &'a World) -> Vec<ChangeSite<'a>> {
-    let specs = world.specs().into_iter().filter_map(|spec| {
-        let part = spec.part(BEHAVIOUR_PART)?;
-        Some(ChangeSite {
-            doc: spec,
-            part: BEHAVIOUR_PART,
-            path: spec.part_path(BEHAVIOUR_PART),
-            now: parse(&part.body).claims,
-            hand_edited: false,
-        })
-    });
-    let dictums = world
-        .docs()
-        .iter()
-        .filter(|d| d.doc_type == "dictum")
-        .map(|dictum| ChangeSite {
-            doc: dictum,
-            part: "",
-            path: dictum.path.clone(),
-            now: dictum.index_claims(root),
-            hand_edited: true,
-        });
-    specs.chain(dictums).collect()
-}
-
 fn dictum_retires(old: &Claim, base: &[Claim], now: &[Claim]) -> bool {
     let struck = now.iter().any(|c| c.id == old.id && c.struck);
     let added = now.iter().any(|c| base.iter().all(|b| b.id != c.id));
     struck && added
 }
 
-pub fn evidence_changes(
-    root: &Path,
-    world: &World,
-    span: &Span,
-    completed: &[&Doc],
-    only: Option<&str>,
-) -> Vec<Finding> {
+/// A dictum rule whose referenced test changed is an error unless the dictum strikes the
+/// rule and adds a new id in the same range.
+pub fn dictum_changes(root: &Path, world: &World, span: &Span, only: Option<&str>) -> Vec<Finding> {
     let base = span.base.as_str();
     let short = &base[..base.len().min(8)];
     let changed_files: HashSet<&str> = span.files.iter().map(String::as_str).collect();
     let mut regions = Regions::new(root, base);
     let mut findings = Vec::new();
-    for site in change_sites(root, world) {
-        let spec = site.doc;
-        let path = &site.path;
+    for dictum in world.docs().iter().filter(|d| d.doc_type == "dictum") {
+        let now = dictum.index_claims(root);
+        let path = &dictum.path;
         let mentions = |file: &str| {
-            site.now
-                .iter()
+            now.iter()
                 .any(|c| c.receipts.iter().any(|r| clean(&r.path) == file))
         };
         if only.is_some_and(|file| !mentions(file)) {
@@ -472,22 +425,15 @@ pub fn evidence_changes(
         let Some(at_base) = git_output(root, &["show", &format!("{base}:./{path}")]) else {
             continue;
         };
-        let struck = struck_for(world, spec, completed);
         let base_claims = parse(&at_base).claims;
         for old in base_claims.iter().filter(|c| !c.struck) {
-            let live = site.now.iter().find(|c| c.id == old.id && !c.struck);
-            let excused = match site.hand_edited {
-                true => dictum_retires(old, &base_claims, &site.now),
-                false => live.is_none() || struck.contains(&old.id),
-            };
-            if excused {
+            if dictum_retires(old, &base_claims, &now) {
                 continue;
             }
+            let live = now.iter().find(|c| c.id == old.id && !c.struck);
             for r in &old.receipts {
-                if only.is_some_and(|file| clean(&r.path) != file) {
-                    continue;
-                }
-                if !changed_files.contains(clean(&r.path)) {
+                let file = clean(&r.path);
+                if only.is_some_and(|only| file != only) || !changed_files.contains(file) {
                     continue;
                 }
                 if !regions.changed(&r.path, r.symbol.as_deref()) {
@@ -502,19 +448,57 @@ pub fn evidence_changes(
                     })
                     .unwrap_or_else(|| live.map_or(old.line, |c| c.line));
                 let name = ref_name(&r.path, r.symbol.as_deref());
-                let how = match site.hand_edited {
-                    true => format!("strike {} in the dictum and add a new id", old.id),
-                    false => format!("strike {} in a delta and add a new id", old.id),
-                };
                 let message = format!(
-                    "{}: evidence {name} changed since {short}; {how}, or revert the change",
-                    old.id
+                    "{}: evidence {name} changed since {short}; strike {} in the dictum and add a new id, or revert the change",
+                    old.id, old.id
                 );
-                let finding = Finding::error(spec, path, Some(line), message)
-                    .in_part(site.part)
-                    .keyed(format!("check2:{}:{name}", old.id));
-                findings.push(finding);
+                findings.push(
+                    Finding::error(dictum, path, Some(line), message)
+                        .keyed(format!("check2:{}:{name}", old.id)),
+                );
             }
+        }
+    }
+    findings
+}
+
+/// A test that a landed delta's claim refs changed in the range. The delta is history and
+/// the test is truth, so this asks for confirmation and never blocks.
+pub fn history(
+    root: &Path,
+    world: &World,
+    span: &Span,
+    completed: &[&Doc],
+    only: Option<&str>,
+) -> Vec<Finding> {
+    let mut regions = Regions::new(root, &span.base);
+    let landed = world.landed_by_ref(completed);
+    let mut findings = Vec::new();
+    for file in span
+        .files
+        .iter()
+        .filter(|f| only.is_none_or(|o| o == f.as_str()))
+    {
+        for entry in landed.get(file.as_str()).into_iter().flatten() {
+            let r = &entry.receipt;
+            if !regions.changed(&r.path, r.symbol.as_deref()) {
+                continue;
+            }
+            let test = match &r.symbol {
+                Some(symbol) => format!("{}::{symbol}", clean(&r.path)),
+                None => clean(&r.path).to_string(),
+            };
+            let claim = cite(entry.delta, &entry.claim);
+            findings.push(
+                Finding::warning(
+                    entry.delta,
+                    entry.delta.part_path(CLAIMS_PART),
+                    Some(r.line),
+                    format!("test {test} changed; {claim} claims it; confirm intended"),
+                )
+                .in_part(CLAIMS_PART)
+                .keyed(format!("history:{claim}:{test}")),
+            );
         }
     }
     findings

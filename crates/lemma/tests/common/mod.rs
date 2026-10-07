@@ -208,11 +208,6 @@ impl Repo {
             "---\ntitle: \"Spec {n}\"\ntype: spec\nstatus: {status}\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n{tests_line}---\n\n{body}"
         );
         self.write(&format!("{}/index.md", spec_dir(n)), &content);
-        self.spec_behaviour(n, "");
-    }
-
-    pub fn spec_behaviour(&self, n: u32, body: &str) {
-        self.write(&spec_part_path(n), body);
     }
 
     pub fn delta_file(&self, n: u32, status: &str, changes: &[&str], body: &str) {
@@ -242,6 +237,12 @@ impl Repo {
     pub fn delta_tasks(&self, n: u32, body: &str) {
         self.delta_part(n, "tasks", body);
     }
+
+    /// A delta that completed before any test's range: its claims are history.
+    pub fn landed_delta(&self, claims: &str) {
+        self.delta_file(LANDED, "complete", &["SPEC-001"], INTENT);
+        self.delta_claims(LANDED, claims);
+    }
 }
 
 fn quote_all(items: &[&str]) -> String {
@@ -254,10 +255,6 @@ fn quote_all(items: &[&str]) -> String {
 
 pub fn spec_dir(n: u32) -> String {
     format!("docs/specs/SPEC-00{n}-s")
-}
-
-pub fn spec_part_path(n: u32) -> String {
-    format!("{}/behaviour.md", spec_dir(n))
 }
 
 pub fn delta_dir(n: u32) -> String {
@@ -325,6 +322,12 @@ pub fn transition_payload(from: &str, to: &str, moved: Value, context: Vec<Value
     })
     .to_string()
 }
+
+pub const LANDED: u32 = 9;
+pub const LANDED_CLAIMS: &str = "docs/deltas/DELTA-009-d/claims.md";
+pub const LANDED_CLAIM: &str =
+    "- [AC-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n";
+pub const HISTORY: &str = "test tests/store_test.rs::reopen_keeps_prior changed; DELTA-009/AC-1 claims it; confirm intended";
 
 pub const INTENT: &str = "## Intent\n\nBecause.\n";
 

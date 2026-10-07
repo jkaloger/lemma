@@ -50,10 +50,6 @@ fn adopted() -> Repo {
         .replace("governs: []", "governs: [\"src/**\"]")
         .replace("## Intent\n", "## Intent\nReopened heads keep answers.\n");
     repo.write(&format!("{}/index.md", spec_dir(1)), &spec);
-    repo.spec_behaviour(
-        1,
-        "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-    );
     repo.commit("adopt pack");
     repo
 }

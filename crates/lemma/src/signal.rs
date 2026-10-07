@@ -3,7 +3,7 @@ use crate::lint::{self, Finding, Options, Span};
 use crate::payload::Doc;
 use crate::project;
 use crate::session::say_once;
-use crate::world::{carries_claims, World};
+use crate::world::{lints_on_edit, World};
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -74,10 +74,11 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
     let governed = !store.governing(&root.join(file)).is_empty();
     let owner = owner_of(&world, file);
     let referenced = world
-        .all_sites()
+        .docs()
         .iter()
-        .flat_map(|site| &site.claims)
-        .flat_map(|claim| &claim.receipts)
+        .flat_map(|doc| world.sites(doc))
+        .flat_map(|site| site.claims)
+        .flat_map(|claim| claim.receipts)
         .any(|r| clean(&r.path) == file);
     let mut findings = Vec::new();
     if governed || referenced || owner.is_some() {
@@ -88,13 +89,8 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
         if let Ok(span) = lint::resolve_span(root, &options, None) {
             let completed = world.completed_since(root, &span.base, &span.files);
             if referenced {
-                findings.extend(lint::evidence_changes(
-                    root,
-                    &world,
-                    &span,
-                    &completed,
-                    Some(file),
-                ));
+                findings.extend(lint::dictum_changes(root, &world, &span, Some(file)));
+                findings.extend(lint::history(root, &world, &span, &completed, Some(file)));
             }
             if governed {
                 findings.extend(newly_uncovered(
@@ -194,7 +190,7 @@ fn newly_uncovered(
 
 fn owner_of<'a>(world: &'a World, file: &str) -> Option<&'a Doc> {
     world.docs().iter().find(|doc| {
-        let applies = carries_claims(doc);
+        let applies = lints_on_edit(doc);
         let owns = doc.path == file || doc.parts.iter().any(|p| doc.part_path(&p.name) == file);
         applies && owns
     })

@@ -2,16 +2,13 @@ mod common;
 use common::*;
 use serde_json::json;
 
-const CLAIM: &str =
-    "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n";
-
 fn two_specs() -> Repo {
     let repo = Repo::new();
     repo.git(&["branch", "-M", "main"]);
     repo.write("a/x.rs", "fn x() {}\n");
     repo.write("b/y.rs", "fn y() {}\n");
     repo.spec_file(1, "active", &["a/**"], "## Intent\n\nA.\n");
-    repo.spec_behaviour(1, CLAIM);
+    repo.landed_delta(LANDED_CLAIM);
     repo.spec_file(2, "active", &["b/**"], "## Intent\n\nB.\n");
     repo.commit("specs");
     repo
@@ -130,7 +127,7 @@ mod on_a_branch {
     }
 
     #[test]
-    fn a_changed_evidence_region_is_an_error_naming_the_claim() {
+    fn a_changed_test_a_landed_delta_claims_does_not_block() {
         let repo = two_specs();
         branch(&repo);
         repo.write(
@@ -140,19 +137,19 @@ mod on_a_branch {
 
         let run = stop(&repo);
 
-        assert_eq!(run.code, 2);
-        assert!(run.stderr.contains("AC-S1-1: evidence"), "{}", run.stderr);
+        assert_eq!((run.code, run.stderr.as_str()), (0, ""));
     }
 
     #[test]
     fn an_unresolved_ref_is_an_error_but_a_claim_without_a_ref_is_not() {
         let repo = two_specs();
         branch(&repo);
-        repo.spec_behaviour(1, "- [AC-S1-2] Nothing proves this.\n");
+        repo.delta_file(1, "in-progress", &["SPEC-001"], "## Intent\n\nOne.\n");
+        repo.delta_claims(1, "- [AC-1] Nothing proves this yet.\n");
         assert_eq!(stop(&repo).code, 0);
         assert_eq!(stop(&repo).stderr, "");
 
-        repo.spec_behaviour(1, "- [AC-S1-2] Gone.\n  @ref tests/store_test.rs#missing\n");
+        repo.delta_claims(1, "- [AC-1] Gone.\n  @ref tests/store_test.rs#missing\n");
         let run = stop(&repo);
 
         assert_eq!(run.code, 2);
@@ -160,9 +157,10 @@ mod on_a_branch {
     }
 
     #[test]
-    fn a_broken_ref_in_an_untouched_spec_is_silent() {
+    fn a_broken_ref_in_an_untouched_delta_is_silent() {
         let repo = two_specs();
-        repo.spec_behaviour(2, "- [AC-S2-1] Gone.\n  @ref b/y.rs#y\n");
+        repo.delta_file(2, "in-progress", &["SPEC-002"], "## Intent\n\nTwo.\n");
+        repo.delta_claims(2, "- [AC-1] Gone.\n  @ref b/y.rs#y\n");
         repo.commit("pre-existing broken ref");
         branch(&repo);
         repo.write("a/x.rs", "fn x() { 1; }\n");
@@ -186,9 +184,10 @@ mod on_a_branch {
     }
 
     #[test]
-    fn a_broken_ref_in_a_spec_governing_a_touched_file_is_an_error() {
+    fn a_broken_ref_in_a_delta_changing_the_spec_of_a_touched_file_is_an_error() {
         let repo = two_specs();
-        repo.spec_behaviour(2, "- [AC-S2-1] Gone.\n  @ref b/y.rs#y\n");
+        repo.delta_file(2, "in-progress", &["SPEC-002"], "## Intent\n\nTwo.\n");
+        repo.delta_claims(2, "- [AC-1] Gone.\n  @ref b/y.rs#y\n");
         repo.commit("pre-existing broken ref");
         branch(&repo);
         repo.write("b/y.rs", "fn y() { 2; }\n");
