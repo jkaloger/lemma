@@ -1,12 +1,15 @@
 use serde::Deserialize;
+use serde_json::Value;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const DEFAULT_RUNNER: &str = "claude -p --output-format json";
+const DEFAULT_RUNNER: &str = "claude -p --output-format json --json-schema {schema}";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;
+const SCHEMA: &str = "{schema}";
+const SCHEMA_FILE: &str = "{schema_file}";
 const STDERR_TAIL_LINES: usize = 5;
 const POLL: Duration = Duration::from_millis(20);
 
@@ -93,14 +96,75 @@ fn tail(text: &str) -> String {
     lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join("\n")
 }
 
+#[derive(Debug)]
+pub struct Reply {
+    pub text: String,
+    structured: Option<Value>,
+}
+
+impl Reply {
+    pub fn json(&self) -> Result<Value, String> {
+        match &self.structured {
+            Some(value) => Ok(value.clone()),
+            None => json_reply(&self.text),
+        }
+    }
+}
+
+struct Argv {
+    words: Vec<String>,
+    _schema_file: Option<tempfile::NamedTempFile>,
+}
+
+fn with_schema(words: Vec<String>, schema: Option<&Value>) -> Result<Argv, String> {
+    let uses = |placeholder: &str| words.iter().any(|w| w.contains(placeholder));
+    let (inline, file) = (uses(SCHEMA), uses(SCHEMA_FILE));
+    if !inline && !file {
+        return Ok(Argv {
+            words,
+            _schema_file: None,
+        });
+    }
+    let schema =
+        schema.ok_or("runner command uses a schema placeholder but no schema was given")?;
+    let compact = schema.to_string();
+    let schema_file = match file {
+        true => {
+            let mut handle = tempfile::NamedTempFile::new()
+                .map_err(|e| format!("cannot write the schema file: {e}"))?;
+            handle
+                .write_all(compact.as_bytes())
+                .map_err(|e| format!("cannot write the schema file: {e}"))?;
+            Some(handle)
+        }
+        false => None,
+    };
+    let path = schema_file
+        .as_ref()
+        .map(|f| f.path().to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let words = words
+        .iter()
+        .map(|w| w.replace(SCHEMA, &compact).replace(SCHEMA_FILE, &path))
+        .collect();
+    Ok(Argv {
+        words,
+        _schema_file: schema_file,
+    })
+}
+
 pub fn run(
     command: &str,
     prompt: &str,
     root: &Path,
     env: &[(&str, &str)],
     timeout: Duration,
-) -> Result<String, String> {
-    let argv = split(command)?;
+    schema: Option<&Value>,
+) -> Result<Reply, String> {
+    let Argv {
+        words: argv,
+        _schema_file,
+    } = with_schema(split(command)?, schema)?;
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(root)
@@ -148,24 +212,50 @@ pub fn run(
     result_text(&stdout)
 }
 
-fn result_text(stdout: &str) -> Result<String, String> {
-    let reply: serde_json::Value =
+/// Claude Code's `verbose` setting turns `--output-format json` into an array of every message.
+fn result_message(output: Value) -> Result<Value, String> {
+    let Value::Array(messages) = output else {
+        return Ok(output);
+    };
+    messages
+        .into_iter()
+        .rfind(|m| m["type"] == "result")
+        .ok_or_else(|| "runner output array has no `result` message".to_string())
+}
+
+fn result_text(stdout: &str) -> Result<Reply, String> {
+    let output: Value =
         serde_json::from_str(stdout).map_err(|e| format!("runner output is not JSON: {e}"))?;
-    let text = reply["result"]
-        .as_str()
-        .ok_or("runner output has no `result` text")?;
-    match reply["is_error"].as_bool() == Some(true) {
-        true => Err(format!("runner reported an error: {text}")),
-        false => Ok(text.to_string()),
+    let output = result_message(output)?;
+    let text = output["result"].as_str();
+    let structured = Some(&output["structured_output"])
+        .filter(|v| !v.is_null())
+        .cloned();
+    let subtype = output["subtype"].as_str();
+    let failed =
+        output["is_error"].as_bool() == Some(true) || subtype.is_some_and(|s| s != "success");
+    if failed {
+        let detail = text
+            .filter(|t| !t.is_empty())
+            .or(subtype)
+            .unwrap_or("no detail");
+        return Err(format!("runner reported an error: {detail}"));
+    }
+    match (text, structured) {
+        (None, None) => Err("runner output has no `result` text".to_string()),
+        (text, structured) => Ok(Reply {
+            text: text.unwrap_or_default().to_string(),
+            structured,
+        }),
     }
 }
 
 pub fn json_reply(result: &str) -> Result<serde_json::Value, String> {
     let (Some(start), Some(end)) = (result.find('{'), result.rfind('}')) else {
-        return Err("reviewer reply has no JSON object".to_string());
+        return Err("runner reply has no JSON object".to_string());
     };
     serde_json::from_str(result.get(start..=end).unwrap_or_default())
-        .map_err(|e| format!("reviewer reply is not valid JSON: {e}"))
+        .map_err(|e| format!("runner reply is not valid JSON: {e}"))
 }
 
 #[cfg(test)]
@@ -200,8 +290,10 @@ printf '{"result": "ok", "usage": {}}'"#,
             root.path(),
             &[("LEMMA_DELTA", "DELTA-001")],
             LONG,
+            None,
         )
-        .unwrap();
+        .unwrap()
+        .text;
 
         assert_eq!(text, "ok");
         assert_eq!(
@@ -219,7 +311,9 @@ printf '{"result": "ok", "usage": {}}'"#,
         let prompt = "x".repeat(1 << 20);
 
         assert_eq!(
-            run(&command, &prompt, root.path(), &[], LONG).unwrap(),
+            run(&command, &prompt, root.path(), &[], LONG, None)
+                .unwrap()
+                .text,
             "big"
         );
     }
@@ -229,7 +323,7 @@ printf '{"result": "ok", "usage": {}}'"#,
         let (root, command) = root_with_script("sleep 5");
         let started = Instant::now();
 
-        let error = run(&command, "", root.path(), &[], Duration::from_secs(1)).unwrap_err();
+        let error = run(&command, "", root.path(), &[], Duration::from_secs(1), None).unwrap_err();
 
         assert!(error.contains("timed out after 1s"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(4));
@@ -240,7 +334,7 @@ printf '{"result": "ok", "usage": {}}'"#,
         let (root, command) =
             root_with_script("for i in 1 2 3 4 5 6 7; do echo \"line $i\" >&2; done; exit 3");
 
-        let error = run(&command, "", root.path(), &[], LONG).unwrap_err();
+        let error = run(&command, "", root.path(), &[], LONG, None).unwrap_err();
 
         assert!(error.contains("exited with 3"), "{error}");
         assert!(
@@ -255,7 +349,7 @@ printf '{"result": "ok", "usage": {}}'"#,
         let (root, command) =
             root_with_script(r#"printf '{"is_error": true, "result": "rate limited"}'"#);
 
-        let error = run(&command, "", root.path(), &[], LONG).unwrap_err();
+        let error = run(&command, "", root.path(), &[], LONG, None).unwrap_err();
 
         assert!(error.contains("rate limited"), "{error}");
     }
@@ -263,9 +357,145 @@ printf '{"result": "ok", "usage": {}}'"#,
     #[test]
     fn run_fails_on_output_that_is_not_json_or_has_no_result() {
         let (root, command) = root_with_script("echo hello");
-        assert!(run(&command, "", root.path(), &[], LONG).is_err());
+        assert!(run(&command, "", root.path(), &[], LONG, None).is_err());
         let (root, command) = root_with_script(r#"printf '{"other": 1}'"#);
-        assert!(run(&command, "", root.path(), &[], LONG).is_err());
+        assert!(run(&command, "", root.path(), &[], LONG, None).is_err());
+    }
+
+    #[test]
+    fn run_reads_the_result_message_from_verbose_array_output() {
+        let (root, command) = root_with_script(
+            r#"printf '[{"type": "system"}, {"type": "assistant"}, {"type": "result", "subtype": "success", "result": "fine"}]'"#,
+        );
+
+        let reply = run(&command, "", root.path(), &[], LONG, None).unwrap();
+
+        assert_eq!(reply.text, "fine");
+    }
+
+    #[test]
+    fn run_fails_on_verbose_array_output_without_a_result_message() {
+        let (root, command) = root_with_script(r#"printf '[{"type": "system"}]'"#);
+
+        let error = run(&command, "", root.path(), &[], LONG, None).unwrap_err();
+
+        assert!(error.contains("no `result` message"), "{error}");
+    }
+
+    #[test]
+    fn run_prefers_structured_output_and_needs_no_result_text() {
+        let (root, command) =
+            root_with_script(r#"printf '{"structured_output": {"findings": []}}'"#);
+
+        let reply = run(&command, "", root.path(), &[], LONG, None).unwrap();
+
+        assert_eq!(reply.text, "");
+        assert_eq!(reply.json().unwrap(), serde_json::json!({"findings": []}));
+    }
+
+    #[test]
+    fn a_reply_without_structured_output_falls_back_to_the_json_in_the_text() {
+        let (root, command) = root_with_script(
+            r#"printf '{"result": "Here: {\\"clean\\": true}", "structured_output": null}'"#,
+        );
+
+        let reply = run(&command, "", root.path(), &[], LONG, None).unwrap();
+
+        assert_eq!(reply.json().unwrap()["clean"], true);
+    }
+
+    #[test]
+    fn run_fails_on_a_subtype_other_than_success() {
+        let (root, command) = root_with_script(
+            r#"printf '{"subtype": "error_max_structured_output_retries", "result": ""}'"#,
+        );
+
+        let error = run(&command, "", root.path(), &[], LONG, None).unwrap_err();
+
+        assert!(
+            error.contains("error_max_structured_output_retries"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_success_subtype_is_not_a_failure() {
+        let (root, command) =
+            root_with_script(r#"printf '{"subtype": "success", "result": "fine"}'"#);
+
+        assert_eq!(
+            run(&command, "", root.path(), &[], LONG, None)
+                .unwrap()
+                .text,
+            "fine"
+        );
+    }
+
+    #[test]
+    fn schema_is_substituted_inline_into_an_argv_word() {
+        let (root, script) =
+            root_with_script(r#"printf '%s' "$1" > argv.txt; printf '{"result": "ok"}'"#);
+        let schema = serde_json::json!({"type": "object"});
+
+        run(
+            &format!("{script} --schema={{schema}}"),
+            "",
+            root.path(),
+            &[],
+            LONG,
+            Some(&schema),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("argv.txt")).unwrap(),
+            r#"--schema={"type":"object"}"#
+        );
+    }
+
+    #[test]
+    fn schema_file_names_a_file_holding_the_schema_for_the_run() {
+        let (root, script) = root_with_script(
+            r#"cat "$1" > schema-seen.txt; printf '%s' "$1" > path.txt; printf '{"result": "ok"}'"#,
+        );
+        let schema = serde_json::json!({"type": "object", "required": []});
+
+        run(
+            &format!("{script} {{schema_file}}"),
+            "",
+            root.path(),
+            &[],
+            LONG,
+            Some(&schema),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("schema-seen.txt")).unwrap(),
+            r#"{"required":[],"type":"object"}"#
+        );
+        let path = std::fs::read_to_string(root.path().join("path.txt")).unwrap();
+        assert!(!Path::new(&path).exists(), "{path} outlived the run");
+    }
+
+    #[test]
+    fn a_placeholder_without_a_schema_is_an_error() {
+        let (root, script) = root_with_script(r#"printf '{"result": "ok"}'"#);
+
+        let error = run(
+            &format!("{script} {{schema}}"),
+            "",
+            root.path(),
+            &[],
+            LONG,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("uses a schema placeholder but no schema"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -274,7 +504,10 @@ printf '{"result": "ok", "usage": {}}'"#,
 
         let config = load(root.path()).unwrap();
 
-        assert_eq!(config.runner, "claude -p --output-format json");
+        assert_eq!(
+            config.runner,
+            "claude -p --output-format json --json-schema {schema}"
+        );
         assert_eq!(config.reviewer, config.runner);
         assert_eq!(config.timeout, Duration::from_secs(1800));
     }
