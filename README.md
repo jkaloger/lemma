@@ -1,8 +1,8 @@
 # lemma
 
-A lazyspec workflow pack, a Claude Code plugin and a hooks binary for LLM-driven development. lemma verifies that implementation changes and specification changes stay mechanically connected. A delta is a set of claims; a claim names the test that settles it with an `@ref` line; a delta folds into its spec by claim id when it completes.
+A lazyspec workflow pack, a Claude Code plugin and a hooks binary for LLM-driven development. A human writes a delta: intent, design and behaviour. lemma reviews it with an agent, plans it into tasks, runs each task in a fresh agent and commits it once its claims are proved by tests. Specs hold intent only. Nothing folds: a completed delta is the record of why its tests say what they say.
 
-Design rationale is recorded in [docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md) and [docs/RFC-001-lemma.md](docs/RFC-001-lemma.md). This document states behaviour.
+Design rationale is recorded in [DECISION-001](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), [DECISION-003](docs/decisions/DECISION-003-nothing-folds-deltas-are-the-record-specs-hold-intent.md) and [RFC-001](docs/RFC-001-lemma.md). This document states behaviour. [docs/examples/tally](docs/examples/tally/README.md) shows the workflow on a small project.
 
 ## Synopsis
 
@@ -12,286 +12,238 @@ lazyspec hook trust
 claude plugin install lemma@lemma
 cargo install lemma
 
-lemma check [--base <rev>] [--trunk <name>] [--require intent|evidence|clean]... [--json|--hook]
-lemma apply [<delta>]
+lemma lint [<delta>] [--gate in-progress|complete] [--base <rev>] [--trunk <name>] [--json|--hook]
+lemma review <delta> [--dry-run]
+lemma build <delta> [--task T<n>] [--dry-run]
 lemma refs <claim>
-lemma stop
-lemma session-start
-lemma signal
-lemma migrate
+lemma session-start | lemma signal | lemma stop
 ```
 
 ## Description
 
 lemma has three parts, released together under one version number.
 
-The **pack** is a `.lazyspec.toml`, a set of document templates, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies it into a project, from a URL or from a directory checkout. The pack defines three document types in two families.
+The **pack** is a `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies it into a project.
 
-The **plugin** is a Claude Code plugin carrying two skills and the Claude Code hook entries. The lazyspec plugin is not a dependency.
+The **plugin** is a Claude Code plugin carrying hook entries only.
 
-The **binary** is a single Rust executable, `lemma`, with one subcommand per surface. lazyspec `[[hooks]]` entries and Claude Code hook commands compose its commands. It links the lazyspec engine as a crate. lemma holds no lifecycle knowledge: transitions are configured in `.lazyspec.toml`.
+The **binary** is a single Rust executable, `lemma`. It links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; lemma holds no lifecycle knowledge. Orchestration runs agents as child processes and reads their JSON output; there is no shell layer.
 
-lemma is one signal source in a stack. It owns change coverage and spec integrity. The test runner and CI own test results, the compiler, linter and formatter own code conventions, repo hooks own project-specific rules (pending tests included), and human review owns semantic adequacy. lemma never runs tests and never judges whether a test still proves its claim.
+lemma is one signal source in a stack. It owns change coverage, document shape and the connection between claims and tests. The test runner and CI own test results. Human review owns whether a test proves its claim. lemma never runs tests.
 
 ## Document types
 
-| Type       | Family        | Staleness | Statuses                               | Written by                                         |
-| ---------- | ------------- | --------- | -------------------------------------- | -------------------------------------------------- |
-| `spec`     | evergreen     | drift     | `draft` → `active`                     | humans and agents; claims by the fold only         |
-| `delta`    | point-in-time | age       | `draft` → `in-progress` → `complete`   | agents and humans                                  |
-| `decision` | point-in-time | age       | `proposed` → `accepted` → `superseded` | agents and humans; never edited after acceptance   |
+| Type         | Statuses                               | Written by                                 |
+| ------------ | -------------------------------------- | ------------------------------------------ |
+| `spec`       | `draft` → `active`                     | humans                                     |
+| `delta`      | `draft` → `in-progress` → `complete`   | humans; agents annotate, plan and build    |
+| `decision`   | `proposed` → `accepted` → `superseded` | humans and agents; not edited once accepted |
+| `convention` | `draft` → `accepted`                   | humans                                     |
+| `dictum`     | `draft` → `accepted`                   | humans                                     |
 
-A spec is `draft` while its `Intent` is proposed and no fold has been accepted, and `active` once it describes real behaviour. A human moves it; nothing automatic does.
+A **spec** is an `index.md` with `## Intent`, `## Constraints`, `## Non-goals` and `## Open questions`, a `governs` list of globs and an optional `tests` list of globs. It holds no claims. A change under its `governs` makes it drift-stale. When `tests` is absent it defaults to `**/tests/**`, `**/*_test.*`, `**/*.test.*` and `**/*.spec.*`.
 
-A spec carries `governs` globs. A change under the globs moves the document to the `stale` band. A spec also carries `tests`, a list of globs naming its test files. When `tests` is absent it defaults to `**/tests/**`, `**/*_test.*`, `**/*.test.*` and `**/*.spec.*`.
+A **delta** is the unit of work. It links each spec it changes with the relationship `changes` (`related: [- changes: SPEC-002]`); the edge `delta-changes-spec` is required. A delta is **in flight** while `draft` or `in-progress`. A `complete` delta is immutable.
 
-A **spec** is one capability, a lazyspec bundle. Its `index.md` carries frontmatter and the `Intent` section, which is required and non-empty. Its `behaviour` part (`behaviour.md`, empty at creation) is the only place a tagged claim may appear; a claim-shaped item in `index.md` is an error. A spec whose `behaviour` part is empty is valid.
+A **decision** records one choice and links what it affects or constrains. A superseding decision links the one it replaces.
 
-A **delta** is the unit of in-flight work and the only type a skill drives through its statuses. It is a bundle. Its `index.md` carries frontmatter, which links each spec it folds into, and `Intent`. Claims live in one part per fold target, named `behaviour.<spec-id>` (file `behaviour.<spec-id>.md`). Each fold target has its part, and each `behaviour.*` part names a fold target. An optional `tasks` part holds non-claim work; no hook reads it. A delta that targets a new capability creates that spec at `draft` with `Intent` only and links to it.
+The **convention** and **dictums** state the rules a project holds every change to. A dictum's rules are claims, edited by hand. When a test a rule refs must change, the rule is struck (`- ~~[ID]~~`) and a new id added in the same change.
 
-A **decision** records one consequential choice and links the spec it affects. A superseding decision links the one it replaces.
+## Delta parts
 
-A bug is a draft delta whose first claim reproduces the defect. An idea is a draft spec with `Intent` only. Neither is a type.
+A delta is a bundle of four parts.
 
-A delta is **in flight** while it is `draft` or `in-progress`. In-flight deltas against a spec are found with `lazyspec list delta`.
+| Part        | Contents                                                                                        |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| `index.md`  | Frontmatter (`changes`, `related`), `## Intent`, `## Out of scope`                              |
+| `design.md` | Prose. An `@ref` line here is a shape error                                                     |
+| `claims.md` | Claims. The part is the section; it has no heading                                              |
+| `tasks.md`  | An ordered checklist, then an optional `## Follow-ups` section with the same grammar             |
 
-## Claims and refs
-
-A **claim** is a tagged list item with a stable id inside a `behaviour` part. The part is the section; it has no `## Behaviour` heading.
+A **claim** is a list item with an id `AC-<n>`, unique within the delta:
 
 ```
-- [AC-C17-1] A reopened head keeps its prior answer until it is cut again.
-  @ref src/store.rs#reopen_keeps_prior
+- [AC-1] The balance of an account is the sum of its entries in minor units.
+  @ref tests/ledger.rs#balance_sums_entries
+- [AC-4] [intent] A balance read of one account costs one query regardless of entry count.
 ```
 
-Ids are namespaced by the delta that introduced them. The spec governing a delta claim is the target its part names; for a spec claim it is the spec. A claim carrying the marker `[intent]` is excluded from check 3.
+A claim is written first as a plain bullet without an id; `lemma review` assigns ids when it plans. The markers `[intent]` (no test can settle the claim) and `[proposed]` (added by the planner, awaiting the human) follow the id and are mutually exclusive. A **ref** is an `@ref <path>#<symbol>` line indented under a claim, naming a test file that matches a changed spec's `tests` globs and a symbol in it. An `@per <citation>` line is read as a citation and otherwise ignored. A claim is cited outside its delta as `DELTA-004/AC-2`; a dictum rule by its id.
 
-A **ref** is an `@ref <path>#<symbol>` line indented under a claim. It carries no commit and no hash. The path must match the `tests` globs of the governing spec, and the symbol must resolve in that file. A symbol in production code is not a ref. Code carries no spec ids. A ref is not evidence that the test ran or passed.
+A **task** settles claims or is a chore:
 
-The **evidence region** of a ref is the referenced symbol, attributes included. A `.rs` file uses the Rust extractor; `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` files use the TypeScript extractor and grammar. A file with no extractor is compared whole.
+```
+- [ ] T1 add `Balance` type and the `SUM` query (settles AC-1)
+- [ ] T3 wire route into the router (chore)
 
-A **claim is immutable**: its text never changes in a spec. A delta changes behaviour by striking an id, written `- ~~[ID]~~`, and adding a new id. A new claim that replaces a struck one carries its `@ref` lines. A delta claim whose id already exists in the target spec and is not struck is an error: `claims are immutable; strike <id> and add a new id`.
+## Follow-ups
+- [ ] T4 page the read in `balance()` (settles AC-2)
+```
 
-A claim that no test can settle is marked `[intent]`. Adequacy of a test against its claim is judged by the human at `complete`.
+Ids `T<n>` are unique within the delta. A checkbox line that does not match this grammar is a shape error.
 
-A pinned ref (`@<sha>`, `@{blob:…}`), a ` [forced]` marker, an `@base` line and an `@checked` line are 1.x syntax. All four are errors. A pinned ref or ` [forced]` marker prints `pinned ref; run lemma migrate`, an `@base` line prints `` `@base` line; run lemma migrate``, and an `@checked` line prints `` `@checked` line; run lemma migrate``.
+A **review line** is an annotation an agent writes and a human deletes to resolve: `@review <text>` indented under a claim or task, or `> review: <text>` as a blockquote at the end of a section.
 
-A human moving a delta `in-progress` → `complete` approves it. lazyspec writes a `reviewed: <sha>` stamp on every status change. Agents do not write it, and it does not record approval.
+## Workflow
 
-## Fold
+1. A human creates the delta, writes `Intent`, `Out of scope`, design prose and claims as plain bullets, and links the specs it changes.
+2. `lemma review <delta>` on a `draft` delta runs the reviewer. Findings are written as review lines. The human edits the delta, deletes each review line it resolves and runs `lemma review` again.
+3. When the reviewer returns no findings and no review lines remain, the same run plans: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and runs `lazyspec advance`.
+4. `lemma build <delta>` runs each unticked task in a fresh runner and commits it.
+5. `lemma review <delta>` on an `in-progress` delta reviews the diff and writes follow-up tasks. The human deletes those it rejects; `lemma build` runs the rest.
+6. `lazyspec advance` moves the delta to `complete`.
 
-The transition `in-progress` → `complete` runs `lemma apply` after the check gate. For each target spec, the fold appends the delta's claims whose ids are new and deletes the claims whose ids are struck. A struck id that the spec lacks is an error. A target spec with no `behaviour` part is an error and nothing is written. A target spec that is still `draft` produces a warning. Refs move with their claims.
+```
+$ lemma review DELTA-004
+DELTA-004 is draft: reviewing the document
+3 review lines written
 
-The fold writes the merged claim list to the spec's `behaviour` part through the lazyspec `updates` contract (`{id, part: "behaviour", hash, body}`). It never creates a spec or a part.
-
-## Checks
-
-`lemma check` runs four checks.
-
-| Check        | Reports                                                                                                                                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Coverage  | The changed governed files in the range are not all within one area, and a touched spec is not covered. A spec is covered when an in-flight (`draft` or `in-progress`) delta folds into it, or a delta folding into it became `complete` within the range (its `index.md` changed in the range and was not `complete` at the base). A change is within one area when some spec governs every changed governed file, so overlapping globs do not count as two areas; a change inside one area needs no delta.                           |
-| 2. Evidence  | For a claim present in a spec's `behaviour` part at the base, a ref whose evidence region was present at the base and is now absent or differs, unless a delta strikes that claim. Only a delta that folds into the claim's spec, in its `behaviour.<spec-id>` part, and is `in-progress` or became `complete` in the range, counts; a `draft` delta does not. At a pre-transition gate the moved delta counts as if already at its target status. A region absent at the base is not a change, so a ref that was already broken on trunk is left to check 3. Formatting and comments are normalised away. |
-| 3. Claims have evidence | A live claim, not marked `[intent]` or `[assumed]`, with no ref that resolves to a symbol in a file matching the governing spec's `tests` globs.                                                              |
-| 4. Integrity | A delta claim reusing a spec claim id without a strike; a struck id the spec lacks; a fold target that does not resolve; a fold target without its part; a part naming no fold target; a claim-shaped item in `index.md`; an invalid glob; a pinned ref; a spec's `behaviour` part edited outside a fold (below). |
-
-Check 4 also compares each spec's `behaviour` part with the base. The claims in the working tree must equal the base claims folded with every delta that became `complete` in the range (folded in id order). A delta counts only when its `index.md` changed in the range and it was not `complete` at the base, so the transition's status change and spec fold must be committed together; a fold committed apart from its completion is reported as an edit outside a fold. Claims are compared as id and the whole claim block, ignoring `@ref`, `@base` and `@checked` lines, pins and `[intent]` markers. Any difference is an error on the spec part: `spec behaviour edited outside a fold; change it through a delta`. Each ref a claim should hold (pins ignored) must still be present; adding refs is allowed. A removed or repointed ref is an error: `<claim>: ref <path>#<symbol> removed from the spec outside a fold; change it through a delta`. A change in the range to a spec's `governs` or `tests` frontmatter is a warning: `governs/tests changed in this range; review`. A spec that did not exist at the base is not compared.
-
-Two in-flight deltas striking one id produce a warning. Checks 2 and 4 and refs that do not resolve are errors. Check 3 is a warning unless required. A claim marked `[assumed]` is excluded from check 3; `--require evidence` makes each remaining `[assumed]` claim in a delta an error, and `lemma apply` refuses to fold one. An `[assumed]` claim in a spec's `behaviour` part is an error (check 4). A changed test under an `[observed]` claim reports `characterised behaviour changed; confirm the change is intended` (check 2, error).
-
-`--require` is repeatable and turns readiness into errors:
-
-`--require claims` is a deprecated alias for `intent` for one release; it prints a deprecation hint (a warning finding with `--json` and `--hook`, a stderr line otherwise).
-
-| Value      | Requires                                                                                          |
-| ---------- | ------------------------------------------------------------------------------------------------- |
-| `intent`   | `Intent` present and non-empty, every fold target resolves and has its `behaviour` part (empty allowed); no claim required |
-| `evidence` | Check 3 findings are errors; every remaining `[assumed]` claim in a delta is an error             |
-| `clean`    | No uncommitted changes in ref files or under a target's `governs` globs                           |
-
-Output is `path:line: severity: message` lines, one per finding, with the next command where one applies. Output is empty when clean. `--json` prints `{"findings": [...]}`. `--hook` reads a lazyspec payload on stdin, prints findings JSON, exits 0 and is scoped to the payload's documents.
-
-Hook mode and the range. The `validate` event has no transition and no range, so checks 1 and 2 are skipped; CI runs `lemma check --base` for them. A pre-transition gate (a payload with a transition) runs checks 1, 2 and the spec-edit rule of check 4 against the range for the moved delta, and limits their findings to the specs that delta folds into.
-
-### Base resolution
-
-The base is the revision that check 2 diffs against and that bounds the range for check 1.
-
-1. `--base <rev>` is used when given.
-2. Otherwise, with the trunk (`--trunk <name>`; by default the remote-tracking `origin/main`, else `origin/master`, else the target of `origin/HEAD`, together with local `main`, else `master`), if `git merge-base HEAD <trunk>` is not HEAD, the merge-base is used. When both a remote-tracking and a local trunk exist, the merge-base nearer to HEAD wins, so a stale local `main` or a merge of `origin/main` into a branch does not widen the range.
-3. Otherwise HEAD is on trunk (direct-to-main). `lemma stop` and `lemma signal` use the session base recorded by `lemma session-start`. The transition gate (a payload with a transition) uses the parent of the commit that first added the moved delta's `index.md`, or HEAD when the delta is uncommitted. The `validate` event uses no base.
-4. Otherwise HEAD.
-
-CI passes `--base` explicitly: the pull request base ref, or on a push to the default branch the push's `before` sha when it is an ancestor of HEAD, else the parent of HEAD (no check when HEAD has none). A push to any other branch passes `--trunk origin/<default-branch>`. Check 2 needs the base reachable, so CI fetches full history. Local signals resolve against the local trunk.
+$ lemma review DELTA-004
+DELTA-004 is draft: reviewing the document
+review clean, planning
+claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
+tasks.md: 3 tasks written
+index.md: frontmatter and headings tidied
+```
 
 ## Commands
 
-| Command                      | Invoked by                                         | Behaviour                                                              |
-| ---------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------- |
-| `lemma check`                | agents, CI                                         | Runs checks 1 to 4. Exits 2 on an error finding.                       |
-| `lemma check --hook`         | lazyspec `validate` and `pre-transition` events    | Reads a payload, prints findings JSON, exits 0.                        |
-| `lemma apply`                | lazyspec `pre-transition` event, `in-progress` → `complete` | Folds each target and returns `updates`. Errors on check 4 and on a target with no `behaviour` part. |
-| `lemma apply <delta>`        | agents                                             | Prints, per target, the ids it would add and delete. Writes nothing.   |
-| `lemma refs <claim>`         | agents                                             | Prints `<claim> <path>#<symbol> ok\|unresolved\|not-a-test` per ref, across specs and in-flight deltas. |
-| `lemma stop`                 | Claude Code `Stop` hook                            | Runs checks 1 to 3 against the session base, check 3 scoped to session-touched documents. Reports errors only. Exits 2 on error, diagnostics on stderr. |
-| `lemma session-start`        | Claude Code `SessionStart` hook                    | Records the session base. Always exits 0.                              |
-| `lemma signal`               | Claude Code `PostToolUse` hook                     | Returns per-edit context and findings. Never blocks.                   |
-| `lemma migrate`              | humans, once                                       | Rewrites 1.x documents to 2.0 syntax.                                  |
+### lint
 
-### stop
+`lemma lint` runs the coverage, history and dictum checks on the working tree against the base, and check 3 on dictums. Given a delta, it also runs the evidence and shape checks for that delta. `--gate <status>` adds the rules of the transition into `in-progress` or `complete`. Output is `path:line: severity: message`, one line per finding, empty when clean. `--json` prints `{"findings": [...]}`. Exit status is 2 on an error finding, else 0. An unknown delta or gate exits 2.
 
-`lemma stop` reads the base for its `session_id` as described under base resolution. Without a base file, or when the base is not an ancestor of HEAD, it diffs against HEAD. Its diff includes commits made in the session, tracked working-tree changes and untracked files. It reports errors only: checks 1 and 2 as in `lemma check`, check 3 scoped to the documents touched in the range (spec and delta files changed since the base, untracked included) and to specs whose `governs` cover a touched file, so a pre-existing unresolved ref in an untouched spec does not block a session. It also reports an error when a delta is `complete` in the working tree and was not `complete` at the session base (HEAD when there is no session base), including a delta new since then and one completed and committed in the session. The completion error is said once per session, recorded in the session's `.said` file, so a human who completes mid-session blocks only the first Stop after it. When `stop_hook_active` is set, it exits 0.
+`--hook` reads a lazyspec payload on stdin, prints findings JSON, exits 0 and is scoped to the payload's documents. The `validate` event has no range, so coverage, history and dictum checks are skipped. A pre-transition payload ranges from the moved delta's base; coverage and dictum findings are limited to the specs the moved delta changes, and history findings pass through. A finding about a document outside the payload carries its path in the message instead of an id.
 
-### session-start
+### review
 
-`lemma session-start` reads `session_id` and `cwd` from stdin and writes HEAD's sha to `<git-dir>/lemma/sessions/<session_id>`. It keeps an existing file, so a resumed session keeps its original base. It prints nothing and exits 0 on any failure.
+`lemma review <delta>` on a `draft` delta renders the `review-doc` prompt and runs the reviewer. The reply is `{"findings":[{"part","anchor","text"}]}`. `part` is `index`, `design`, `claims` or `tasks`. The anchor is a claim id, the exact text of a claim with no id, a task id, a heading's text, or the part name for the whole part. Every anchor is resolved before anything is written; an unknown anchor is an error naming it and nothing is written. An identical line under the same anchor is not written twice. With no findings and no review lines left, the run plans; with review lines left it prints `review clean; <n> review lines remain, resolve them and run again`.
 
-### signal
+Planning renders the `plan` prompt. The reply is `{"claims":[{"text","proposed"}],"tasks":[{"text","settles":[..]}]}`. Every bullet without an id gets `AC-<n>` in document order, its text unchanged. A planner claim whose text matches no bullet is appended as `- [AC-<n>] [proposed] <text>`. A task's `settles` entries name claims by position in the reply's `claims` (from 1), by id, or by exact text; an unresolvable entry is an error and nothing is written. Tasks are numbered after the highest existing `T<n>` and appended after the main tasks, before `## Follow-ups`. Frontmatter keys are reordered to `title, type, status, author, date, tags, related`, then the rest; `Intent` and `Out of scope` headings are normalised to `##`. Planning refuses when any task is ticked. A delta whose bullets all have ids and whose claims are all settled is only tidied and prints `already planned`.
 
-`lemma signal` reads the Claude Code `PostToolUse` payload for the Edit, Write and MultiEdit tools. It is scoped to the touched file and returns its output to the agent as `additionalContext`.
+On an `in-progress` delta, `lemma review` renders the `review-diff` prompt with the diff since the delta's base. The reply is `{"findings":[{"text","settles":[..]}]}`. Each finding is appended under `## Follow-ups` as an unticked task, created if missing, settling the ids given or a chore. A finding whose text matches an existing task is skipped. Nothing is written to `claims.md`. Any other status is an error.
 
-| Condition                                               | Output                                                                                   |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| First touch of a governed area in the session           | One line of pointers from the lazyspec graph: `<path> → SPEC-001 <title> · DECISION-001 <title>`. Ids and titles, no content. Deduped once per governed area per session. Dictums appear only when lazyspec `governing()` returns them (dictums with `governs`). |
-| The file is referenced by a ref                         | Check 2 finding, naming the claim.                                                       |
-| The file adds an uncovered area                         | Check 1 finding.                                                                         |
-| The file is a spec or delta part                        | Check 3 and 4 findings. For a spec file, also the spec-edit rule and the `governs`/`tests` warning of check 4. |
+`--dry-run` prints the assembled prompt and exits.
 
-Each message is said once per session, keyed on a stable identity rather than its text: `context:<ids of the governing documents>`, `check1:<spec-id>`, `check2:<claim>:<path>#<symbol>`, and `check4:<document>:<path>:<message>`. A later edit that changes the finding's wording (more files in the range, a shifted line number) does not say it again. Hashes of the keys are kept in `<git-dir>/lemma/sessions/<session_id>.said`. A clean edit produces no output. The base is resolved only when the file is governed, referenced by a ref, or a spec or delta file. `lemma signal` exits 0 silently on any failure.
+### build
 
-### migrate
+`lemma build <delta>` refuses a delta that is not `in-progress` and a working tree with uncommitted or untracked changes. For each unticked task in order, main tasks before follow-ups:
 
-`lemma migrate` rewrites every spec and delta part in place. It strips the pin and ` [forced]` from `@ref` lines, deletes `@base` lines, rewrites a claim with an `@base` line in a `draft` or `in-progress` delta whose id exists in its target spec (a replacement; a `complete` delta only loses the line) as a strike of the old id plus the claim under `<old-id>-R` (`-R2`, `-R3` if taken, including ids assigned earlier in the same run), and turns a claim whose only receipts are `@checked` lines into an `[intent]` claim. It prints each file it wrote, followed by one indented line per replacement rewrite. It is idempotent.
+1. The `build` prompt is rendered with the task and the claims it settles, and the runner runs with `LEMMA_DELTA` and `LEMMA_TASK` set.
+2. `lemma lint <delta>` runs; any error stops the loop.
+3. Unless the task is a chore, each claim it settles is `[intent]`, or has at least one ref and every ref resolves.
+4. The task is ticked, then `git add -A` and `git commit -m "<delta> T<n>: <text>"`.
 
-## Hooks
+Any failure prints the reason and `stopped. T<n> left unticked; working tree kept.`, and exits 2. The tree is never reset. A re-run resumes at the first unticked task. `--task T<n>` runs one task. When no task is left the output is `all tasks complete`.
 
-The pack's `[[hooks]]` entries compose lemma commands. lazyspec runs the entries for one event in declaration order and stops at the first error, so `lemma apply` never writes after a failed check.
+```
+$ lemma build DELTA-004
+T1 add `Balance` type and the `SUM` query (settles AC-1)
+   runner: 2m04s, 6 files
+   lint: clean
+   AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
+   commit 3f1c9a2 DELTA-004 T1: add `Balance` type and the `SUM` query
+```
 
-| Event            | Transition                   | Runs                                                                |
-| ---------------- | ---------------------------- | ------------------------------------------------------------------- |
-| `validate`       |                              | `lemma check --hook`                                                |
-| `pre-transition` | `draft` → `in-progress`      | `lemma check --hook --require intent`                               |
-| `pre-transition` | `in-progress` → `complete`   | `lemma check --hook --require evidence --require clean`, then `lemma apply` |
+`--dry-run` prints the prompt for the first unticked task, or the named one, and exits.
 
-The `validate` entry applies to `spec`, `delta` and `decision`. The `pre-transition` entries apply to `delta` and load `spec` and `delta` as context. `lazyspec validate` exits 2 when any finding has error severity.
+### refs
 
-The plugin's `hooks.json` registers three Claude Code hooks, each a no-op when `lemma` is not on `PATH`.
+`lemma refs <claim>` prints `<citation> <path>#<symbol> ok|unresolved|not-a-test` for each ref of the claim. `DELTA-004/AC-2` names one delta's claim; a bare id matches it in every delta, complete ones included, and every dictum. Exit status is 2 when a ref does not resolve or the claim is unknown.
 
-| Hook           | Matcher                  | Runs                  |
-| -------------- | ------------------------ | --------------------- |
-| `SessionStart` |                          | `lemma session-start` |
-| `PostToolUse`  | `Edit\|Write\|MultiEdit` | `lemma signal`        |
-| `Stop`         |                          | `lemma stop`          |
+### session-start, signal, stop
 
-Signals escalate: the same checks run per edit (said once, never blocking), at Stop (error, scoped to the session), and at the transition gate and in CI (error).
+These are Claude Code hooks and are not typed.
 
-## Skills
+`lemma session-start` writes HEAD's sha to `<git-dir>/lemma/sessions/<session_id>`. An existing file is kept, so a resumed session keeps its base. It prints nothing and exits 0.
 
-| Skill         | Covers                                                                                                                                  |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `lemma:entry` | Dispatch. If an in-progress delta exists, resumes it under `delta`. Otherwise routes by the prompt. Does not classify fix, chore or refactor. |
-| `lemma:delta` | build, fix, chore, refactor, spike, adopt                                                                                               |
+`lemma signal` reads the `PostToolUse` payload for Edit, Write and MultiEdit and returns `additionalContext` scoped to the touched file:
 
-Each `delta` workflow is a reference file loaded on demand. Orientation prompts (explain, orient, investigate, review) have no skill.
+| Condition                                           | Output                                                                                                    |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| First touch of a governed area in the session       | One line of pointers: governing specs, decisions that affect or constrain them, dictums, each in-flight delta that changes a governing spec with its bundle directory and parts, and that delta's `related` documents |
+| The file is referenced by a landed delta or dictum  | History or dictum finding                                                                                 |
+| The file adds an uncovered area                     | Coverage finding                                                                                          |
+| The file is a spec, dictum or in-flight delta part  | Findings for that document                                                                                |
 
-The `adopt` workflow is the first delta into a spec whose `behaviour` part is empty, over code that already has tests. Its claims state what the existing tests settle, its refs name existing test symbols, a characterisation test is added only for a claim with none, and production code does not change.
+Each message is said once per session, keyed on a stable identity and recorded in `<git-dir>/lemma/sessions/<session_id>.said`. `lemma signal` exits 0 on any failure.
 
-A chore stays inside one `governs` area and does not change a test referenced by a landed spec claim; check 2 reports it. A change to such a test is a delta that strikes the claim and adds a new id.
+`lemma stop` reports error findings only, on stderr, and exits 2 when there are any. It runs coverage and dictum checks against the session base, and the evidence check on the documents touched in the session: specs, dictums and in-flight deltas whose files changed or whose specs govern a changed file. It also reports a delta that is `complete` and was not at the session base, once per session: completing a delta is the human's step. When `stop_hook_active` is set it exits 0.
 
-The human decision point is the transition `in-progress` → `complete`. The agent drives `draft` → `in-progress` and works until every claim has a ref. Readiness for review is derived: the delta is `in-progress` and `lemma check --require evidence --require clean` is clean. The fold runs with the transition to `complete`.
+## Checks
+
+| Check    | Rule                                                                                                          | Severity |
+| -------- | ------------------------------------------------------------------------------------------------------------- | -------- |
+| coverage | The changed governed files are not all within one spec's `governs`, and a touched spec has no in-flight delta that `changes` it and no delta that `changes` it completed within the range | error    |
+| history  | A test changed whose region a landed delta's claim refs: `test <path>::<symbol> changed; DELTA-004/AC-2 claims it; confirm intended` | warning  |
+| dictum   | A test changed that a dictum rule refs, and the dictum did not strike the rule and add a new id in the range   | error    |
+| evidence | A written ref that does not resolve or is not a test. At `--gate complete`, a claim with no ref that is not `[intent]` | error    |
+| shape    | Below                                                                                                         | error    |
+
+A **landed** delta is `complete` and was not completed within the range. A test region is the referenced symbol, attributes included; `.rs` files use the Rust extractor, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` the TypeScript extractor, and other files compare whole. Formatting and comments are normalised away. A region absent at the base is not a change.
+
+Shape rules applied to a named delta:
+
+| When                   | Rule                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| always                 | claim ids are `AC-<n>` and unique; task ids unique; task lines match the grammar; a task settles only claims that exist; no `@ref` in `design.md`; `[proposed]` and `[intent]` not together |
+| `--gate in-progress`   | the always rules; `Intent` present and non-empty; at least one claim; every bullet has an id; every claim settled by exactly one main task; no review lines in any part; no `[proposed]` claims |
+| `--gate complete`      | the in-progress rules; every task ticked, follow-ups included; every claim has a ref that resolves, or is `[intent]`        |
+
+An invalid `governs` or `tests` glob is an error. An unknown `{{key}}` in a pack prompt file is an error.
+
+### Base resolution
+
+The base is the revision the history and dictum checks diff against and that bounds the range for coverage.
+
+1. `--base <rev>` is used when given.
+2. Otherwise, with the trunk (`--trunk <name>`; by default the remote-tracking `origin/main`, else `origin/master`, else the target of `origin/HEAD`, together with local `main`, else `master`), if `git merge-base HEAD <trunk>` is not HEAD, the merge-base is used. When both a remote-tracking and a local trunk exist, the merge-base nearer to HEAD is used.
+3. Otherwise HEAD is on trunk. `lemma stop` and `lemma signal` use the session base recorded by `lemma session-start`. A transition gate and `lemma review` on an in-progress delta use the parent of the commit that first added the delta's `index.md`, or HEAD when the delta is uncommitted. The `validate` event uses no base.
+4. Otherwise HEAD.
 
 ## Files
 
-| Path                    | Contents                                                                                           |
-| ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `.lazyspec.toml`        | type definitions, `[governs]`, `[[hooks]]` entries pointing at `lemma`                             |
-| `.lazyspec/templates/`  | one template per type, with the spec `tests` key; `spec/` (`index.md`, `behaviour.md`) and `delta/` (`index.md`) are directory templates |
-| `docs/convention/`      | seed `CONVENTION` and dictums `DICTUM-001-testing`, `DICTUM-002-code-change`                       |
-| `plugin/`               | Claude Code plugin: skills (the delta skill's `references/` hold one file per workflow) and hook entries |
-| `crates/lemma/`         | the binary                                                                                         |
-| `docs/decisions/`       | DECISION-001, the scope of 2.0                                                                     |
-| `docs/RFC-001-lemma.md` | founding design and rationale                                                                      |
-| `docs/ci/lemma-validate.yml` | CI job template                                                                               |
+### lemma.toml
 
-## Exit status
-
-`lemma check` exits 2 when any finding has error severity, and 0 otherwise. With `--hook` it exits 0 and lazyspec applies severity. `lemma apply` without an argument prints `updates` and findings as JSON and exits 0; with an argument it exits 2 on error. `lemma refs` exits 2 when a ref is `unresolved` or `not-a-test`. `lemma stop` exits 2 on an error finding and writes diagnostics to stderr. `lemma session-start`, `lemma signal` and `lemma migrate` exit 0 on success. `lemma stop` prints a hint to stderr and exits 0 when `lazyspec --version` is missing or older than 0.15; `lemma signal` does not check the version and exits 0 silently on any failure; the other commands exit 2.
-
-## Examples
-
-Adopt the pack in a repository and trust its hooks. A directory replaces the URL for a local checkout:
-
-```
-lazyspec init --template https://github.com/jkaloger/lemma
-lazyspec init --template /path/to/lemma
-lazyspec hook trust
+```toml
+runner   = "claude -p --output-format json --permission-mode acceptEdits"
+reviewer = "claude -p --output-format json --model opus"
+timeout  = 1800
 ```
 
-Check the working tree against the merge-base with `main`:
+| Key        | Default                          | Effect                                    |
+| ---------- | -------------------------------- | ----------------------------------------- |
+| `runner`   | `claude -p --output-format json` | Command `lemma build` runs per task        |
+| `reviewer` | the `runner` value               | Command `lemma review` runs                |
+| `timeout`  | `1800`                           | Seconds before a run is killed             |
 
-```
-lemma check
-```
+An unknown key is an error. A command is split into words on whitespace, with single and double quotes grouping; no shell is involved. The prompt is written to stdin and the working directory is the repository root. Stdout is parsed as JSON: `result` is the reply text, and `"is_error": true` or a non-zero exit is a failure. Other fields are ignored. A reviewer reply is the first JSON object found in `result`.
 
-Check readiness for review:
+### Prompts
 
-```
-lemma check --require evidence --require clean
-```
+`.lazyspec/prompts/review-doc.md`, `plan.md`, `review-diff.md` and `build.md` are rendered for each run. The binary carries the same defaults and uses a pack file when present. `{{key}}` is replaced by:
 
-Check a pull request in CI:
+| Key           | Value                                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------------------- |
+| `convention`  | The convention's body                                                                                     |
+| `dictums`     | Dictums with no `governs`, and dictums whose `governs` overlap a changed spec's `governs`; all dictums if none qualify |
+| `spec_intent` | Each changed spec's `index.md` body                                                                       |
+| `related`     | The body of each document in the delta's `related` other than `changes`                                   |
+| `delta`, `design`, `claims`, `tasks` | The delta's parts                                                                  |
+| `task`        | The task line and the claims it settles (build)                                                           |
+| `diff`        | `git diff <base>` limited to the changed specs' `governs` and test globs (review-diff)                    |
 
-```
-lemma check --base origin/main
-```
+Two glob lists overlap when they share a glob, when one glob matches the other's text, or when some repository file matches a glob from each. An unknown key refuses `review` and `build` at startup.
 
-List the refs of a claim:
+### Pack hooks
 
-```
-lemma refs AC-C17-1
-```
+| Event            | Transition                 | Runs                                     |
+| ---------------- | -------------------------- | ---------------------------------------- |
+| `validate`       |                            | `lemma lint --hook`                      |
+| `pre-transition` | `draft` → `in-progress`    | `lemma lint --hook --gate in-progress`   |
+| `pre-transition` | `in-progress` → `complete` | `lemma lint --hook --gate complete`      |
 
-Preview the fold of a delta:
+The plugin's `hooks.json` registers `SessionStart` → `lemma session-start`, `PostToolUse` (`Edit|Write|MultiEdit`) → `lemma signal` and `Stop` → `lemma stop`, each a no-op when `lemma` is not on `PATH`.
 
-```
-lemma apply C17
-```
+### CI
 
-Migrate a 1.x repository:
-
-```
-lemma migrate
-```
-
-## Migration from 1.x
-
-2.0 is a format break. `lemma migrate` rewrites documents in place. The `validate`, `pre-transition`, `re-pin`, `receipt` and `base` subcommands are removed, along with receipt freshness, symbol drift, `[forced]`, `@checked`, `@base` and pending-test detection. The pack's `[[hooks]]` entries change to those under Hooks; an adopting repository replaces its `.lazyspec.toml` hooks and `hooks.json` with the 2.0 pack and plugin.
-
-## Install
-
-Each part uses its native channel.
-
-```
-lazyspec init --template https://github.com/jkaloger/lemma   # pack; or a directory: /path/to/lemma
-claude plugin install lemma@lemma                          # skills and Claude Code hooks
-cargo install lemma                                          # binary
-```
-
-Add `.lazyspec/cache/` to `.gitignore`. Hook trust is per machine: each clone runs `lazyspec hook trust`, and CI runs it before `lazyspec validate`, as `docs/ci/lemma-validate.yml` does.
-
-The skills and the SessionStart, PostToolUse and Stop hooks load only after the Claude Code session is restarted.
-
-lemma requires lazyspec 0.15 or later.
-
-The binary is built with `opt-level = "z"`, fat LTO, one codegen unit, `panic = "abort"`, stripped.
-
-## Status
-
-Release 2.0 implements DECISION-001. Refs are unpinned and claims are immutable. `lemma check` replaces `lemma validate` and `lemma pre-transition`, and `lemma apply` and `lemma refs` join it. `lemma signal` adds per-edit signals and context pointers. `lemma migrate` converts 1.x documents. Extractor fixes (Rust attributes, `it`/`test` blocks by title) belong to lazyspec; lemma uses the 0.15 extractors as they are.
-
-## See also
-
-- [docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), the scope of 2.0
-- [docs/RFC-001-lemma.md](docs/RFC-001-lemma.md), the founding design
-- [lazyspec](https://github.com/jkaloger/lazyspec), the engine: document types, `governs`, `@ref`, `[[hooks]]`
-- [hydra](https://github.com/jkaloger/hydra), the interview tool whose trees are the long-form rationale record
+`docs/ci/lemma-validate.yml` runs `lemma lint` with `--base` set to the pull request base ref, or on a push to the default branch to the push's `before` sha when it is an ancestor of HEAD, else the parent of HEAD. A push to another branch passes `--trunk origin/<default-branch>`. The job fetches full history, then runs `lazyspec validate`.
