@@ -2,19 +2,18 @@ use crate::annotate::annotate;
 use crate::claims::review_lines;
 use crate::payload::{Doc, CLAIMS_PART, DESIGN_PART, INDEX_PART, TASKS_PART};
 use crate::plan;
+use crate::reviews;
 use crate::runner;
 use crate::schema;
 use crate::tasks;
-use serde::Deserialize;
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const PARTS: [&str; 4] = [INDEX_PART, DESIGN_PART, CLAIMS_PART, TASKS_PART];
 const ERROR_SEPARATOR: &str = "\nlemma: ";
 
 pub enum Outcome {
-    Remaining(usize),
-    Planned(plan::Report),
+    Clean(usize),
     Written(usize),
 }
 
@@ -23,12 +22,12 @@ struct Reply {
     findings: Vec<Finding>,
 }
 
-#[derive(Deserialize)]
-struct Finding {
-    part: String,
+#[derive(Deserialize, Serialize, Clone, PartialEq)]
+pub struct Finding {
+    pub part: String,
     #[serde(default)]
-    anchor: String,
-    text: String,
+    pub anchor: String,
+    pub text: String,
 }
 
 struct Draft {
@@ -44,6 +43,7 @@ fn parse_findings(reply: serde_json::Value) -> Result<Vec<Finding>, String> {
         if !PARTS.contains(&finding.part.as_str()) {
             return Err(format!("reviewer reply: unknown part `{}`", finding.part));
         }
+        finding.anchor = finding.anchor.trim().to_string();
         finding.text = finding
             .text
             .split_whitespace()
@@ -94,11 +94,18 @@ fn apply(root: &Path, delta: &Doc, findings: &[Finding]) -> Result<(Vec<Draft>, 
     }
 }
 
+pub fn remaining(delta: &Doc) -> usize {
+    PARTS
+        .iter()
+        .map(|part| review_lines(delta.part_text(part)).len())
+        .sum()
+}
+
 pub fn review_draft(
     root: &Path,
     delta: &Doc,
     prompt: &str,
-    plan_values: &BTreeMap<&str, String>,
+    resolved: &[Finding],
     config: &runner::Config,
 ) -> Result<Outcome, String> {
     let env = [("LEMMA_DELTA", delta.id.as_str())];
@@ -111,9 +118,12 @@ pub fn review_draft(
         config.timeout,
         Some(&schema),
     )?;
-    let findings = parse_findings(reply.json()?)?;
+    let findings: Vec<Finding> = parse_findings(reply.json()?)?
+        .into_iter()
+        .filter(|finding| !resolved.contains(finding))
+        .collect();
     if findings.is_empty() {
-        return clean(root, delta, plan_values, config);
+        return Ok(Outcome::Clean(remaining(delta)));
     }
     let (drafts, added) = apply(root, delta, &findings)?;
     for draft in drafts.iter().filter(|d| d.current != d.original) {
@@ -121,23 +131,8 @@ pub fn review_draft(
         std::fs::write(&path, &draft.current)
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }
+    reviews::record(root, &delta.id, &findings);
     Ok(Outcome::Written(added))
-}
-
-fn clean(
-    root: &Path,
-    delta: &Doc,
-    plan_values: &BTreeMap<&str, String>,
-    config: &runner::Config,
-) -> Result<Outcome, String> {
-    let remaining: usize = PARTS
-        .iter()
-        .map(|part| review_lines(delta.part_text(part)).len())
-        .sum();
-    if remaining > 0 {
-        return Ok(Outcome::Remaining(remaining));
-    }
-    plan::plan(root, delta, plan_values, config).map(Outcome::Planned)
 }
 
 #[derive(Deserialize)]

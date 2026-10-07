@@ -12,6 +12,7 @@ mod prompts;
 mod range;
 mod refs;
 mod review;
+mod reviews;
 mod runner;
 mod schema;
 mod session;
@@ -66,6 +67,13 @@ enum Command {
     },
     /// Review a delta: prose while draft, the diff while in progress
     Review {
+        delta: String,
+        /// Print the assembled prompt and exit
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Plan a reviewed draft delta into claims and tasks
+    Plan {
         delta: String,
         /// Print the assembled prompt and exit
         #[arg(long)]
@@ -245,27 +253,44 @@ fn print_prompt(
     }
 }
 
-fn review_draft_command(
-    start: &Startup,
-    prompt: &str,
-    plan_values: &std::collections::BTreeMap<&str, String>,
-) -> ExitCode {
+fn next(step: impl std::fmt::Display) {
+    println!("next: {step}");
+}
+
+fn lines_remain(n: usize) -> String {
+    match n {
+        1 => "1 review line remains".to_string(),
+        n => format!("{n} review lines remain"),
+    }
+}
+
+fn review_draft_command(start: &Startup, prompt: &str, resolved: &[review::Finding]) -> ExitCode {
     let Startup {
         root,
         delta,
         config,
         ..
     } = start;
-    println!("{} is draft: reviewing the document", delta.id);
-    match review::review_draft(root, delta, prompt, plan_values, config) {
-        Ok(review::Outcome::Remaining(n)) => {
-            println!("review clean; {n} review lines remain, resolve them and run again")
+    let id = &delta.id;
+    println!("{id} is draft: reviewing the document");
+    match review::review_draft(root, delta, prompt, resolved, config) {
+        Ok(review::Outcome::Clean(0)) => {
+            println!("review clean");
+            next(format!("lemma plan {id}"));
         }
-        Ok(review::Outcome::Planned(report)) => {
-            report.lines().iter().for_each(|line| println!("{line}"))
+        Ok(review::Outcome::Clean(n)) => {
+            println!("review clean; {}", lines_remain(n));
+            next(format!("resolve them, then lemma plan {id}"));
         }
-        Ok(review::Outcome::Written(1)) => println!("1 review line written"),
-        Ok(review::Outcome::Written(n)) => println!("{n} review lines written"),
+        Ok(review::Outcome::Written(n)) => {
+            match n {
+                1 => println!("1 review line written"),
+                n => println!("{n} review lines written"),
+            }
+            next(format!(
+                "resolve each review line (edit, then delete the line) and run lemma review {id} again, or lemma plan {id} once none remain"
+            ));
+        }
         Err(message) => return fail(message),
     }
     ExitCode::SUCCESS
@@ -292,8 +317,19 @@ fn review_diff_command(
         delta.id
     );
     match review::review_diff(root, delta, &prompt, config) {
-        Ok(1) => println!("1 follow-up task written"),
-        Ok(n) => println!("{n} follow-up tasks written"),
+        Ok(n) => {
+            match n {
+                1 => println!("1 follow-up task written"),
+                n => println!("{n} follow-up tasks written"),
+            }
+            match n {
+                0 => next(format!("lazyspec advance {} to complete", delta.id)),
+                _ => next(format!(
+                    "delete the follow-ups you reject, then lemma build {}",
+                    delta.id
+                )),
+            }
+        }
         Err(message) => return fail(message),
     }
     ExitCode::SUCCESS
@@ -309,11 +345,17 @@ fn review_command(id: &str, dry_run: bool) -> ExitCode {
     } = &start;
     let mut values = context::assemble(store, root, delta);
     match (delta.status.as_str(), dry_run) {
-        ("draft", true) => print_prompt(prompts::Prompt::ReviewDoc, root, &values),
-        ("draft", false) => match prompts::rendered(prompts::Prompt::ReviewDoc, root, &values) {
-            Ok(prompt) => review_draft_command(&start, &prompt, &values),
-            Err(message) => fail(message),
-        },
+        ("draft", dry_run) => {
+            let resolved = reviews::resolved(root, delta);
+            values.insert("resolved", reviews::render(&resolved));
+            if dry_run {
+                return print_prompt(prompts::Prompt::ReviewDoc, root, &values);
+            }
+            match prompts::rendered(prompts::Prompt::ReviewDoc, root, &values) {
+                Ok(prompt) => review_draft_command(&start, &prompt, &resolved),
+                Err(message) => fail(message),
+            }
+        }
         ("in-progress", dry_run) => {
             let world = world::World::load(store, None);
             let base = context::diff_base(root, delta);
@@ -325,6 +367,53 @@ fn review_command(id: &str, dry_run: bool) -> ExitCode {
         }
         _ => fail("review needs a draft or in-progress delta"),
     }
+}
+
+fn plan_command(id: &str, dry_run: bool) -> ExitCode {
+    let start = match startup(id) {
+        Ok(start) => start,
+        Err(message) => return fail(message),
+    };
+    let Startup {
+        root,
+        store,
+        delta,
+        config,
+    } = &start;
+    if delta.status != "draft" {
+        return fail(format!(
+            "plan needs a draft delta; {} is {}",
+            delta.id, delta.status
+        ));
+    }
+    let remaining = review::remaining(delta);
+    if remaining > 0 {
+        return fail(format!(
+            "{}; resolve them before planning",
+            lines_remain(remaining)
+        ));
+    }
+    let values = context::assemble(store, root, delta);
+    if dry_run {
+        return print_prompt(prompts::Prompt::Plan, root, &values);
+    }
+    match plan::plan(root, delta, &values, config) {
+        Ok(report) => {
+            report.lines().iter().for_each(|line| println!("{line}"));
+            next(format!(
+                "read the diff, accept or reject each [proposed] claim, then lazyspec advance {}",
+                delta.id
+            ));
+            ExitCode::SUCCESS
+        }
+        Err(message) => fail(message),
+    }
+}
+
+fn next_after_build(id: &str) {
+    next(format!(
+        "lemma review {id} to review the diff, or lazyspec advance {id} to complete"
+    ));
 }
 
 fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
@@ -340,7 +429,10 @@ fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
     }
     if !dry_run {
         return match build::run(&start.root, &start.delta.id, task, &start.config) {
-            Ok(build::Outcome::Complete) => ExitCode::SUCCESS,
+            Ok(build::Outcome::Complete) => {
+                next_after_build(&start.delta.id);
+                ExitCode::SUCCESS
+            }
             Ok(build::Outcome::Stopped) => ExitCode::from(2),
             Err(message) => fail(message),
         };
@@ -358,6 +450,7 @@ fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
             Some(task) => task,
             None => {
                 println!("all tasks complete");
+                next_after_build(&delta.id);
                 return ExitCode::SUCCESS;
             }
         },
@@ -426,6 +519,7 @@ fn main() -> ExitCode {
             hook,
         } => lint_command(delta, base, trunk, gate, json, hook),
         Command::Review { delta, dry_run } => review_command(&delta, dry_run),
+        Command::Plan { delta, dry_run } => plan_command(&delta, dry_run),
         Command::Build {
             delta,
             task,

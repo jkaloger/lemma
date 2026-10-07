@@ -136,7 +136,13 @@ fn build_dry_run_with_every_task_ticked_says_all_complete() {
 
     let run = repo.run(&["build", "DELTA-001", "--dry-run"], "");
 
-    assert_eq!((run.code, run.stdout.trim()), (0, "all tasks complete"));
+    assert_eq!(
+        (run.code, run.stdout.as_str()),
+        (
+            0,
+            "all tasks complete\nnext: lemma review DELTA-001 to review the diff, or lazyspec advance DELTA-001 to complete\n"
+        )
+    );
 }
 
 #[test]

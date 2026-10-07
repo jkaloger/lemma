@@ -78,7 +78,7 @@ fn findings_land_under_the_right_anchor_in_each_part() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         run.stdout,
-        "DELTA-001 is draft: reviewing the document\n6 review lines written\n"
+        "DELTA-001 is draft: reviewing the document\n6 review lines written\nnext: resolve each review line (edit, then delete the line) and run lemma review DELTA-001 again, or lemma plan DELTA-001 once none remain\n"
     );
     assert_eq!(
         repo.read(&delta_part_path(1, "index")),
@@ -211,7 +211,7 @@ fn zero_findings_with_review_lines_left_reports_clean_and_changes_nothing() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         run.stdout,
-        "DELTA-001 is draft: reviewing the document\nreview clean; 1 review lines remain, resolve them and run again\n"
+        "DELTA-001 is draft: reviewing the document\nreview clean; 1 review line remains\nnext: resolve them, then lemma plan DELTA-001\n"
     );
     assert_eq!(snapshot(&repo), before);
 }
@@ -228,4 +228,103 @@ fn a_failing_reviewer_is_exit_two_with_its_stderr_and_nothing_written() {
     assert!(run.stderr.contains("lemma: "), "{}", run.stderr);
     assert!(run.stderr.contains("rate limit exceeded"), "{}", run.stderr);
     assert_eq!(snapshot(&repo), before);
+}
+
+fn capturing_reply(repo: &Repo, reply: Value) {
+    repo.write(
+        "reply.json",
+        &json!({ "result": reply.to_string() }).to_string(),
+    );
+    script(repo, "cat reply.json");
+    let path = repo.path("reviewer.sh");
+    repo.write(
+        "reviewer.sh",
+        "#!/bin/sh\ncat > stdin.txt\ncat reply.json\n",
+    );
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn resolve_atomic_finding(repo: &Repo) {
+    repo.delta_claims(1, CLAIMS);
+}
+
+const ATOMIC: &str = "Say what atomic means.";
+
+#[test]
+fn a_deleted_review_line_is_passed_to_the_next_review_as_resolved() {
+    let repo = project();
+    capturing_reply(
+        &repo,
+        json!({"findings": [finding("claims", "AC-2", ATOMIC)]}),
+    );
+    review(&repo);
+    assert!(repo.read("stdin.txt").contains("# Already raised and resolved\n\nThe human deleted these review lines. Do not raise them again, in any wording, unless the text they were anchored to has changed.\n\n(none)\n"));
+    resolve_atomic_finding(&repo);
+    capturing_reply(&repo, json!({"findings": []}));
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        repo.read("stdin.txt")
+            .contains(&format!("- [claims / AC-2] {ATOMIC}\n")),
+        "{}",
+        repo.read("stdin.txt")
+    );
+}
+
+#[test]
+fn a_review_line_still_in_the_document_is_not_resolved() {
+    let repo = project();
+    capturing_reply(
+        &repo,
+        json!({"findings": [finding("claims", "AC-2", ATOMIC)]}),
+    );
+    review(&repo);
+    capturing_reply(&repo, json!({"findings": []}));
+
+    review(&repo);
+
+    assert!(
+        !repo
+            .read("stdin.txt")
+            .contains(&format!("[claims / AC-2] {ATOMIC}")),
+        "{}",
+        repo.read("stdin.txt")
+    );
+}
+
+#[test]
+fn a_finding_identical_to_a_resolved_one_is_dropped() {
+    let repo = project();
+    let reply = json!({"findings": [finding("claims", "AC-2", ATOMIC)]});
+    capturing_reply(&repo, reply.clone());
+    review(&repo);
+    resolve_atomic_finding(&repo);
+    capturing_reply(&repo, reply);
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.contains("review clean\n"), "{}", run.stdout);
+    assert_eq!(repo.read(&delta_part_path(1, "claims")), CLAIMS);
+}
+
+#[test]
+fn written_findings_are_recorded_once_in_the_git_dir() {
+    let repo = project();
+    reply_with(
+        &repo,
+        json!({"findings": [finding("claims", "AC-2", ATOMIC)]}),
+    );
+
+    review(&repo);
+    review(&repo);
+
+    let recorded: Value =
+        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001.json")).unwrap();
+    assert_eq!(
+        recorded,
+        json!([{"part": "claims", "anchor": "AC-2", "text": ATOMIC}])
+    );
 }

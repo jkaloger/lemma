@@ -14,6 +14,7 @@ cargo install lemma
 
 lemma lint [<delta>] [--gate in-progress|complete] [--base <rev>] [--trunk <name>] [--json|--hook]
 lemma review <delta> [--dry-run]
+lemma plan <delta> [--dry-run]
 lemma build <delta> [--task T<n>] [--dry-run]
 lemma refs <claim>
 lemma session-start | lemma signal | lemma stop
@@ -68,7 +69,7 @@ A **claim** is a list item with an id `AC-<n>`, unique within the delta:
 - [AC-4] [intent] A balance read of one account costs one query regardless of entry count.
 ```
 
-A claim is written first as a plain bullet without an id; `lemma review` assigns ids when it plans. The markers `[intent]` (no test can settle the claim) and `[proposed]` (added by the planner, awaiting the human) follow the id and are mutually exclusive. A **ref** is an `@ref <path>#<symbol>` line indented under a claim, naming a test file that matches a changed spec's `tests` globs and a symbol in it. An `@per <citation>` line is read as a citation and otherwise ignored. A claim is cited outside its delta as `DELTA-004/AC-2`; a dictum rule by its id.
+A claim is written first as a plain bullet without an id; `lemma plan` assigns ids. The markers `[intent]` (no test can settle the claim) and `[proposed]` (added by the planner, awaiting the human) follow the id and are mutually exclusive. A **ref** is an `@ref <path>#<symbol>` line indented under a claim, naming a test file that matches a changed spec's `tests` globs and a symbol in it. An `@per <citation>` line is read as a citation and otherwise ignored. A claim is cited outside its delta as `DELTA-004/AC-2`; a dictum rule by its id.
 
 A **task** settles claims or is a chore:
 
@@ -87,8 +88,8 @@ A **review line** is an annotation an agent writes and a human deletes to resolv
 ## Workflow
 
 1. A human creates the delta, writes `Intent`, `Out of scope`, design prose and claims as plain bullets, and links the specs it changes.
-2. `lemma review <delta>` on a `draft` delta runs the reviewer. Findings are written as review lines. The human edits the delta, deletes each review line it resolves and runs `lemma review` again.
-3. When the reviewer returns no findings and no review lines remain, the same run plans: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and runs `lazyspec advance`.
+2. `lemma review <delta>` on a `draft` delta runs the reviewer. Findings are written as review lines. The human edits the delta, deletes each review line it resolves and runs `lemma review` again. Review never plans; the human decides when review is done.
+3. `lemma plan <delta>` plans a `draft` delta with no review lines left: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and runs `lazyspec advance`.
 4. `lemma build <delta>` runs each unticked task in a fresh runner and commits it.
 5. `lemma review <delta>` on an `in-progress` delta reviews the diff and writes follow-up tasks. The human deletes those it rejects; `lemma build` runs the rest.
 6. `lazyspec advance` moves the delta to `complete`.
@@ -97,14 +98,22 @@ A **review line** is an annotation an agent writes and a human deletes to resolv
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
 3 review lines written
+next: resolve each review line (edit, then delete the line) and run lemma review DELTA-004 again, or lemma plan DELTA-004 once none remain
 
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
+review clean
+next: lemma plan DELTA-004
+
+$ lemma plan DELTA-004
 review clean, planning
 claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
 tasks.md: 3 tasks written
 index.md: frontmatter and headings tidied
+next: read the diff, accept or reject each [proposed] claim, then lazyspec advance DELTA-004
 ```
+
+The human types four commands: `lemma review`, `lemma plan`, `lemma build` and `lazyspec advance`. Every lemma command that does work ends with a `next:` line naming the next step; errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none.
 
 ## Commands
 
@@ -116,13 +125,21 @@ index.md: frontmatter and headings tidied
 
 ### review
 
-`lemma review <delta>` on a `draft` delta renders the `review-doc` prompt and runs the reviewer. The reply is `{"findings":[{"part","anchor","text"}]}`, and its schema is built from the delta: `part` is `index`, `design`, `claims` or `tasks`, and `anchor` is limited to what that part accepts, a claim id, the exact text of a claim with no id, a task id, a heading's text, or the part name for the whole part. Every anchor is resolved before anything is written; an unknown anchor is an error naming it and nothing is written. An identical line under the same anchor is not written twice. With no findings and no review lines left, the run plans; with review lines left it prints `review clean; <n> review lines remain, resolve them and run again`.
+`lemma review <delta>` on a `draft` delta renders the `review-doc` prompt and runs the reviewer. The reply is `{"findings":[{"part","anchor","text"}]}`, and its schema is built from the delta: `part` is `index`, `design`, `claims` or `tasks`, and `anchor` is limited to what that part accepts, a claim id, the exact text of a claim with no id, a task id, a heading's text, or the part name for the whole part. Every anchor is resolved before anything is written; an unknown anchor is an error naming it and nothing is written. An identical line under the same anchor is not written twice. Review never plans. With no findings it prints `review clean`, or `review clean; <n> review lines remain` when review lines are left.
 
-Planning first assigns `AC-<n>` to every bullet without an id, in document order, its text unchanged, in memory, and renders the `plan` prompt from that, so the planner sees the ids and does not echo claims. The reply is `{"claims":[{"text"}],"tasks":[{"text","settles":[..]}]}`. `claims` holds only new behaviour, each appended as `- [AC-<n>] [proposed] <text>`; one whose text equals an existing claim maps to that claim's id instead. A task's `settles` entries are an existing claim id or the position, from 1, of a claim in the reply's `claims`; an unresolvable entry is an error. Nothing is written, including the new ids, unless the reply is accepted. Tasks are numbered after the highest existing `T<n>` and appended after the main tasks, before `## Follow-ups`. Frontmatter keys are reordered to `title, type, status, author, date, tags, related`, then the rest; `Intent` and `Out of scope` headings are normalised to `##`. Planning refuses when any task is ticked. A delta whose bullets all have ids and whose claims are all settled is only tidied and prints `already planned`.
+When a draft review writes review lines, each written finding `{part, anchor, text}` is appended to `<git-dir>/lemma/reviews/<delta-id>.json`, without duplicates; the file is not committed. At the start of each draft review, a recorded finding whose text no longer appears in its part is resolved: the human deleted it. Resolved findings fill the `{{resolved}}` prompt value, and a reviewer finding with the same part, anchor and normalised text as a resolved one is dropped.
 
 On an `in-progress` delta, `lemma review` renders the `review-diff` prompt with the diff since the delta's base. The reply is `{"findings":[{"text","settles":[..]}]}`, with `settles` limited to live claim ids. Each finding is appended under `## Follow-ups` as an unticked task, created if missing, settling the ids given or a chore. A finding whose text matches an existing task is skipped. Nothing is written to `claims.md`. Any other status is an error.
 
-`--dry-run` prints the assembled prompt and exits.
+### plan
+
+`lemma plan <delta>` requires a `draft` delta, else it is an error (`plan needs a draft delta; <id> is <status>`). It refuses while any part has review lines (`<n> review lines remain; resolve them before planning`) and does not run the reviewer. `--dry-run` prints the assembled `plan` prompt and exits.
+
+Planning first assigns `AC-<n>` to every bullet without an id, in document order, its text unchanged, in memory, and renders the `plan` prompt from that, so the planner sees the ids and does not echo claims. The reply is `{"claims":[{"text"}],"tasks":[{"text","settles":[..]}]}`. `claims` holds only new behaviour, each appended as `- [AC-<n>] [proposed] <text>`; one whose text equals an existing claim maps to that claim's id instead. A task's `settles` entries are an existing claim id or the position, from 1, of a claim in the reply's `claims`; an unresolvable entry is an error. Nothing is written, including the new ids, unless the reply is accepted. Tasks are numbered after the highest existing `T<n>` and appended after the main tasks, before `## Follow-ups`. Frontmatter keys are reordered to `title, type, status, author, date, tags, related`, then the rest; `Intent` and `Out of scope` headings are normalised to `##`. Planning refuses when any task is ticked. A delta whose bullets all have ids and whose claims are all settled is only tidied and prints `already planned`.
+
+`--dry-run` prints the assembled prompt and exits; on `plan` it prints the `plan` prompt.
+
+Every command that does work ends with a final stdout line `next: <step>`, using the delta id: after `review`, `plan` and `build`. Errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none. `build` prints it when it ends complete, and `build --dry-run` when every task is ticked.
 
 ### build
 
@@ -215,7 +232,7 @@ timeout  = 1800
 | Key        | Default                          | Effect                                    |
 | ---------- | -------------------------------- | ----------------------------------------- |
 | `runner`   | `claude -p --output-format json --json-schema {schema}` | Command `lemma build` runs per task |
-| `reviewer` | the `runner` value               | Command `lemma review` runs                |
+| `reviewer` | the `runner` value               | Command `lemma review` and `lemma plan` run |
 | `timeout`  | `1800`                           | Seconds before a run is killed             |
 
 An unknown key is an error. A command is split into words on whitespace, with single and double quotes grouping; no shell is involved. The prompt is written to stdin and the working directory is the repository root. Every run passes a JSON Schema for its reply (draft-07, `additionalProperties: false`, all fields required), generated from the delta. In each word of the command, `{schema}` is replaced by the schema as compact JSON and `{schema_file}` by the path of a temporary file holding it, which exists for the run; a command naming either is an error when no schema is given. Stdout is parsed as JSON. A non-null `structured_output` is the reply, and `result` is then optional. Otherwise the reply is the first JSON object found in `result`, so a runner that does not validate against a schema still works. `"is_error": true`, a `subtype` other than `success`, or a non-zero exit is a failure; the message is `result`, else the `subtype`. Other fields are ignored.
@@ -232,11 +249,12 @@ An unknown key is an error. A command is split into words on whitespace, with si
 | `related`     | The body of each document in the delta's `related` other than `changes`                                   |
 | `delta`, `design`, `claims`, `tasks` | The delta's parts                                                                  |
 | `task`        | The task line and the claims it settles (build)                                                           |
+| `resolved`    | Findings the human deleted, one `- [<part> / <anchor>] <text>` bullet each, or `(none)` (review-doc)       |
 | `diff`        | `git diff <base>` limited to the changed specs' `governs` and test globs (review-diff)                    |
 
 In the `plan` prompt `claims` already carries the ids lemma assigned. The `build` prompt tells the runner not to edit any delta part; lemma writes the refs from its reply.
 
-Two glob lists overlap when they share a glob, when one glob matches the other's text, or when some repository file matches a glob from each. An unknown key refuses `review` and `build` at startup.
+Two glob lists overlap when they share a glob, when one glob matches the other's text, or when some repository file matches a glob from each. An unknown key refuses `review`, `plan` and `build` at startup. A pack prompt without `{{resolved}}` still works; the reviewer is not told the resolved findings, but the exact-match drop still applies.
 
 ### Pack hooks
 

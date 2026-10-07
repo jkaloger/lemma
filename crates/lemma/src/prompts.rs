@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const KEYS: [&str; 10] = [
+pub const KEYS: [&str; 11] = [
     "convention",
     "dictums",
     "spec_intent",
@@ -14,6 +14,7 @@ pub const KEYS: [&str; 10] = [
     "tasks",
     "task",
     "diff",
+    "resolved",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

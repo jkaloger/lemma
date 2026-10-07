@@ -3,6 +3,9 @@ use common::*;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 
+const NEXT: &str =
+    "next: lemma review DELTA-001 to review the diff, or lazyspec advance DELTA-001 to complete\n";
+
 const CLAIMS_PATH: &str = "docs/deltas/DELTA-001-d/claims.md";
 const BARE: &str = "- [AC-1] Reopen keeps the prior answer.\n- [AC-2] Writes are atomic.\n";
 const REF_1: &str = "  @ref tests/store_test.rs#reopen_keeps_prior\n";
@@ -103,7 +106,7 @@ fn each_task_is_ticked_and_committed_in_order() {
     );
     assert_eq!(repo.git(&["status", "--porcelain"]), "");
     assert!(
-        run.stdout.ends_with("all tasks complete\n"),
+        run.stdout.ends_with(&format!("all tasks complete\n{NEXT}")),
         "{}",
         run.stdout
     );
@@ -208,7 +211,7 @@ fn a_rerun_resumes_at_the_first_unticked_task() {
 
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(run.stdout.starts_with("T2 atomic (settles AC-2)\n"));
-    assert!(run.stdout.ends_with("all tasks complete\n"));
+    assert!(run.stdout.ends_with(&format!("all tasks complete\n{NEXT}")));
     assert_eq!(subjects(&repo)[0], "DELTA-001 T2: atomic");
 }
 
@@ -236,7 +239,7 @@ fn a_ticked_task_is_reported_and_left_alone() {
     let run = build(&repo, &["--task", "T1"]);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
-    assert_eq!(run.stdout, "T1 is already ticked\n");
+    assert_eq!(run.stdout, format!("T1 is already ticked\n{NEXT}"));
     assert_eq!(repo.head(), before);
 }
 

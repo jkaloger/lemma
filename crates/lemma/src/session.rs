@@ -13,13 +13,17 @@ pub struct SessionStartInput {
     pub cwd: Option<String>,
 }
 
-fn is_safe_file_name(name: &str) -> bool {
+pub fn is_safe_file_name(name: &str) -> bool {
     !name.is_empty() && name != "." && !name.contains("..") && !name.contains(['/', '\\', '\0'])
 }
 
-fn sessions_dir(dir: &Path) -> Option<PathBuf> {
+pub fn lemma_dir(dir: &Path) -> Option<PathBuf> {
     let git_dir = PathBuf::from(git_output(dir, &["rev-parse", "--git-dir"])?.trim());
-    Some(dir.join(git_dir).join("lemma").join("sessions"))
+    Some(dir.join(git_dir).join("lemma"))
+}
+
+fn sessions_dir(dir: &Path) -> Option<PathBuf> {
+    Some(lemma_dir(dir)?.join("sessions"))
 }
 
 pub fn record_base(dir: &Path, session_id: &str) -> Option<()> {

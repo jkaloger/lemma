@@ -143,8 +143,14 @@ fn the_count_is_reported_and_a_rerun_writes_nothing() {
     let written = tasks(&repo);
     let second = review(&repo);
 
-    assert!(first.stdout.ends_with("2 follow-up tasks written\n"));
-    assert!(second.stdout.ends_with("0 follow-up tasks written\n"));
+    assert!(first.stdout.contains("2 follow-up tasks written\n"));
+    assert!(first
+        .stdout
+        .ends_with("next: delete the follow-ups you reject, then lemma build DELTA-001\n"));
+    assert!(second.stdout.contains("0 follow-up tasks written\n"));
+    assert!(second
+        .stdout
+        .ends_with("next: lazyspec advance DELTA-001 to complete\n"));
     assert_eq!(tasks(&repo), written);
 }
 
@@ -155,7 +161,7 @@ fn a_single_finding_is_singular() {
 
     let run = review(&repo);
 
-    assert!(run.stdout.ends_with("1 follow-up task written\n"));
+    assert!(run.stdout.contains("1 follow-up task written\n"));
 }
 
 #[test]

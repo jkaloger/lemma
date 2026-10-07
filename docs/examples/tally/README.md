@@ -31,7 +31,7 @@ runner   = "claude -p --output-format json --permission-mode acceptEdits"
 reviewer = "claude -p --output-format json --model opus"
 ```
 
-Agents never type `lemma`. The lazyspec transition hooks call `lemma lint`; the Claude Code hooks call `lemma signal` and `lemma stop`. The human types three commands.
+Agents never type `lemma`. The lazyspec transition hooks call `lemma lint`; the Claude Code hooks call `lemma signal` and `lemma stop`. The human types four: `lemma review`, `lemma plan`, `lemma build` and `lazyspec advance`. Each lemma command ends with a `next:` line naming the next step.
 
 ## Workflow
 
@@ -44,12 +44,13 @@ created docs/deltas/DELTA-004-ledger-balances/{index,design,claims,tasks}.md
 
 Fill the human parts by hand: `Intent` and `Out of scope` in `index.md`, design prose in `design.md`, behaviour as plain bullets in `claims.md`. No ids, no refs, no tasks. `related:` in frontmatter lists the RFC or decision the work leans on; every agent in the loop gets those as context.
 
-### 2. Review, then plan
+### 2. Review
 
 ```
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
 3 review lines written
+next: resolve each review line (edit, then delete the line) and run lemma review DELTA-004 again, or lemma plan DELTA-004 once none remain
 ```
 
 Review lines land inline, in the grammar of the thing they review. Under a bullet:
@@ -65,17 +66,23 @@ Under a prose section, a blockquote:
 > review: Design commits to a running-balance column but DICTUM-003 [DATA-2] forbids derived columns without a rebuild path. Name the rebuild or drop the column.
 ```
 
-Edit, delete each line as you resolve it, run again. When the review is clean the same run plans:
+Edit, delete each line as you resolve it, run again. lemma remembers the findings it wrote; a finding you deleted is passed to the next review as resolved and is not raised again. Review never plans. When you judge the review done, run `lemma plan`:
 
 ```
 $ lemma review DELTA-004
-DELTA-004 is draft: review clean, planning
+DELTA-004 is draft: reviewing the document
+review clean
+next: lemma plan DELTA-004
+
+$ lemma plan DELTA-004
+review clean, planning
 claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
 tasks.md: 3 tasks written
 index.md: frontmatter and headings tidied
+next: read the diff, accept or reject each [proposed] claim, then lazyspec advance DELTA-004
 ```
 
-Plan gives each bullet an id. A behaviour the planner thinks is missing is added as `[proposed]`; delete the tag to accept it or the line to reject it. Tasks you wrote by hand are kept; plan only appends. Read the diff in git before advancing. Plan refuses to run once any task is ticked.
+Plan refuses while any review line remains. Plan gives each bullet an id. A behaviour the planner thinks is missing is added as `[proposed]`; delete the tag to accept it or the line to reject it. Tasks you wrote by hand are kept; plan only appends. Read the diff in git before advancing. Plan refuses to run once any task is ticked.
 
 ### 3. Start
 
@@ -110,6 +117,7 @@ T2 balance endpoint (settles AC-2, AC-3)   resuming
 T3 wire into router (chore)
    commit c42d7f0 DELTA-004 T3: wire into router
 all tasks complete
+next: lemma review DELTA-004 to review the diff, or lazyspec advance DELTA-004 to complete
 ```
 
 ### 5. Review the change
@@ -118,6 +126,7 @@ all tasks complete
 $ lemma review DELTA-004
 DELTA-004 is in-progress: reviewing the diff against main
 2 follow-up tasks written
+next: delete the follow-ups you reject, then lemma build DELTA-004
 ```
 
 A diff review writes tasks, not comments, because the fix is work:
@@ -162,7 +171,8 @@ lemma never runs tests. CI does.
 
 ```
 lemma lint [<delta>] [--gate <status>] [--json]
-lemma review <delta>              draft: review the document, plan when clean; in-progress: review the diff
+lemma review <delta>              draft: annotate the document; in-progress: review the diff
+lemma plan <delta>                plan a reviewed draft into claims and tasks
 lemma build <delta> [--task T2]   run unticked tasks in order; stop on first failure
 lemma signal | lemma stop | lemma session-start     hooks, not typed
 ```

@@ -48,8 +48,8 @@ fn task(text: &str, settles: Value) -> Value {
     json!({"text": text, "settles": settles})
 }
 
-fn review(repo: &Repo) -> Run {
-    repo.run(&["review", "DELTA-001"], "")
+fn plan(repo: &Repo) -> Run {
+    repo.run(&["plan", "DELTA-001"], "")
 }
 
 fn plan_calls(repo: &Repo) -> usize {
@@ -73,7 +73,7 @@ fn tasks_of(repo: &Repo) -> String {
     repo.read(&delta_part_path(1, "tasks"))
 }
 
-const HEADER: &str = "DELTA-001 is draft: reviewing the document\n";
+const NEXT: &str = "next: read the diff, accept or reject each [proposed] claim, then lazyspec advance DELTA-001\n";
 
 #[test]
 fn ids_are_assigned_in_document_order_continuing_from_the_highest() {
@@ -86,7 +86,7 @@ fn ids_are_assigned_in_document_order_continuing_from_the_highest() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
@@ -96,7 +96,7 @@ fn ids_are_assigned_in_document_order_continuing_from_the_highest() {
     assert_eq!(
         run.stdout,
         format!(
-            "{HEADER}review clean, planning\nclaims.md: 3 claims tagged AC-3..AC-5\ntasks.md: 1 task written\n"
+            "review clean, planning\nclaims.md: 3 claims tagged AC-3..AC-5\ntasks.md: 1 task written\n{NEXT}"
         )
     );
     assert_eq!(
@@ -113,7 +113,7 @@ fn a_single_new_id_is_named_alone() {
         json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert!(
         run.stdout.contains("claims.md: 1 claim tagged AC-1\n"),
@@ -135,7 +135,7 @@ fn human_bullet_text_is_preserved_byte_for_byte() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
@@ -156,7 +156,7 @@ fn proposed_claims_are_appended_with_the_marker() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
@@ -182,7 +182,7 @@ fn only_proposed_claims_are_reported_without_a_tag_count() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert!(
         run.stdout.contains("claims.md: 1 [proposed]\n"),
@@ -203,7 +203,7 @@ fn tasks_are_appended_after_hand_written_ones_and_before_follow_ups() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
@@ -221,7 +221,7 @@ fn tasks_follow_a_template_comment_on_a_new_line() {
         json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
-    review(&repo);
+    plan(&repo);
 
     assert_eq!(
         tasks_of(&repo),
@@ -241,7 +241,7 @@ fn a_ticked_task_refuses_and_the_planner_is_not_called() {
     );
     let before = snapshot(&repo);
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 2);
     assert!(
@@ -266,16 +266,16 @@ fn frontmatter_keys_are_put_in_canonical_order() {
         json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         repo.read(&delta_part_path(1, "index")),
         "---\ntitle: \"Delta 1\"\ntype: delta\nstatus: draft\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\nrelated:\n- changes: SPEC-001\ngoverns:\n  - a/**\ncustom: x\nreviewed: yes\n---\n\n## Intent\n\nDelta intent.\n"
     );
-    assert!(run
-        .stdout
-        .ends_with("index.md: frontmatter and headings tidied\n"));
+    assert!(run.stdout.ends_with(&format!(
+        "index.md: frontmatter and headings tidied\n{NEXT}"
+    )));
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn headings_are_normalised_outside_fences() {
         json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
-    review(&repo);
+    plan(&repo);
 
     assert_eq!(
         repo.read(&delta_part_path(1, "index")),
@@ -315,16 +315,16 @@ fn rerunning_on_a_planned_delta_changes_nothing() {
         }),
     );
 
-    let first = review(&repo);
+    let first = plan(&repo);
     let after_first = snapshot(&repo);
-    let second = review(&repo);
+    let second = plan(&repo);
 
     assert_eq!(first.code, 0, "{}", first.stderr);
     assert_eq!(plan_calls(&repo), 1);
     assert_eq!(second.code, 0, "{}", second.stderr);
     assert_eq!(
         second.stdout,
-        format!("{HEADER}review clean\nalready planned\n")
+        format!("review clean\nalready planned\n{NEXT}")
     );
     assert_eq!(snapshot(&repo), after_first);
     assert_eq!(plan_calls(&repo), 1);
@@ -344,7 +344,7 @@ fn settles_resolve_by_id_and_by_position_in_the_reply_claims() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
@@ -362,7 +362,7 @@ fn a_settles_entry_naming_a_claim_by_its_text_is_an_error() {
     );
     let before = snapshot(&repo);
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 2);
     assert!(
@@ -385,7 +385,7 @@ fn an_echoed_claim_maps_to_its_id_instead_of_being_appended_again() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
@@ -407,7 +407,7 @@ fn an_unresolvable_settles_entry_errors_and_writes_nothing() {
     );
     let before = snapshot(&repo);
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 2);
     assert!(
@@ -427,7 +427,7 @@ fn the_planner_prompt_shows_the_assigned_ids() {
         json!({"claims": [], "tasks": [task("Do", json!(["AC-5", "AC-4", "AC-6"]))]}),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     let prompt = repo.read("stdin.txt");
@@ -447,7 +447,7 @@ fn a_failed_planner_writes_nothing_not_even_the_tagged_ids() {
     );
     let before = snapshot(&repo);
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 2);
     assert!(run.stderr.contains("rate limited"), "{}", run.stderr);
@@ -463,12 +463,58 @@ fn remaining_review_lines_block_planning() {
     );
     let before = snapshot(&repo);
 
-    let run = review(&repo);
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stderr
+            .contains("1 review line remains; resolve them before planning"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(snapshot(&repo), before);
+    assert_eq!(plan_calls(&repo), 0);
+}
+
+#[test]
+fn plan_needs_a_draft_delta() {
+    let repo = project("- Plain.\n", "");
+    repo.delta_file(1, "in-progress", &["SPEC-001"], INDEX_BODY);
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stderr
+            .contains("plan needs a draft delta; DELTA-001 is in-progress"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn plan_dry_run_prints_the_plan_prompt_without_calling_the_planner() {
+    let repo = project("- Plain.\n", "");
+
+    let run = repo.run(&["plan", "DELTA-001", "--dry-run"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.contains(PLAN_MARKER), "{}", run.stdout);
+    assert!(!run.stdout.contains("next:"), "{}", run.stdout);
+    assert_eq!(plan_calls(&repo), 0);
+}
+
+#[test]
+fn a_review_with_no_findings_does_not_plan() {
+    let repo = project("- Plain.\n", "");
+    let before = snapshot(&repo);
+
+    let run = repo.run(&["review", "DELTA-001"], "");
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         run.stdout,
-        format!("{HEADER}review clean; 1 review lines remain, resolve them and run again\n")
+        "DELTA-001 is draft: reviewing the document\nreview clean\nnext: lemma plan DELTA-001\n"
     );
     assert_eq!(snapshot(&repo), before);
     assert_eq!(plan_calls(&repo), 0);
@@ -488,7 +534,7 @@ fn a_marked_bullet_matches_the_planner_by_its_text_without_the_marker() {
         }),
     );
 
-    let run = review(&repo);
+    let run = plan(&repo);
 
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(

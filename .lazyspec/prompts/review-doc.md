@@ -20,6 +20,12 @@ Reply with JSON only, no prose around it:
 
 The anchor is the claim id (`AC-2`) or, for a claim with no id yet, the claim's exact text; a task id (`T3`); or for prose the exact text of the heading the finding belongs under (`Intent`). For a part with no headings, use the part name. An empty list means the delta is ready to plan.
 
+# Already raised and resolved
+
+The human deleted these review lines. Do not raise them again, in any wording, unless the text they were anchored to has changed.
+
+{{resolved}}
+
 # Convention
 
 {{convention}}
