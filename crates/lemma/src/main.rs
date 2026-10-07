@@ -1,3 +1,4 @@
+mod annotate;
 mod claims;
 mod context;
 mod evidence;
@@ -8,8 +9,7 @@ mod project;
 mod prompts;
 mod range;
 mod refs;
-// the real runs of review and build, a later work item, are its callers
-#[allow(dead_code)]
+mod review;
 mod runner;
 mod session;
 mod shape;
@@ -202,6 +202,7 @@ struct Startup {
     root: PathBuf,
     store: Store,
     delta: payload::Doc,
+    config: runner::Config,
 }
 
 fn startup(id: &str) -> Result<Startup, String> {
@@ -215,8 +216,21 @@ fn startup(id: &str) -> Result<Startup, String> {
     prompts::Prompt::ALL
         .into_iter()
         .try_for_each(|prompt| prompts::load(&root, prompt).map(drop))?;
-    runner::load(&root)?;
-    Ok(Startup { root, store, delta })
+    let config = runner::load(&root)?;
+    Ok(Startup {
+        root,
+        store,
+        delta,
+        config,
+    })
+}
+
+fn rendered_prompt(
+    prompt: prompts::Prompt,
+    root: &Path,
+    values: &std::collections::BTreeMap<&str, String>,
+) -> Result<String, String> {
+    Ok(prompts::render(&prompts::load(root, prompt)?, values))
 }
 
 fn print_prompt(
@@ -224,13 +238,30 @@ fn print_prompt(
     root: &Path,
     values: &std::collections::BTreeMap<&str, String>,
 ) -> ExitCode {
-    match prompts::load(root, prompt) {
-        Ok(template) => {
-            println!("{}", prompts::render(&template, values));
+    match rendered_prompt(prompt, root, values) {
+        Ok(text) => {
+            println!("{text}");
             ExitCode::SUCCESS
         }
         Err(message) => fail(message),
     }
+}
+
+fn review_draft_command(start: &Startup, prompt: &str) -> ExitCode {
+    let Startup {
+        root,
+        delta,
+        config,
+        ..
+    } = start;
+    println!("{} is draft: reviewing the document", delta.id);
+    match review::review_draft(root, delta, prompt, config) {
+        Ok(review::Outcome::Clean) => println!("review clean"),
+        Ok(review::Outcome::Written(1)) => println!("1 review line written"),
+        Ok(review::Outcome::Written(n)) => println!("{n} review lines written"),
+        Err(message) => return fail(message),
+    }
+    ExitCode::SUCCESS
 }
 
 fn review_command(id: &str, dry_run: bool) -> ExitCode {
@@ -238,18 +269,22 @@ fn review_command(id: &str, dry_run: bool) -> ExitCode {
         Ok(start) => start,
         Err(message) => return fail(message),
     };
-    if !dry_run {
-        return fail("review is not implemented yet");
-    }
-    let Startup { root, store, delta } = start;
-    let mut values = context::assemble(&store, &root, &delta);
-    match delta.status.as_str() {
-        "draft" => print_prompt(prompts::Prompt::ReviewDoc, &root, &values),
-        "in-progress" => {
-            let world = world::World::load(&store, None);
-            let base = context::diff_base(&root, &delta);
-            values.insert("diff", context::diff(&root, &base, &world, &delta));
-            print_prompt(prompts::Prompt::ReviewDiff, &root, &values)
+    let Startup {
+        root, store, delta, ..
+    } = &start;
+    let mut values = context::assemble(store, root, delta);
+    match (delta.status.as_str(), dry_run) {
+        ("draft", true) => print_prompt(prompts::Prompt::ReviewDoc, root, &values),
+        ("draft", false) => match rendered_prompt(prompts::Prompt::ReviewDoc, root, &values) {
+            Ok(prompt) => review_draft_command(&start, &prompt),
+            Err(message) => fail(message),
+        },
+        ("in-progress", false) => fail("review is not implemented yet"),
+        ("in-progress", true) => {
+            let world = world::World::load(store, None);
+            let base = context::diff_base(root, delta);
+            values.insert("diff", context::diff(root, &base, &world, delta));
+            print_prompt(prompts::Prompt::ReviewDiff, root, &values)
         }
         _ => fail("review needs a draft or in-progress delta"),
     }
@@ -263,7 +298,9 @@ fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
     if !dry_run {
         return fail("build is not implemented yet");
     }
-    let Startup { root, store, delta } = start;
+    let Startup {
+        root, store, delta, ..
+    } = start;
     let parsed = tasks::parse(delta.part_body(payload::TASKS_PART));
     let chosen = match task {
         Some(name) => match parsed.named(name) {

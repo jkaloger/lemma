@@ -69,9 +69,9 @@ fn review_needs_a_draft_or_in_progress_delta() {
 }
 
 #[test]
-fn review_and_build_without_dry_run_are_not_implemented_yet() {
+fn review_of_an_in_progress_delta_and_build_without_dry_run_are_not_implemented_yet() {
     let repo = project();
-    delta(&repo, "draft");
+    delta(&repo, "in-progress");
 
     let review = repo.run(&["review", "DELTA-001"], "");
     let build = repo.run(&["build", "DELTA-001"], "");

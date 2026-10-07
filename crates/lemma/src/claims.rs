@@ -179,7 +179,7 @@ pub fn has_intent(body: &str) -> bool {
     (section.heading + 1..section.end).any(|i| live[i] && !lines[i].trim().is_empty())
 }
 
-fn claim_end(lines: &[&str], start: usize) -> usize {
+pub fn claim_end(lines: &[&str], start: usize) -> usize {
     let mut end = start + 1;
     let mut cursor = start + 1;
     while cursor < lines.len() {
