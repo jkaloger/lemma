@@ -1,4 +1,5 @@
 mod annotate;
+mod build;
 mod claims;
 mod context;
 mod evidence;
@@ -334,8 +335,18 @@ fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
         Ok(start) => start,
         Err(message) => return fail(message),
     };
+    if start.delta.status != "in-progress" {
+        return fail(format!(
+            "build needs an in-progress delta; {} is {}",
+            start.delta.id, start.delta.status
+        ));
+    }
     if !dry_run {
-        return fail("build is not implemented yet");
+        return match build::run(&start.root, &start.delta.id, task, &start.config) {
+            Ok(build::Outcome::Complete) => ExitCode::SUCCESS,
+            Ok(build::Outcome::Stopped) => ExitCode::from(2),
+            Err(message) => fail(message),
+        };
     }
     let Startup {
         root, store, delta, ..
