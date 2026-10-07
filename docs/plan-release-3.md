@@ -40,7 +40,7 @@ Out, each with a trigger in DECISION-003: lint via reviewer for prose rules; par
 - [x] W68 plan on clean: decision 78 plan half. Tests: ids assigned in order; human bullet text preserved; proposed appended with marker; tasks appended after hand-written ones; refuses with a ticked task; frontmatter canonicalised; headings normalised; re-run on a planned delta changes nothing.
 - [x] W69 review on in-progress: decision 79. Tests: diff scoped to governs and tests; follow-ups written with settles; nothing in claims; count reported.
 - [x] W70 build: decision 80. Tests with a fake runner that writes files from a fixture: ticks and commits per task; stops on lint failure with tree kept; stops on unresolved ref; resume from first unticked; `--task`; chore skips ref check; refuses dirty tree; refuses non in-progress; follow-ups run after main tasks; commit message format.
-- [ ] W71 pack, plugin, CI, convention: decision 81. Tests: `tests/pack.rs` adopts the pack and lints clean; hook table matches; no skills dir.
+- [x] W71 pack, plugin, CI, convention: decision 81. Tests: `tests/pack.rs` adopts the pack and lints clean; hook table matches; no skills dir.
 - [ ] W72 `signal` and `stop`: signal pointers add `related:` docs and the delta's parts; stop drops the in-session completion rule if W70 makes it dead, else rewords it. Tests updated.
 - [ ] W73 README and version: decision 82.
 - [ ] W74 review: whole-diff review against DECISION-003 and this plan.

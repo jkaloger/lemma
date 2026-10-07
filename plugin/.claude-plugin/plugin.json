@@ -1,10 +1,10 @@
 {
   "name": "lemma",
-  "version": "2.0.0",
-  "description": "Claims, refs and fold for agent-driven delivery on lazyspec. Prerequisites: the `lemma` binary on PATH (`cargo install lemma`) and lazyspec.",
+  "version": "3.0.0",
+  "description": "Claude Code hooks for lemma: per-edit context and lint signals, session bounds. Prerequisites: the `lemma` binary on PATH (`cargo install lemma`) and lazyspec.",
   "author": {
     "name": "Jack Kaloger"
   },
   "license": "MIT",
-  "keywords": ["lazyspec", "claims", "refs", "workflow"]
+  "keywords": ["lazyspec", "claims", "refs", "hooks", "workflow"]
 }

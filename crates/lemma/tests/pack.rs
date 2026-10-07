@@ -125,3 +125,45 @@ fn delta_templates_trip_no_shape_rule_until_a_gate() {
         vec!["no claims; write the behaviour as bullets in claims.md"]
     );
 }
+
+#[test]
+fn the_hook_table_runs_lint_at_validate_and_each_gate() {
+    let config: toml::Value = toml::from_str(PACK_CONFIG).unwrap();
+    let hooks: Vec<(String, String)> = config["hooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hook| {
+            let run: Vec<&str> = hook["run"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|word| word.as_str().unwrap())
+                .collect();
+            (hook["name"].as_str().unwrap().to_string(), run.join(" "))
+        })
+        .collect();
+
+    assert_eq!(
+        hooks,
+        [
+            ("lemma-validate", "lemma lint --hook"),
+            ("lemma-intent-gate", "lemma lint --hook --gate in-progress"),
+            ("lemma-check-gate", "lemma lint --hook --gate complete"),
+        ]
+        .map(|(name, run)| (name.to_string(), run.to_string()))
+    );
+}
+
+#[test]
+fn the_plugin_ships_hooks_only() {
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin");
+
+    assert!(!plugin.join("skills").exists());
+    assert!(plugin.join("hooks/hooks.json").is_file());
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(plugin.join(".claude-plugin/plugin.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["version"], "3.0.0");
+}

@@ -9,7 +9,7 @@
     {
       "name": "lemma",
       "source": "./plugin",
-      "description": "Claims, receipts and fold for agent-driven delivery. Prerequisites: the `lemma` binary on PATH and lazyspec."
+      "description": "Claude Code hooks for lemma. Prerequisites: the `lemma` binary on PATH and lazyspec."
     }
   ]
 }

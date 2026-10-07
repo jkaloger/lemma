@@ -10,7 +10,7 @@ related: []
 
 Rules for the tests that serve as evidence.
 
-- [TEST-1] [intent] Every normative claim is mechanised: a test settles it, or it is marked `[intent]`. An `[assumed]` claim is not yet normative.
+- [TEST-1] [intent] Every normative claim is mechanised: a test settles it, or it is marked `[intent]`.
 - [TEST-2] [intent] Test doubles appear only at I/O seams: network, clock, filesystem, process. Internal collaborators are real.
 - [TEST-3] [intent] A test exercises the real boundary the claim names (public API, CLI, HTTP route), not an internal helper.
 - [TEST-4] [intent] The ref is written with the test: add an `@ref` line under the claim naming the test file and symbol, with no commit or hash.

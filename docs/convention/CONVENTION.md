@@ -14,8 +14,9 @@ Rules a lemma project holds every change to. Each dictum states one area's rules
 
 1. No unbounded code changes; no unverified completion.
 2. Record what is known, preserve what is not. A spec holds what code, tests and git cannot tell the next agent; it is not a complete description.
-3. Imposed constraints (policy, regulation, vendor limits) are dictum rules with `governs` and a `@per` citation. Chosen constraints are decisions.
+3. Humans write documents; agents annotate; a human deletes an annotation to accept it.
+4. Imposed constraints (policy, regulation, vendor limits) are dictum rules with `governs` and a `@per` citation. Chosen constraints are decisions.
 
 ## Governance
 
-Dictums are human-edited and never folded. Edit a rule in place; the commit says why. When a test a rule refs must change, strike the rule (`- ~~[ID]~~`) and add a new id in the same change, so the change is deliberate. Reusing an id is an error.
+Dictums are human-edited. Edit a rule in place; the commit says why. When a test a rule refs must change, strike the rule (`- ~~[ID]~~`) and add a new id in the same change, so the change is deliberate. Reusing an id is an error.
