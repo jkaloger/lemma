@@ -33,7 +33,3 @@ pub fn changed_since(root: &Path, rev: &str) -> Vec<String> {
     let all: BTreeSet<String> = tracked.into_iter().chain(untracked_files(root)).collect();
     all.into_iter().collect()
 }
-
-pub fn touched_files(root: &Path) -> Vec<String> {
-    changed_since(root, "HEAD")
-}

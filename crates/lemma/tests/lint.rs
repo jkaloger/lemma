@@ -19,7 +19,7 @@ fn project() -> Repo {
 }
 
 fn check(repo: &Repo, args: &[&str]) -> Run {
-    let args: Vec<&str> = ["check"].into_iter().chain(args.iter().copied()).collect();
+    let args: Vec<&str> = ["lint"].into_iter().chain(args.iter().copied()).collect();
     repo.run(&args, "")
 }
 
@@ -28,9 +28,9 @@ fn touch_both(repo: &Repo) {
     repo.write("b/y.rs", "fn y() { 2; }\n");
 }
 
-fn delta(repo: &Repo, n: u32, status: &str, target: &str, claims: &str) {
+fn delta(repo: &Repo, n: u32, status: &str, claims: &str) {
     repo.delta_file(n, status, &["SPEC-001"], INTENT);
-    repo.delta_part(n, target, claims);
+    repo.delta_claims(n, claims);
 }
 
 fn says(run: &Run, needle: &str) -> bool {
@@ -149,9 +149,7 @@ mod coverage {
         assert!(run
             .stdout
             .contains("docs/specs/SPEC-002-s/index.md: error:"));
-        assert!(run
-            .stdout
-            .contains("create a delta that folds into SPEC-002"));
+        assert!(run.stdout.contains("create a delta that changes SPEC-002"));
     }
 
     #[test]
@@ -209,8 +207,7 @@ mod coverage {
             &repo,
             1,
             "in-progress",
-            "SPEC-001",
-            "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
+            "- [AC-1] New.\n  @ref tests/store_test.rs#other_test\n",
         );
         repo.commit("delta");
         touch_both(&repo);
@@ -347,8 +344,7 @@ mod evidence_changed {
             &repo,
             1,
             "in-progress",
-            "SPEC-001",
-            "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n- [AC-D1-1] Reopen keeps it, again.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
+            "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n- [AC-1] Reopen keeps it, again.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
         );
         edit_reopen_body(&repo);
 
@@ -358,7 +354,7 @@ mod evidence_changed {
     #[test]
     fn a_complete_delta_that_struck_it_before_the_range_does_not_excuse_it() {
         let repo = project();
-        delta(&repo, 1, "complete", "SPEC-001", "- ~~[AC-S1-1]~~ gone\n");
+        delta(&repo, 1, "complete", "- ~~[AC-S1-1]~~ gone\n");
         repo.commit("completed earlier");
         edit_reopen_body(&repo);
 
@@ -413,10 +409,10 @@ mod evidence_changed {
         ));
     }
 
-    fn strike_project(status: &str, folds: &[&str], part: &str) -> Repo {
+    fn strike_project(status: &str, changes: &[&str]) -> Repo {
         let repo = project();
-        repo.delta_file(1, status, folds, INTENT);
-        repo.delta_part(1, part, "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n");
+        repo.delta_file(1, status, changes, INTENT);
+        repo.delta_claims(1, "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n");
         repo.commit("delta");
         edit_reopen_body(&repo);
         repo
@@ -424,28 +420,21 @@ mod evidence_changed {
 
     #[test]
     fn a_draft_delta_striking_the_claim_does_not_excuse_the_change() {
-        let repo = strike_project("draft", &["SPEC-001"], "SPEC-001");
+        let repo = strike_project("draft", &["SPEC-001"]);
 
         assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
     }
 
     #[test]
     fn a_strike_from_a_delta_folding_into_another_spec_does_not_excuse_the_change() {
-        let repo = strike_project("in-progress", &["SPEC-002"], "SPEC-001");
-
-        assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
-    }
-
-    #[test]
-    fn a_strike_in_the_part_for_another_spec_does_not_excuse_the_change() {
-        let repo = strike_project("in-progress", &["SPEC-001", "SPEC-002"], "SPEC-002");
+        let repo = strike_project("in-progress", &["SPEC-002"]);
 
         assert!(says(&check(&repo, &[]), "AC-S1-1: evidence"));
     }
 
     #[test]
     fn an_in_progress_delta_folding_into_the_spec_excuses_the_change() {
-        let repo = strike_project("in-progress", &["SPEC-001"], "SPEC-001");
+        let repo = strike_project("in-progress", &["SPEC-001"]);
 
         assert!(!says(&check(&repo, &[]), "AC-S1-1: evidence"));
     }
@@ -454,7 +443,7 @@ mod evidence_changed {
     fn a_delta_that_completed_in_the_range_excuses_the_change() {
         let repo = project();
         repo.git(&["checkout", "-q", "-b", "feature"]);
-        delta(&repo, 1, "complete", "SPEC-001", "- ~~[AC-S1-1]~~ gone\n");
+        delta(&repo, 1, "complete", "- ~~[AC-S1-1]~~ gone\n");
         edit_reopen_body(&repo);
         repo.commit("completed in range");
 
@@ -524,17 +513,6 @@ mod claims_have_evidence {
         );
     }
 
-    #[test]
-    fn require_evidence_makes_it_an_error() {
-        let repo = project();
-        without_ref(&repo);
-
-        let run = check(&repo, &["--require", "evidence"]);
-
-        assert_eq!(run.code, 2);
-        assert!(run.stdout.contains(": error: AC-S1-2: claim has no `@ref`"));
-    }
-
     fn intent_project() -> Repo {
         let repo = project();
         repo.spec_behaviour(
@@ -546,14 +524,6 @@ mod claims_have_evidence {
     }
 
     #[test]
-    fn an_intent_claim_is_exempt_and_text_output_stays_silent() {
-        let run = check(&intent_project(), &["--require", "evidence"]);
-
-        assert_eq!(run.code, 0);
-        assert_eq!(run.stdout, "");
-    }
-
-    #[test]
     fn the_intent_count_is_not_reported_in_any_output_mode() {
         let repo = intent_project();
         let payload = validate_payload(vec![with_parts(
@@ -562,7 +532,7 @@ mod claims_have_evidence {
         )]);
 
         let json = check(&repo, &["--json"]);
-        let hook = repo.run(&["check", "--hook"], &payload);
+        let hook = repo.run(&["lint", "--hook"], &payload);
 
         assert!(!json.has_message("[intent]"), "{}", json.stdout);
         assert!(!hook.has_message("[intent]"), "{}", hook.stdout);
@@ -608,30 +578,7 @@ mod claims_have_evidence {
         repo.spec_behaviour(1, "- [AC-S1-1] x\n  @ref a/x.rs#x\n");
         repo.commit("custom tests glob");
 
-        assert_eq!(check(&repo, &["--require", "evidence"]).stdout, "");
-    }
-
-    #[test]
-    fn in_progress_delta_claims_are_checked_and_draft_ones_are_not() {
-        let repo = project();
-        delta(&repo, 1, "draft", "SPEC-001", "- [AC-D1-1] Planned.\n");
-        repo.commit("draft delta");
-        assert_eq!(check(&repo, &["--require", "evidence"]).stdout, "");
-
-        delta(
-            &repo,
-            1,
-            "in-progress",
-            "SPEC-001",
-            "- [AC-D1-1] Planned.\n",
-        );
-        repo.commit("in progress");
-        let run = check(&repo, &["--require", "evidence"]);
-
-        assert_eq!(run.code, 2);
-        assert!(run
-            .stdout
-            .contains("docs/deltas/DELTA-001-d/behaviour.SPEC-001.md:1: error: AC-D1-1"));
+        assert_eq!(check(&repo, &[]).stdout, "");
     }
 }
 
@@ -651,104 +598,309 @@ mod integrity {
     }
 }
 
-mod require {
+mod shape {
     use super::*;
 
-    #[test]
-    fn intent_needs_intent_but_no_claim() {
-        let repo = project();
-        repo.delta_file(1, "draft", &["SPEC-001"], "## Intent\n\n");
+    const CLAIMS: &str = "- [AC-1] Retries once.\n  @ref tests/store_test.rs#other_test\n- [AC-2] [intent] Feels fast.\n";
+    const TASKS: &str =
+        "- [x] T1 retry on timeout (settles AC-1)\n- [x] T2 measure (settles AC-2)\n";
 
-        let lax = check(&repo, &[]);
-        let strict = check(&repo, &["--require", "intent"]);
+    fn planned(repo: &Repo, claims: &str, tasks: &str) {
+        repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
+        repo.delta_part(1, "design", "Retry once when the upstream times out.\n");
+        repo.delta_claims(1, claims);
+        repo.delta_tasks(1, tasks);
+    }
 
-        assert_eq!(lax.code, 0);
-        assert_eq!(strict.code, 2);
-        assert!(says(&strict, "missing or empty `## Intent` section"));
-        assert!(!says(&strict, "no claims"));
+    fn gate(repo: &Repo, status: &str) -> Run {
+        check(repo, &["DELTA-001", "--gate", status])
+    }
+
+    fn named(repo: &Repo) -> Run {
+        check(repo, &["DELTA-001"])
+    }
+
+    fn claims_path() -> String {
+        delta_part_path(1, "claims")
+    }
+
+    fn tasks_path() -> String {
+        delta_part_path(1, "tasks")
     }
 
     #[test]
-    fn intent_is_satisfied_by_intent_and_an_empty_part() {
+    fn a_planned_and_built_delta_passes_both_gates() {
         let repo = project();
-        delta(&repo, 1, "draft", "SPEC-001", "");
+        planned(&repo, CLAIMS, TASKS);
 
-        assert_eq!(check(&repo, &["--require", "intent"]).stdout, "");
+        for status in ["in-progress", "complete"] {
+            let run = gate(&repo, status);
+            assert_eq!((run.code, run.stdout.as_str()), (0, ""), "{status}");
+        }
     }
 
     #[test]
-    fn evidence_does_not_imply_claims() {
+    fn a_gate_needs_intent() {
         let repo = project();
-        repo.delta_file(1, "draft", &["SPEC-001"], "## Intent\n\n");
+        planned(&repo, CLAIMS, TASKS);
+        repo.delta_file(1, "in-progress", &["SPEC-001"], "## Intent\n\n");
 
-        assert_eq!(check(&repo, &["--require", "evidence"]).code, 0);
+        assert_eq!(named(&repo).stdout, "");
+        let run = gate(&repo, "in-progress");
+        assert_eq!(run.code, 2);
+        assert!(says(&run, "missing or empty `## Intent` section"));
     }
 
-    fn in_progress_delta(repo: &Repo) {
-        delta(
-            repo,
-            1,
-            "in-progress",
-            "SPEC-001",
-            "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
+    #[test]
+    fn a_gate_needs_a_claim() {
+        let repo = project();
+        planned(&repo, "", "");
+
+        assert!(says(
+            &gate(&repo, "in-progress"),
+            "no claims; write the behaviour"
+        ));
+    }
+
+    #[test]
+    fn a_bullet_without_an_id_is_an_error_at_a_gate() {
+        let repo = project();
+        planned(&repo, &format!("{CLAIMS}- Logs the retry.\n"), TASKS);
+
+        assert_eq!(named(&repo).stdout, "");
+        assert!(gate(&repo, "in-progress").stdout.contains(&format!(
+            "{}:4: error: claim has no id; run `lemma review` to plan",
+            claims_path()
+        )));
+    }
+
+    #[test]
+    fn every_claim_is_settled_by_exactly_one_main_task() {
+        let repo = project();
+        planned(
+            &repo,
+            CLAIMS,
+            "- [x] T1 retry (settles AC-1)\n- [x] T2 again (settles AC-1)\n",
         );
-        repo.commit("delta");
+
+        let run = gate(&repo, "in-progress");
+
+        assert!(says(
+            &run,
+            "AC-1 is settled by T1, T2; exactly one task settles a claim"
+        ));
+        assert!(says(&run, "AC-2 is settled by no task"));
     }
 
     #[test]
-    fn clean_flags_uncommitted_changes_in_ref_files() {
+    fn follow_ups_may_settle_a_settled_claim_and_must_be_ticked_at_complete() {
         let repo = project();
-        in_progress_delta(&repo);
-        repo.write(
-            TEST_FILE,
-            "#[test]\nfn reopen_keeps_prior() {}\n\n#[test]\nfn other_test() { assert!(true); }\n",
+        planned(
+            &repo,
+            CLAIMS,
+            &format!("{TASKS}- [x] T3 wire it (chore)\n\n## Follow-ups\n- [ ] T4 page the read (settles AC-1)\n"),
         );
 
-        let lax = check(&repo, &[]);
-        let strict = check(&repo, &["--require", "clean"]);
-
-        assert_eq!(lax.code, 0);
-        assert_eq!(strict.code, 2);
-        assert!(strict
-            .stdout
-            .contains("tests/store_test.rs: error: tests/store_test.rs has uncommitted changes"));
+        assert_eq!(gate(&repo, "in-progress").stdout, "");
+        let run = gate(&repo, "complete");
+        assert_eq!(run.code, 2);
+        assert!(run.stdout.contains(&format!(
+            "{}:6: error: T4 is not ticked; run `lemma build`",
+            tasks_path()
+        )));
     }
 
     #[test]
-    fn clean_flags_uncommitted_changes_under_a_targets_governs() {
+    fn a_task_settling_an_unknown_claim_is_always_an_error() {
         let repo = project();
-        in_progress_delta(&repo);
-        repo.write("a/x.rs", "fn x() { 1; }\n");
+        planned(
+            &repo,
+            CLAIMS,
+            &format!("{TASKS}- [ ] T3 extra (settles AC-9)\n"),
+        );
 
-        let run = check(&repo, &["--require", "clean"]);
+        assert!(says(
+            &named(&repo),
+            "T3 settles AC-9, which claims.md does not have"
+        ));
+    }
+
+    #[test]
+    fn a_malformed_task_line_is_always_an_error() {
+        let repo = project();
+        planned(
+            &repo,
+            CLAIMS,
+            &format!("{TASKS}- [ ] T3 no settles\n- [ ] untagged (chore)\n"),
+        );
+
+        let run = named(&repo);
 
         assert_eq!(run.code, 2);
-        assert!(says(&run, "a/x.rs has uncommitted changes"));
+        for line in [3, 4] {
+            assert!(
+                run.stdout.contains(&format!(
+                    "{}:{line}: error: task is not `- [ ] T<n> <text> (settles AC-<n>, ..)`",
+                    tasks_path()
+                )),
+                "{}",
+                run.stdout
+            );
+        }
     }
 
     #[test]
-    fn clean_ignores_changes_outside_the_targets() {
+    fn duplicate_and_foreign_ids_are_always_errors() {
         let repo = project();
-        in_progress_delta(&repo);
-        repo.write("b/y.rs", "fn y() { 1; }\n");
-
-        assert_eq!(check(&repo, &["--require", "clean"]).stdout, "");
-    }
-
-    #[test]
-    fn require_is_repeatable() {
-        let repo = project();
-        in_progress_delta(&repo);
-        repo.write("a/x.rs", "fn x() { 1; }\n");
-        repo.spec_behaviour(
-            1,
-            &format!("{SPEC_CLAIM}- [AC-S1-2] Nothing proves this.\n"),
+        planned(
+            &repo,
+            &format!("{CLAIMS}- [AC-1] Again.\n  @ref tests/store_test.rs#other_test\n- [RT-1] Foreign.\n"),
+            &format!("{TASKS}- [x] T1 dup (settles AC-1)\n"),
         );
 
-        let run = check(&repo, &["--require", "evidence", "--require", "clean"]);
+        let run = named(&repo);
 
-        assert!(says(&run, "a/x.rs has uncommitted changes"));
-        assert!(run.stdout.contains(": error: AC-S1-2: claim has no `@ref`"));
+        assert!(says(&run, "AC-1 is used twice (lines 1 and 4)"));
+        assert!(says(&run, "claim id RT-1 is not AC-<n>"));
+        assert!(says(&run, "T1 is used twice (lines 1 and 3)"));
+    }
+
+    #[test]
+    fn review_lines_under_a_claim_a_task_and_prose_block_a_gate() {
+        let repo = project();
+        planned(
+            &repo,
+            &CLAIMS.replace(
+                "Retries once.\n",
+                "Retries once.\n  @review Say what times out.\n",
+            ),
+            &TASKS.replace(
+                "(settles AC-1)\n",
+                "(settles AC-1)\n  @review Name the file.\n",
+            ),
+        );
+        repo.delta_part(1, "design", "Retry once.\n\n> review: Why once?\n");
+        repo.delta_file(
+            1,
+            "in-progress",
+            &["SPEC-001"],
+            "## Intent\n\nBecause.\n\n> review: Which upstream?\n",
+        );
+
+        assert_eq!(named(&repo).code, 0, "{}", named(&repo).stdout);
+        let run = gate(&repo, "in-progress");
+        for place in [
+            format!("{}:2:", claims_path()),
+            format!("{}:2:", tasks_path()),
+            format!("{}:3:", delta_part_path(1, "design")),
+            format!("{}/index.md:16:", delta_dir(1)),
+        ] {
+            assert!(
+                run.stdout
+                    .contains(&format!("{place} error: unresolved review line")),
+                "{place}\n{}",
+                run.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn a_proposed_claim_blocks_a_gate_and_never_pairs_with_intent() {
+        let repo = project();
+        planned(
+            &repo,
+            &format!("{CLAIMS}- [AC-3] [proposed] Logs the retry.\n- [AC-4] [proposed] [intent] Is quiet.\n"),
+            &format!("{TASKS}- [x] T3 log (settles AC-3)\n- [x] T4 hush (settles AC-4)\n"),
+        );
+
+        let ungated = named(&repo);
+        assert!(says(
+            &ungated,
+            "AC-4: [proposed] and [intent] are exclusive; keep one"
+        ));
+        assert!(!says(&ungated, "AC-3 is [proposed]"));
+        assert!(says(
+            &gate(&repo, "in-progress"),
+            "AC-3 is [proposed]; delete the tag to accept it or the claim to reject it"
+        ));
+    }
+
+    #[test]
+    fn a_ref_in_design_is_always_an_error() {
+        let repo = project();
+        planned(&repo, CLAIMS, TASKS);
+        repo.delta_part(
+            1,
+            "design",
+            "Retry.\n\n@ref tests/store_test.rs#other_test\n",
+        );
+
+        assert!(named(&repo).stdout.contains(&format!(
+            "{}:3: error: design.md holds prose; an `@ref` belongs under a claim in claims.md",
+            delta_part_path(1, "design")
+        )));
+    }
+
+    #[test]
+    fn a_missing_ref_is_an_error_only_at_complete() {
+        let repo = project();
+        planned(
+            &repo,
+            "- [AC-1] Retries once.\n",
+            "- [ ] T1 retry (settles AC-1)\n",
+        );
+
+        assert_eq!(gate(&repo, "in-progress").stdout, "");
+        let run = gate(&repo, "complete");
+        assert!(run.stdout.contains(&format!(
+            "{}:1: error: AC-1: claim has no `@ref`",
+            claims_path()
+        )));
+    }
+
+    #[test]
+    fn a_written_ref_must_resolve_with_or_without_a_gate() {
+        let repo = project();
+        planned(
+            &repo,
+            "- [AC-1] Retries.\n  @ref tests/store_test.rs#missing\n",
+            "",
+        );
+
+        let run = named(&repo);
+
+        assert_eq!(run.code, 2);
+        assert!(says(&run, "lemma refs DELTA-001/AC-1"));
+    }
+
+    #[test]
+    fn without_a_delta_lint_leaves_deltas_alone() {
+        let repo = project();
+        planned(
+            &repo,
+            "- [AC-1] Retries.\n  @ref tests/store_test.rs#missing\n",
+            "- [ ] nope\n",
+        );
+
+        assert_eq!(check(&repo, &[]).stdout, "");
+    }
+
+    #[test]
+    fn an_unknown_gate_or_delta_is_refused() {
+        let repo = project();
+        planned(&repo, CLAIMS, TASKS);
+
+        let gate = gate(&repo, "done");
+        let missing = check(&repo, &["DELTA-009"]);
+
+        assert_eq!(gate.code, 2);
+        assert!(
+            gate.stderr.contains("unknown gate `done`"),
+            "{}",
+            gate.stderr
+        );
+        assert_eq!(missing.code, 2);
+        assert!(missing.stderr.contains("unknown delta DELTA-009"));
     }
 }
 
@@ -758,7 +910,7 @@ mod hook {
     fn delta_doc(status: &str, claims: &str) -> Value {
         with_parts(
             doc("DELTA-001", "delta", status, &[], &["SPEC-001"], INTENT),
-            &[("behaviour.SPEC-001", claims)],
+            &[("claims", claims)],
         )
     }
 
@@ -773,17 +925,17 @@ mod hook {
         let repo = project();
         let payload = validate_payload(vec![delta_doc(
             "in-progress",
-            "- [AC-D1-1] Retries.\n  @ref tests/store_test.rs#missing\n",
+            "- [AC-1] Retries.\n  @ref tests/store_test.rs#missing\n",
         )]);
 
-        let run = repo.run(&["check", "--hook"], &payload);
+        let run = repo.run(&["lint", "--hook"], &payload);
 
         assert_eq!(run.code, 0);
         assert_eq!(run.findings().len(), 1);
         let finding = &run.findings()[0];
         assert_eq!(finding["severity"], "error");
         assert_eq!(finding["id"], "DELTA-001");
-        assert_eq!(finding["part"], "behaviour.SPEC-001");
+        assert_eq!(finding["part"], "claims");
         assert_eq!(finding["line"], 2);
         assert!(finding["message"]
             .as_str()
@@ -797,13 +949,12 @@ mod hook {
         delta(
             &repo,
             2,
-            "draft",
-            "SPEC-001",
-            "- [AC-S1-1] Changed wording.\n",
+            "in-progress",
+            "- [AC-1] Broken.\n  @ref tests/store_test.rs#missing\n",
         );
-        let payload = validate_payload(vec![delta_doc("draft", "- [AC-D1-1] Fine.\n")]);
+        let payload = validate_payload(vec![delta_doc("draft", "- [AC-1] Fine.\n")]);
 
-        let run = repo.run(&["check", "--hook"], &payload);
+        let run = repo.run(&["lint", "--hook"], &payload);
 
         assert_eq!(run.code, 0);
         assert_eq!(run.findings(), Vec::<Value>::new());
@@ -816,11 +967,11 @@ mod hook {
         let payload = transition_payload(
             "draft",
             "in-progress",
-            delta_doc("draft", "- [AC-D1-1] Fine.\n"),
+            delta_doc("draft", "- [AC-1] Fine.\n"),
             vec![spec_doc()],
         );
 
-        let run = repo.run(&["check", "--hook"], &payload);
+        let run = repo.run(&["lint", "--hook"], &payload);
 
         assert_eq!(run.code, 0);
         let finding = run
@@ -836,20 +987,29 @@ mod hook {
     }
 
     #[test]
-    fn require_flags_apply_to_the_payload_delta() {
+    fn the_gate_applies_to_the_payload_delta() {
         let repo = project();
         let payload = transition_payload(
             "in-progress",
             "complete",
-            delta_doc("in-progress", "- [AC-D1-1] No ref yet.\n"),
+            delta_doc("in-progress", "- [AC-1] No ref yet.\n"),
             vec![spec_doc()],
         );
 
-        let lax = repo.run(&["check", "--hook"], &payload);
-        let strict = repo.run(&["check", "--hook", "--require", "evidence"], &payload);
+        let lax = repo.run(&["lint", "--hook"], &payload);
+        let strict = repo.run(&["lint", "--hook", "--gate", "complete"], &payload);
 
-        assert_eq!(lax.findings()[0]["severity"], "warning");
-        assert_eq!(strict.findings()[0]["severity"], "error");
+        assert_eq!(lax.findings(), Vec::<Value>::new());
+        assert!(
+            strict.has_message("AC-1: claim has no `@ref`"),
+            "{}",
+            strict.stdout
+        );
+        assert!(
+            strict.has_message("is settled by no task"),
+            "{}",
+            strict.stdout
+        );
         assert_eq!(strict.code, 0);
     }
 
@@ -860,20 +1020,19 @@ mod hook {
             &repo,
             1,
             "in-progress",
-            "SPEC-001",
-            "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
+            "- [AC-1] New.\n  @ref tests/store_test.rs#other_test\n",
         );
         repo.commit("delta");
         edit_reopen_body(&repo);
         repo.commit("edit the evidence");
         let mut moved = delta_doc(
             "in-progress",
-            "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
+            "- [AC-1] New.\n  @ref tests/store_test.rs#other_test\n",
         );
         moved["path"] = json!("docs/deltas/DELTA-001-d/index.md");
         let payload = transition_payload("in-progress", "complete", moved, vec![spec_doc()]);
 
-        let gate = repo.run(&["check", "--hook"], &payload);
+        let gate = repo.run(&["lint", "--hook"], &payload);
         let plain = check(&repo, &[]);
 
         assert!(gate.has_message("AC-S1-1: evidence"), "{}", gate.stdout);
@@ -888,7 +1047,7 @@ mod hook {
         moved["path"] = json!("docs/deltas/DELTA-001-d/index.md");
         let payload = transition_payload("draft", "in-progress", moved, vec![spec_doc()]);
 
-        let gate = repo.run(&["check", "--hook", "--require", "intent"], &payload);
+        let gate = repo.run(&["lint", "--hook", "--gate", "in-progress"], &payload);
 
         assert!(!gate.has_message("AC-S1-1: evidence"), "{}", gate.stdout);
     }
@@ -896,7 +1055,7 @@ mod hook {
     fn moved_delta(status: &str) -> Value {
         let mut moved = delta_doc(
             status,
-            "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
+            "- [AC-1] New.\n  @ref tests/store_test.rs#other_test\n",
         );
         moved["path"] = json!("docs/deltas/DELTA-001-d/index.md");
         moved
@@ -911,7 +1070,7 @@ mod hook {
         edit_reopen_body(&repo);
         let payload = validate_payload(vec![moved_delta("complete")]);
 
-        let run = repo.run(&["check", "--hook"], &payload);
+        let run = repo.run(&["lint", "--hook"], &payload);
 
         assert_eq!(run.code, 0);
         assert!(!run.has_message("governed area"), "{}", run.stdout);
@@ -933,17 +1092,17 @@ mod hook {
             vec![spec_doc()],
         );
 
-        let gate = repo.run(&["check", "--hook"], &payload);
+        let gate = repo.run(&["lint", "--hook"], &payload);
         let plain = check(&repo, &[]);
 
         assert_eq!(gate.findings(), Vec::<Value>::new(), "{}", gate.stdout);
         assert!(says(&plain, "AC-S2-1: evidence"));
-        assert!(says(&plain, "create a delta that folds into SPEC-002"));
+        assert!(says(&plain, "create a delta that changes SPEC-002"));
     }
 
     #[test]
     fn an_invalid_payload_is_reported_with_exit_zero() {
-        let run = project().run(&["check", "--hook"], "not json");
+        let run = project().run(&["lint", "--hook"], "not json");
 
         assert_eq!(run.code, 0);
         assert!(run.has_message("invalid hook payload"));

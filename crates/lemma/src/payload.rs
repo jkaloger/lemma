@@ -1,4 +1,4 @@
-use crate::claims::{is_behaviour_part, parse, target_of, Claim};
+use crate::claims::{parse, Claim};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -25,11 +25,11 @@ pub fn tests_or_default(attributes: &Attributes) -> Vec<String> {
     DEFAULT_TESTS.iter().map(|g| g.to_string()).collect()
 }
 
-pub struct BehaviourPart<'a> {
-    pub name: &'a str,
-    pub target: Option<&'a str>,
-    pub claims: Vec<Claim>,
-}
+pub const CHANGES: &str = "changes";
+pub const INDEX_PART: &str = "index";
+pub const DESIGN_PART: &str = "design";
+pub const CLAIMS_PART: &str = "claims";
+pub const TASKS_PART: &str = "tasks";
 
 const DEFAULT_TESTS: [&str; 4] = ["**/tests/**", "**/*_test.*", "**/*.test.*", "**/*.spec.*"];
 
@@ -65,12 +65,24 @@ impl Doc {
         tests_or_default(&self.attributes)
     }
 
-    pub fn fold_targets(&self) -> Vec<&str> {
+    pub fn changed_specs(&self) -> Vec<&str> {
         self.related
             .iter()
-            .filter(|r| r.rel_type == "folds-into")
+            .filter(|r| r.rel_type == CHANGES)
             .map(|r| r.target.as_str())
             .collect()
+    }
+
+    pub fn part_body(&self, name: &str) -> &str {
+        self.part(name).map_or("", |p| p.body.as_str())
+    }
+
+    /// The part a finding or edit names: `index` is the bundle's `index.md` body.
+    pub fn part_text(&self, name: &str) -> &str {
+        match name {
+            INDEX_PART | "" => &self.body,
+            name => self.part_body(name),
+        }
     }
 
     pub fn part(&self, name: &str) -> Option<&Part> {
@@ -108,18 +120,6 @@ impl Doc {
         };
         let newlines_before = text[..frontmatter_end + at].matches('\n').count();
         newlines_before.saturating_sub(leading)
-    }
-
-    pub fn behaviour_parts(&self) -> Vec<BehaviourPart<'_>> {
-        self.parts
-            .iter()
-            .filter(|p| is_behaviour_part(&p.name))
-            .map(|p| BehaviourPart {
-                name: &p.name,
-                target: target_of(&p.name),
-                claims: parse(&p.body).claims,
-            })
-            .collect()
     }
 
     pub fn is_named(&self, reference: &str) -> bool {

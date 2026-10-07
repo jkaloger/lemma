@@ -1,20 +1,14 @@
-use crate::claims::{has_intent, parse, Claim, BEHAVIOUR_PART};
+use crate::claims::{parse, Claim, BEHAVIOUR_PART};
 use crate::evidence::{clean, glob_set, invalid_globs, resolve, RefStatus, Regions};
-use crate::git::{changed_since, git_output, touched_files};
-use crate::payload::{tests_or_default, Attributes, Doc, Finding as Wire, Payload};
+use crate::git::{changed_since, git_output};
+use crate::payload::{Doc, Finding as Wire, Payload};
 use crate::range::{self, Inputs, Rule};
-use crate::world::{carries_claims, folds_into, in_flight, Site, World};
+use crate::shape::{self, Gate};
+use crate::world::{changes, in_flight, Site, World};
 use lazyspec::engine::store::Store;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Require {
-    pub intent: bool,
-    pub evidence: bool,
-    pub clean: bool,
-}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Suite {
@@ -28,7 +22,8 @@ pub struct Options<'a> {
     pub base: Option<&'a str>,
     pub trunk: Option<&'a str>,
     pub session: Option<&'a str>,
-    pub require: Require,
+    pub delta: Option<&'a str>,
+    pub gate: Option<Gate>,
     pub suite: Suite,
 }
 
@@ -194,7 +189,7 @@ pub fn run_with(
     span: Option<&Result<Span, String>>,
 ) -> Vec<Finding> {
     let world = World::load(store, payload);
-    let mut scope = scope_of(&world, payload);
+    let mut scope = scope_of(&world, options, payload);
     let full = options.suite == Suite::Full;
     let mut findings = match span {
         None => Vec::new(),
@@ -214,12 +209,9 @@ pub fn run_with(
     };
     for doc in &scope {
         if full {
-            findings.extend(integrity_findings(&world, doc, options.require));
+            findings.extend(integrity_findings(root, &world, doc, options.gate));
         }
-        findings.extend(evidence_findings(root, &world, doc, options.require));
-    }
-    if full && options.require.clean {
-        findings.extend(uncommitted(root, &world, &scope));
+        findings.extend(evidence_findings(root, &world, doc, options.gate));
     }
     findings.sort();
     findings.dedup();
@@ -248,10 +240,9 @@ fn moved_targets(world: &World, payload: Option<&Payload>) -> Option<BTreeSet<St
     let moved = world.doc(&payload.documents.first()?.id)?;
     match moved.doc_type.as_str() {
         "delta" => Some(
-            moved
-                .fold_targets()
+            world
+                .changed_specs(moved)
                 .into_iter()
-                .filter_map(|t| world.spec_named(t))
                 .map(|spec| spec.id.clone())
                 .collect(),
         ),
@@ -269,17 +260,26 @@ fn touched_by(doc: &Doc, files: &[String]) -> bool {
         .any(|f| Path::new(f).starts_with(dir) || (governs && governed.is_match(f.as_str())))
 }
 
-fn scope_of<'a>(world: &'a World, payload: Option<&Payload>) -> Vec<&'a Doc> {
-    let applies = |d: &&Doc| carries_claims(d);
-    match payload {
-        Some(payload) => payload
+/// The documents linted one by one: every spec and dictum, plus the named delta, or every
+/// in-flight delta for a session. A hook lints the payload's documents instead.
+fn scope_of<'a>(world: &'a World, options: &Options, payload: Option<&Payload>) -> Vec<&'a Doc> {
+    let linted = |d: &&Doc| matches!(d.doc_type.as_str(), "spec" | "dictum" | "delta");
+    if let Some(payload) = payload {
+        return payload
             .documents
             .iter()
             .filter_map(|d| world.doc(&d.id))
-            .filter(applies)
-            .collect(),
-        None => world.docs().iter().filter(applies).collect(),
+            .filter(linted)
+            .collect();
     }
+    let named = |d: &&Doc| options.delta.is_some_and(|name| d.is_named(name));
+    let session = options.suite == Suite::Session;
+    world
+        .docs()
+        .iter()
+        .filter(|d| d.doc_type != "delta" || named(d) || (session && in_flight(d)))
+        .filter(linted)
+        .collect()
 }
 
 pub fn resolve_base(
@@ -328,7 +328,7 @@ pub fn covered_specs(world: &World, completed: &[&Doc]) -> BTreeSet<String> {
         .in_flight()
         .into_iter()
         .chain(completed.iter().copied())
-        .flat_map(Doc::fold_targets)
+        .flat_map(Doc::changed_specs)
         .filter_map(|target| world.spec_named(target))
         .map(|spec| spec.id.clone())
         .collect()
@@ -379,7 +379,7 @@ pub fn coverage(
                 id: Some(id.clone()),
                 part: None,
                 message: format!(
-                    "changes to {}{tail} touch more than one governed area ({areas}) and no in-flight delta folds into {id}; create a delta that folds into {id}",
+                    "changes to {}{tail} touch more than one governed area ({areas}) and no in-flight delta changes {id}; create a delta that changes {id}",
                     sample.join(", ")
                 ),
                 key: Some(format!("check1:{id}")),
@@ -399,9 +399,8 @@ fn struck_for(world: &World, spec: &Doc, completed: &[&Doc]) -> BTreeSet<String>
         .docs()
         .iter()
         .filter(counts)
-        .filter(|delta| folds_into(delta, spec))
+        .filter(|delta| changes(delta, spec))
         .flat_map(|delta| world.sites(delta))
-        .filter(|site| site.governing.is_some_and(|g| g.id == spec.id))
         .flat_map(|site| site.claims)
         .filter(|c| c.struck)
         .map(|c| c.id)
@@ -539,23 +538,39 @@ fn located_sites<'a>(root: &Path, world: &'a World, doc: &'a Doc) -> Vec<Site<'a
     sites
 }
 
-pub fn integrity_findings(world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
+pub fn integrity_findings(
+    root: &Path,
+    world: &World,
+    doc: &Doc,
+    gate: Option<Gate>,
+) -> Vec<Finding> {
     match doc.doc_type.as_str() {
         "spec" | "dictum" => invalid_glob_findings(doc)
             .into_iter()
             .map(|w| from_wire(doc, w))
             .collect(),
-        _ => target_globs(world, doc)
+        _ => world
+            .changed_specs(doc)
             .into_iter()
-            .chain(require.intent.then(|| readiness(doc)).into_iter().flatten())
+            .flat_map(|spec| {
+                invalid_glob_findings(spec)
+                    .into_iter()
+                    .map(|w| from_wire(spec, w))
+            })
+            .chain(shape::findings(root, doc, gate))
             .collect(),
     }
 }
 
-pub fn evidence_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
+pub fn evidence_findings(
+    root: &Path,
+    world: &World,
+    doc: &Doc,
+    gate: Option<Gate>,
+) -> Vec<Finding> {
     located_sites(root, world, doc)
         .iter()
-        .flat_map(|site| claims_have_evidence(root, site, require))
+        .flat_map(|site| claims_have_evidence(root, site, gate))
         .collect()
 }
 
@@ -594,47 +609,11 @@ fn from_wire(doc: &Doc, wire: Wire) -> Finding {
     }
 }
 
-fn target_globs(world: &World, delta: &Doc) -> Vec<Finding> {
-    targets(world, delta)
-        .into_iter()
-        .flat_map(|spec| {
-            invalid_glob_findings(spec)
-                .into_iter()
-                .map(|w| from_wire(spec, w))
-        })
-        .collect()
-}
-
-fn targets<'a>(world: &'a World, delta: &Doc) -> Vec<&'a Doc> {
-    delta
-        .fold_targets()
-        .into_iter()
-        .filter_map(|t| world.spec_named(t))
-        .collect()
-}
-
-fn readiness(delta: &Doc) -> Vec<Finding> {
-    if has_intent(&delta.body) {
-        return Vec::new();
-    }
-    vec![Finding::error(
-        delta,
-        &delta.path,
-        None,
-        "missing or empty `## Intent` section; state why the change is needed",
-    )]
-}
-
-fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Finding> {
-    let applies =
-        matches!(site.doc.doc_type.as_str(), "spec" | "dictum") || site.doc.status == "in-progress";
-    if !applies {
-        return Vec::new();
-    }
-    let tests = site
-        .governing
-        .map(Doc::tests_globs)
-        .unwrap_or_else(|| tests_or_default(&Attributes::default()));
+/// A ref that is written must resolve. A claim without one is an error on a delta at the
+/// `complete` gate and a warning on a spec or dictum; on a delta short of the gate the
+/// build loop has not reached it yet.
+fn claims_have_evidence(root: &Path, site: &Site, gate: Option<Gate>) -> Vec<Finding> {
+    let is_delta = site.doc.doc_type == "delta";
     let finding = |is_error, line, message: String| {
         Finding::graded(is_error, site.doc, &site.path, Some(line), message).in_part(site.part)
     };
@@ -642,14 +621,15 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
     for claim in site.claims.iter().filter(|c| !c.struck) {
         for r in &claim.receipts {
             let name = ref_name(&r.path, r.symbol.as_deref());
-            match resolve(root, &r.path, r.symbol.as_deref(), &tests) {
+            match resolve(root, &r.path, r.symbol.as_deref(), &site.tests) {
                 RefStatus::Ok => {}
                 RefStatus::Unresolved(why) => findings.push(finding(
                     true,
                     r.line,
                     format!(
                         "{}: ref {name} does not resolve: {why}; fix the ref (see lemma refs {})",
-                        claim.id, claim.id
+                        claim.id,
+                        cite(site.doc, &claim.id)
                     ),
                 )),
                 RefStatus::NotATest => findings.push(finding(
@@ -662,55 +642,30 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
                 )),
             }
         }
-        if !claim.intent && claim.receipts.is_empty() {
-            findings.push(finding(
-                require.evidence,
-                claim.line,
-                format!(
-                    "{}: claim has no `@ref`; add `@ref <path>#<symbol>` to a test or mark it [intent]",
-                    claim.id
-                ),
-            ));
+        if claim.intent || !claim.receipts.is_empty() {
+            continue;
         }
+        let complete = gate == Some(Gate::Complete);
+        if is_delta && !complete {
+            continue;
+        }
+        findings.push(finding(
+            complete,
+            claim.line,
+            format!(
+                "{}: claim has no `@ref`; add `@ref <path>#<symbol>` to a test or mark it [intent]",
+                claim.id
+            ),
+        ));
     }
     findings
 }
 
-fn uncommitted(root: &Path, world: &World, scope: &[&Doc]) -> Vec<Finding> {
-    let dirty = touched_files(root);
-    scope
-        .iter()
-        .filter(|d| in_flight(d))
-        .flat_map(|delta| {
-            let governs: Vec<String> = targets(world, delta)
-                .iter()
-                .flat_map(|s| s.governs.clone())
-                .collect();
-            let governed = glob_set(&governs);
-            let ref_paths: BTreeSet<String> = world
-                .sites(delta)
-                .into_iter()
-                .flat_map(|s| s.claims)
-                .filter(|c| !c.struck)
-                .flat_map(|c| {
-                    c.receipts
-                        .iter()
-                        .map(|r| clean(&r.path).to_string())
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            dirty
-                .iter()
-                .filter(|p| governed.is_match(p.as_str()) || ref_paths.contains(p.as_str()))
-                .map(|p| {
-                    Finding::error(
-                        delta,
-                        p,
-                        None,
-                        format!("{p} has uncommitted changes; commit before completing"),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+/// How a claim is named outside its document: `DELTA-004/AC-2` for a delta, the bare id
+/// for a dictum, whose ids are unique across the convention.
+pub fn cite(doc: &Doc, claim: &str) -> String {
+    match doc.doc_type.as_str() {
+        "delta" => format!("{}/{claim}", doc.id),
+        _ => claim.to_string(),
+    }
 }

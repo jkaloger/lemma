@@ -9,10 +9,7 @@ related: []
 ---
 
 ## Intent
-<!-- What changes and why. Required before in-progress. -->
-
-## Approach
-<!-- How, where it is not obvious from the claims. -->
+<!-- Why this change, in a paragraph. Link the spec it changes in `related` as `- changes: SPEC-<n>`. Required before in-progress. -->
 
 ## Out of scope
 <!-- Adjacent work this delta does not do. -->

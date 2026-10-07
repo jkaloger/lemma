@@ -1,7 +1,5 @@
-use crate::check::ref_name;
-use crate::claims::Claim;
 use crate::evidence::{resolve, RefStatus};
-use crate::payload::{tests_or_default, Attributes, Doc};
+use crate::lint::{cite, ref_name};
 use crate::world::World;
 use lazyspec::engine::store::Store;
 use std::path::Path;
@@ -19,37 +17,33 @@ fn status_word(status: &RefStatus) -> &'static str {
     }
 }
 
-pub fn run(store: &Store, root: &Path, claim_id: &str) -> Option<Listing> {
+/// `DELTA-004/AC-2` names one delta's claim; a bare id matches it in every document.
+pub fn run(store: &Store, root: &Path, claim: &str) -> Option<Listing> {
+    let (doc_id, claim_id) = match claim.split_once('/') {
+        Some((doc, id)) => (Some(doc), id),
+        None => (None, claim),
+    };
     let world = World::load(store, None);
-    let found: Vec<(Claim, Option<&Doc>)> = world
-        .all_sites()
-        .into_iter()
-        .flat_map(|site| {
-            let governing = site.governing;
-            site.claims
-                .into_iter()
-                .filter(|c| c.id == claim_id)
-                .map(move |c| (c, governing))
-        })
-        .collect();
-    if found.is_empty() {
-        return None;
-    }
     let mut lines = Vec::new();
     let mut all_ok = true;
-    for (claim, governing) in &found {
-        let tests = governing
-            .map(Doc::tests_globs)
-            .unwrap_or_else(|| tests_or_default(&Attributes::default()));
-        for r in &claim.receipts {
-            let status = resolve(root, &r.path, r.symbol.as_deref(), &tests);
-            all_ok &= status == RefStatus::Ok;
-            lines.push(format!(
-                "{claim_id} {} {}",
-                ref_name(&r.path, r.symbol.as_deref()),
-                status_word(&status)
-            ));
+    let mut found = false;
+    for site in world.docs().iter().flat_map(|doc| world.sites(doc)) {
+        if doc_id.is_some_and(|id| !site.doc.is_named(id)) {
+            continue;
+        }
+        for c in site.claims.iter().filter(|c| c.id == claim_id) {
+            found = true;
+            for r in &c.receipts {
+                let status = resolve(root, &r.path, r.symbol.as_deref(), &site.tests);
+                all_ok &= status == RefStatus::Ok;
+                lines.push(format!(
+                    "{} {} {}",
+                    cite(site.doc, &c.id),
+                    ref_name(&r.path, r.symbol.as_deref()),
+                    status_word(&status)
+                ));
+            }
         }
     }
-    Some(Listing { lines, all_ok })
+    found.then_some(Listing { lines, all_ok })
 }

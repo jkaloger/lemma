@@ -1,5 +1,5 @@
-use crate::check::{self, Finding, Options, Span, Suite};
 use crate::git::changed_since;
+use crate::lint::{self, Finding, Options, Span, Suite};
 use crate::session::{recorded_base, say_once};
 use crate::world::World;
 use lazyspec::engine::store::Store;
@@ -22,8 +22,8 @@ pub fn run(store: &Store, root: &Path, session_id: Option<&str>) -> Vec<Finding>
         suite: Suite::Session,
         ..Options::default()
     };
-    let span = check::resolve_span(root, &options, None);
-    let mut findings: Vec<Finding> = check::run_with(store, root, &options, None, Some(&span))
+    let span = lint::resolve_span(root, &options, None);
+    let mut findings: Vec<Finding> = lint::run_with(store, root, &options, None, Some(&span))
         .into_iter()
         .filter(Finding::is_error)
         .collect();

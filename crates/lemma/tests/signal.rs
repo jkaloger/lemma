@@ -196,11 +196,11 @@ fn the_file_that_makes_the_change_span_two_areas_is_flagged() {
     assert!(said.contains("b/y.rs → SPEC-002"), "{said}");
     assert!(said.contains("more than one governed area"), "{said}");
     assert!(
-        said.contains("create a delta that folds into SPEC-001"),
+        said.contains("create a delta that changes SPEC-001"),
         "{said}"
     );
     assert!(
-        said.contains("create a delta that folds into SPEC-002"),
+        said.contains("create a delta that changes SPEC-002"),
         "{said}"
     );
 }
@@ -215,7 +215,7 @@ fn coverage_is_said_once_per_spec_even_when_more_files_change() {
     edit(&repo, "a/x.rs");
     repo.write("b/y.rs", "fn y() { 1; }\n");
     let second = context_of(&edit(&repo, "b/y.rs"));
-    assert!(second.contains("create a delta that folds into SPEC-002"));
+    assert!(second.contains("create a delta that changes SPEC-002"));
     repo.write("c/z.rs", "fn z() { 1; }\n");
     edit(&repo, "c/z.rs");
 
@@ -265,16 +265,12 @@ fn editing_a_spec_part_reports_checks_three_and_four_for_that_document() {
 fn editing_a_delta_part_reports_its_claims() {
     let repo = project();
     repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
-    repo.delta_part(
-        1,
-        "SPEC-001",
-        "- [AC-D1-1] Retries.\n  @ref tests/store_test.rs#missing\n",
-    );
+    repo.delta_claims(1, "- [AC-1] Retries.\n  @ref tests/store_test.rs#missing\n");
 
-    let said = context_of(&edit(&repo, &delta_part_path(1, "SPEC-001")));
+    let said = context_of(&edit(&repo, &delta_part_path(1, "claims")));
 
     assert!(
-        said.contains("AC-D1-1: ref tests/store_test.rs#missing does not resolve"),
+        said.contains("AC-1: ref tests/store_test.rs#missing does not resolve"),
         "{said}"
     );
 }

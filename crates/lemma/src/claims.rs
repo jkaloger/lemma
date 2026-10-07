@@ -22,6 +22,7 @@ pub struct Claim {
     pub end: usize,
     pub struck: bool,
     pub intent: bool,
+    pub proposed: bool,
     pub per: Vec<Citation>,
     pub receipts: Vec<Receipt>,
     pub block: Vec<String>,
@@ -33,17 +34,6 @@ struct Section {
 }
 
 pub const BEHAVIOUR_PART: &str = "behaviour";
-
-pub fn is_behaviour_part(name: &str) -> bool {
-    name == BEHAVIOUR_PART || target_of(name).is_some()
-}
-
-pub fn target_of(part_name: &str) -> Option<&str> {
-    part_name
-        .strip_prefix(BEHAVIOUR_PART)?
-        .strip_prefix('.')
-        .filter(|target| !target.is_empty())
-}
 
 #[derive(Debug, Default)]
 pub struct Behaviour {
@@ -105,7 +95,63 @@ fn outside_fences(lines: &[&str]) -> Vec<bool> {
     lines.iter().map(|line| masker.is_live(line)).collect()
 }
 
-fn heading_level(line: &str) -> Option<(usize, &str)> {
+/// Lines outside code fences and HTML comments, numbered from 1.
+pub fn live_lines(body: &str) -> Vec<(usize, &str)> {
+    let lines = lines_of(body);
+    let live = outside_fences(&lines);
+    lines
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| live[*i])
+        .map(|(i, line)| (i + 1, line))
+        .collect()
+}
+
+pub const REVIEW_MARKER: &str = "@review";
+pub const REVIEW_QUOTE: &str = "> review:";
+
+pub fn is_review_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let tagged = trimmed
+        .strip_prefix(REVIEW_MARKER)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
+    tagged || trimmed.starts_with(REVIEW_QUOTE)
+}
+
+pub fn review_lines(body: &str) -> Vec<usize> {
+    live_lines(body)
+        .into_iter()
+        .filter(|(_, line)| is_review_line(line))
+        .map(|(n, _)| n)
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bullet {
+    pub line: usize,
+    pub text: String,
+    pub id: Option<String>,
+}
+
+/// Top-level `- ` items, with the claim id when the item has one.
+pub fn bullets(body: &str) -> Vec<Bullet> {
+    live_lines(body)
+        .into_iter()
+        .filter_map(|(line, text)| {
+            let rest = text.strip_prefix("- ")?;
+            let id = item_pattern()
+                .captures(text)
+                .map(|caps| caps[2].to_string());
+            let text = match id {
+                Some(_) => split_markers(text).1.to_string(),
+                None => rest.trim().to_string(),
+            };
+            Some(Bullet { line, text, id })
+        })
+        .collect()
+}
+
+pub fn heading_level(line: &str) -> Option<(usize, &str)> {
     let hashes = line.chars().take_while(|c| *c == '#').count();
     if hashes == 0 || hashes > 6 {
         return None;
@@ -171,15 +217,30 @@ fn receipts(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<Rece
         .collect()
 }
 
-const INTENT_MARKER: &str = "[intent]";
+pub const INTENT_MARKER: &str = "[intent]";
+pub const PROPOSED_MARKER: &str = "[proposed]";
 
-fn leads_with_intent(first_line: &str) -> bool {
+fn marker_token(text: &str) -> Option<(&'static str, &str)> {
+    [INTENT_MARKER, PROPOSED_MARKER]
+        .into_iter()
+        .find_map(|marker| {
+            let rest = text.strip_prefix(marker)?;
+            (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((marker, rest))
+        })
+}
+
+/// The marker tokens directly after a claim's `[ID]`, and the claim text after them.
+pub fn split_markers(first_line: &str) -> (Vec<&'static str>, &str) {
     let Some(caps) = item_pattern().captures(first_line) else {
-        return false;
+        return (Vec::new(), first_line);
     };
-    let rest = first_line[caps.get(0).map_or(0, |m| m.end())..].trim_start();
-    rest.strip_prefix(INTENT_MARKER)
-        .is_some_and(|after| after.is_empty() || after.starts_with(char::is_whitespace))
+    let mut rest = first_line[caps.get(0).map_or(0, |m| m.end())..].trim_start();
+    let mut markers = Vec::new();
+    while let Some((marker, after)) = marker_token(rest) {
+        markers.push(marker);
+        rest = after.trim_start();
+    }
+    (markers, rest)
 }
 
 pub fn per_text(line: &str) -> Option<&str> {
@@ -215,13 +276,15 @@ pub fn parse(body: &str) -> Behaviour {
             continue;
         };
         let end = claim_end(&lines, cursor);
+        let (markers, _) = split_markers(line);
         claims.push(Claim {
             id: caps[2].to_string(),
             line: cursor + 1,
             start: cursor,
             end,
             struck: caps.get(1).is_some(),
-            intent: leads_with_intent(line),
+            intent: markers.contains(&INTENT_MARKER),
+            proposed: markers.contains(&PROPOSED_MARKER),
             per: citations(&lines, &live, cursor, end),
             receipts: receipts(&lines, &live, cursor, end),
             block: lines[cursor..end].iter().map(|s| s.to_string()).collect(),
@@ -327,13 +390,42 @@ mod tests {
     }
 
     #[test]
-    fn behaviour_part_names() {
-        assert!(is_behaviour_part("behaviour"));
-        assert!(is_behaviour_part("behaviour.SPEC-003"));
-        assert!(!is_behaviour_part("tasks"));
-        assert!(!is_behaviour_part("behaviours"));
-        assert_eq!(target_of("behaviour.SPEC-003"), Some("SPEC-003"));
-        assert_eq!(target_of("behaviour"), None);
+    fn proposed_and_intent_parse_in_either_order() {
+        let both = &parse("- [AC-1] [proposed] [intent] x\n").claims[0];
+        assert!(both.proposed && both.intent);
+        let flipped = &parse("- [AC-1] [intent] [proposed] x\n").claims[0];
+        assert!(flipped.proposed && flipped.intent);
+        assert!(!parse("- [AC-1] x [proposed]\n").claims[0].proposed);
+        assert_eq!(
+            split_markers("- [AC-1] [proposed] Retries once.").1,
+            "Retries once."
+        );
+    }
+
+    #[test]
+    fn review_lines_are_tagged_lines_and_review_quotes() {
+        let body = "- [AC-1] x\n  @review why?\n  @reviewer no\n\n> review: name it\n> reviewed\n```\n@review fenced\n```\n";
+        assert_eq!(review_lines(body), vec![2, 5]);
+    }
+
+    #[test]
+    fn bullets_carry_their_id_when_planned() {
+        let found = bullets("- [AC-1] [intent] Feels fast.\n  - nested\n- Retries once.\n");
+        assert_eq!(
+            found,
+            vec![
+                Bullet {
+                    line: 1,
+                    text: "Feels fast.".into(),
+                    id: Some("AC-1".into())
+                },
+                Bullet {
+                    line: 3,
+                    text: "Retries once.".into(),
+                    id: None
+                }
+            ]
+        );
     }
 
     #[test]

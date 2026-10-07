@@ -1,6 +1,6 @@
 use crate::claims::{Claim, BEHAVIOUR_PART};
 use crate::git::git_output;
-use crate::payload::{Doc, Payload};
+use crate::payload::{tests_or_default, Attributes, Doc, Payload, CLAIMS_PART};
 use crate::project::docs_from_store;
 use lazyspec::engine::doc_json::doc_to_json;
 use lazyspec::engine::document::DocMeta;
@@ -17,15 +17,15 @@ pub struct Site<'a> {
     pub part: &'a str,
     pub path: String,
     pub claims: Vec<Claim>,
-    pub governing: Option<&'a Doc>,
+    pub tests: Vec<String>,
 }
 
 pub fn in_flight(doc: &Doc) -> bool {
     doc.doc_type == "delta" && matches!(doc.status.as_str(), "draft" | "in-progress")
 }
 
-pub fn folds_into(delta: &Doc, spec: &Doc) -> bool {
-    delta.fold_targets().iter().any(|t| spec.is_named(t))
+pub fn changes(delta: &Doc, spec: &Doc) -> bool {
+    delta.changed_specs().iter().any(|t| spec.is_named(t))
 }
 
 pub fn doc_at(root: &Path, rev: &str, path: &str) -> Option<Doc> {
@@ -87,39 +87,53 @@ impl World {
             .find(|d| d.doc_type == "spec" && d.is_named(name))
     }
 
-    pub fn sites<'a>(&'a self, doc: &'a Doc) -> Vec<Site<'a>> {
-        if doc.doc_type == "dictum" {
-            return vec![Site {
-                doc,
-                part: "",
-                path: doc.path.clone(),
-                claims: crate::claims::parse(&doc.body).claims,
-                governing: Some(doc),
-            }];
-        }
-        if doc.doc_type == "spec" {
-            return doc
-                .part(BEHAVIOUR_PART)
-                .map(|part| Site {
-                    doc,
-                    part: BEHAVIOUR_PART,
-                    path: doc.part_path(BEHAVIOUR_PART),
-                    claims: crate::claims::parse(&part.body).claims,
-                    governing: Some(doc),
-                })
-                .into_iter()
-                .collect();
-        }
-        doc.behaviour_parts()
+    pub fn changed_specs(&self, delta: &Doc) -> Vec<&Doc> {
+        delta
+            .changed_specs()
             .into_iter()
-            .map(|part| Site {
-                doc,
-                part: part.name,
-                path: doc.part_path(part.name),
-                claims: part.claims,
-                governing: part.target.and_then(|t| self.spec_named(t)),
-            })
+            .filter_map(|t| self.spec_named(t))
             .collect()
+    }
+
+    /// The `tests` globs a delta's refs must match: those of every spec it changes.
+    pub fn delta_tests(&self, delta: &Doc) -> Vec<String> {
+        let mut globs: Vec<String> = self
+            .changed_specs(delta)
+            .into_iter()
+            .flat_map(Doc::tests_globs)
+            .collect();
+        globs.dedup();
+        match globs.is_empty() {
+            true => tests_or_default(&Attributes::default()),
+            false => globs,
+        }
+    }
+
+    pub fn sites<'a>(&'a self, doc: &'a Doc) -> Vec<Site<'a>> {
+        let site = |part: &'a str, body: &str, tests| Site {
+            doc,
+            part,
+            path: match part {
+                "" => doc.path.clone(),
+                name => doc.part_path(name),
+            },
+            claims: crate::claims::parse(body).claims,
+            tests,
+        };
+        match doc.doc_type.as_str() {
+            "dictum" => vec![site("", &doc.body, doc.tests_globs())],
+            "spec" => doc
+                .part(BEHAVIOUR_PART)
+                .map(|part| site(BEHAVIOUR_PART, &part.body, doc.tests_globs()))
+                .into_iter()
+                .collect(),
+            "delta" => vec![site(
+                CLAIMS_PART,
+                doc.part_body(CLAIMS_PART),
+                self.delta_tests(doc),
+            )],
+            _ => Vec::new(),
+        }
     }
 
     pub fn all_sites(&self) -> Vec<Site<'_>> {

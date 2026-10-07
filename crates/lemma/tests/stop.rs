@@ -95,9 +95,7 @@ mod on_a_branch {
             "{}",
             run.stderr
         );
-        assert!(run
-            .stderr
-            .contains("create a delta that folds into SPEC-002"));
+        assert!(run.stderr.contains("create a delta that changes SPEC-002"));
     }
 
     #[test]
@@ -179,11 +177,7 @@ mod on_a_branch {
         let repo = two_specs();
         branch(&repo);
         repo.delta_file(1, "in-progress", &["SPEC-001"], "## Intent\n\nOne.\n");
-        repo.delta_part(
-            1,
-            "SPEC-001",
-            "- [AC-D1-1] Gone.\n  @ref tests/store_test.rs#missing\n",
-        );
+        repo.delta_claims(1, "- [AC-1] Gone.\n  @ref tests/store_test.rs#missing\n");
 
         let run = stop(&repo);
 
@@ -216,7 +210,7 @@ mod on_a_branch {
         repo.spec_file(1, "active", &["a/**", "[bad"], INTENT);
 
         assert_eq!(stop(&repo).code, 0);
-        assert_eq!(repo.run(&["check"], "").code, 2);
+        assert_eq!(repo.run(&["lint"], "").code, 2);
     }
 
     #[test]

@@ -27,8 +27,8 @@ authorship = "generated"
 lifecycle = { states = ["draft", "in-progress", "complete"], edges = [{ from = "draft", to = "in-progress" }, { from = "in-progress", to = "complete" }] }
 
 [[relationships]]
-name = "folds-into"
-inverse = "folded-from"
+name = "changes"
+inverse = "changed-by"
 "#;
 
 pub const TEST_FILE: &str = "tests/store_test.rs";
@@ -215,10 +215,10 @@ impl Repo {
         self.write(&spec_part_path(n), body);
     }
 
-    pub fn delta_file(&self, n: u32, status: &str, folds: &[&str], body: &str) {
-        let related: String = folds
+    pub fn delta_file(&self, n: u32, status: &str, changes: &[&str], body: &str) {
+        let related: String = changes
             .iter()
-            .map(|f| format!("- folds-into: {f}\n"))
+            .map(|f| format!("- changes: {f}\n"))
             .collect();
         let related = if related.is_empty() {
             String::new()
@@ -231,8 +231,16 @@ impl Repo {
         self.write(&format!("{}/index.md", delta_dir(n)), &content);
     }
 
-    pub fn delta_part(&self, n: u32, target: &str, body: &str) {
-        self.write(&delta_part_path(n, target), body);
+    pub fn delta_part(&self, n: u32, part: &str, body: &str) {
+        self.write(&delta_part_path(n, part), body);
+    }
+
+    pub fn delta_claims(&self, n: u32, body: &str) {
+        self.delta_part(n, "claims", body);
+    }
+
+    pub fn delta_tasks(&self, n: u32, body: &str) {
+        self.delta_part(n, "tasks", body);
     }
 }
 
@@ -256,8 +264,8 @@ pub fn delta_dir(n: u32) -> String {
     format!("docs/deltas/DELTA-00{n}-d")
 }
 
-pub fn delta_part_path(n: u32, target: &str) -> String {
-    format!("{}/behaviour.{target}.md", delta_dir(n))
+pub fn delta_part_path(n: u32, part: &str) -> String {
+    format!("{}/{part}.md", delta_dir(n))
 }
 
 pub fn doc(
@@ -265,12 +273,12 @@ pub fn doc(
     doc_type: &str,
     status: &str,
     governs: &[&str],
-    folds: &[&str],
+    changes: &[&str],
     body: &str,
 ) -> Value {
-    let related: Vec<Value> = folds
+    let related: Vec<Value> = changes
         .iter()
-        .map(|t| json!({"type": "folds-into", "target": t}))
+        .map(|t| json!({"type": "changes", "target": t}))
         .collect();
     json!({
         "id": id,

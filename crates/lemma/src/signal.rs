@@ -1,5 +1,5 @@
-use crate::check::{self, Finding, Options, Span};
 use crate::evidence::clean;
+use crate::lint::{self, Finding, Options, Span};
 use crate::payload::Doc;
 use crate::project;
 use crate::session::say_once;
@@ -85,10 +85,10 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
             session: Some(session),
             ..Options::default()
         };
-        if let Ok(span) = check::resolve_span(root, &options, None) {
+        if let Ok(span) = lint::resolve_span(root, &options, None) {
             let completed = world.completed_since(root, &span.base, &span.files);
             if referenced {
-                findings.extend(check::evidence_changes(
+                findings.extend(lint::evidence_changes(
                     root,
                     &world,
                     &span,
@@ -178,15 +178,15 @@ fn newly_uncovered(
     completed: &[&Doc],
     file: &str,
 ) -> Vec<Finding> {
-    let covered = check::covered_specs(world, completed);
+    let covered = lint::covered_specs(world, completed);
     let mut files = span.files.clone();
     files.retain(|f| f != file);
-    let before: BTreeSet<Option<String>> = check::coverage(store, root, &covered, &files)
+    let before: BTreeSet<Option<String>> = lint::coverage(store, root, &covered, &files)
         .into_iter()
         .map(|f| f.id)
         .collect();
     files.push(file.to_string());
-    check::coverage(store, root, &covered, &files)
+    lint::coverage(store, root, &covered, &files)
         .into_iter()
         .filter(|f| !before.contains(&f.id))
         .collect()
@@ -201,9 +201,8 @@ fn owner_of<'a>(world: &'a World, file: &str) -> Option<&'a Doc> {
 }
 
 fn document_findings(root: &Path, world: &World, doc: &Doc) -> Vec<Finding> {
-    let require = check::Require::default();
-    let mut findings = check::integrity_findings(world, doc, require);
-    findings.extend(check::evidence_findings(root, world, doc, require));
+    let mut findings = lint::integrity_findings(root, world, doc, None);
+    findings.extend(lint::evidence_findings(root, world, doc, None));
     findings.retain(|f| f.id.as_deref() == Some(doc.id.as_str()));
     findings
 }

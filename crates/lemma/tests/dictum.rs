@@ -21,7 +21,7 @@ fn project(body: &str) -> Repo {
 }
 
 fn check(repo: &Repo) -> Run {
-    repo.run(&["check"], "")
+    repo.run(&["lint"], "")
 }
 
 #[test]

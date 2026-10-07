@@ -43,8 +43,8 @@ staleness = "drift"
 lifecycle = { states = ["draft", "accepted"], edges = [{ from = "draft", to = "accepted" }] }
 
 [[relationships]]
-name = "folds-into"
-inverse = "folded-from"
+name = "changes"
+inverse = "changed-by"
 
 [[relationships]]
 name = "affects"
@@ -59,10 +59,10 @@ name = "supersedes"
 inverse = "superseded-by"
 
 [[edges]]
-name = "delta-folds-into-spec"
+name = "delta-changes-spec"
 from = "delta"
 to = "spec"
-via = "folds-into"
+via = "changes"
 required = "error"
 
 [[edges]]
@@ -100,7 +100,7 @@ dir = ".lazyspec/templates"
 name = "lemma-validate"
 event = "validate"
 types = ["spec", "delta", "decision", "dictum"]
-run = ["lemma", "check", "--hook"]
+run = ["lemma", "lint", "--hook"]
 
 [[hooks]]
 name = "lemma-intent-gate"
@@ -109,7 +109,7 @@ types = ["delta"]
 from = "draft"
 to = "in-progress"
 context_types = ["spec", "delta"]
-run = ["lemma", "check", "--hook", "--require", "intent"]
+run = ["lemma", "lint", "--hook", "--gate", "in-progress"]
 
 [[hooks]]
 name = "lemma-check-gate"
@@ -118,4 +118,4 @@ types = ["delta"]
 from = "in-progress"
 to = "complete"
 context_types = ["spec", "delta"]
-run = ["lemma", "check", "--hook", "--require", "evidence", "--require", "clean"]
+run = ["lemma", "lint", "--hook", "--gate", "complete"]

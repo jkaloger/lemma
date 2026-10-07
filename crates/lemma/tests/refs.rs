@@ -9,17 +9,9 @@ fn repo() -> Repo {
         "- [AC-S1-1] Settled.\n  @ref tests/store_test.rs#reopen_keeps_prior\n- [AC-S1-2] Broken.\n  @ref tests/store_test.rs#missing\n  @ref src/lib.rs#a\n  @ref tests/store_test.rs#other_test\n",
     );
     repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
-    repo.delta_part(
-        1,
-        "SPEC-001",
-        "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n",
-    );
+    repo.delta_claims(1, "- [AC-1] New.\n  @ref tests/store_test.rs#other_test\n");
     repo.delta_file(2, "complete", &["SPEC-001"], INTENT);
-    repo.delta_part(
-        2,
-        "SPEC-001",
-        "- [AC-D2-1] Old.\n  @ref tests/store_test.rs#missing\n",
-    );
+    repo.delta_claims(2, "- [AC-1] Old.\n  @ref tests/store_test.rs#missing\n");
     repo.commit("fixtures");
     repo
 }
@@ -55,22 +47,27 @@ fn each_ref_gets_its_own_status_and_any_failure_exits_two() {
 }
 
 #[test]
-fn in_flight_delta_claims_are_listed() {
-    let run = refs(&repo(), "AC-D1-1");
+fn a_delta_claim_is_cited_with_its_delta() {
+    let run = refs(&repo(), "DELTA-001/AC-1");
 
     assert_eq!(run.code, 0);
-    assert_eq!(run.stdout, "AC-D1-1 tests/store_test.rs#other_test ok\n");
+    assert_eq!(
+        run.stdout,
+        "DELTA-001/AC-1 tests/store_test.rs#other_test ok\n"
+    );
 }
 
 #[test]
-fn complete_deltas_are_not_searched() {
-    let run = refs(&repo(), "AC-D2-1");
+fn a_bare_id_lists_it_in_every_delta_complete_ones_included() {
+    let run = refs(&repo(), "AC-1");
 
     assert_eq!(run.code, 2);
-    assert!(
-        run.stderr.contains("unknown claim AC-D2-1"),
-        "{}",
-        run.stderr
+    assert_eq!(
+        run.stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "DELTA-001/AC-1 tests/store_test.rs#other_test ok",
+            "DELTA-002/AC-1 tests/store_test.rs#missing unresolved",
+        ]
     );
 }
 

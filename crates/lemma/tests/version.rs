@@ -30,7 +30,7 @@ fn run_without_lazyspec(repo: &Repo, args: &[&str]) -> Run {
     run_with_path(repo, args, bin_dir.path().as_os_str())
 }
 
-const STORE_COMMANDS: [&[&str]; 2] = [&["check"], &["refs", "AC-D1-1"]];
+const STORE_COMMANDS: [&[&str]; 2] = [&["lint"], &["refs", "AC-1"]];
 
 #[test]
 fn store_commands_refuse_an_old_lazyspec_with_an_install_hint() {
@@ -80,7 +80,7 @@ fn stop_warns_about_a_missing_lazyspec_without_blocking() {
 fn a_current_lazyspec_passes_the_check() {
     let repo = Repo::new();
 
-    let run = run_with_lazyspec(&repo, &["check"], "lazyspec 0.15.1");
+    let run = run_with_lazyspec(&repo, &["lint"], "lazyspec 0.15.1");
 
     assert_eq!(run.code, 0);
     assert_eq!(run.stderr, "");

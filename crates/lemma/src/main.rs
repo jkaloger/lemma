@@ -1,20 +1,22 @@
-mod check;
 mod claims;
 mod evidence;
 mod git;
+mod lint;
 mod payload;
 mod project;
 mod range;
 mod refs;
 mod session;
+mod shape;
 mod signal;
 mod stop;
+mod tasks;
 #[cfg(test)]
 mod testgit;
 mod version;
 mod world;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use lazyspec::engine::store::Store;
 use payload::{Finding, Output, Payload};
 use std::io::Read;
@@ -33,26 +35,21 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum RequireArg {
-    Intent,
-    Evidence,
-    Clean,
-}
-
 #[derive(Subcommand)]
 enum Command {
-    /// Run checks 1 to 3 over the working tree against the base
-    Check {
+    /// Lint the working tree against the base; with a delta, its shape and evidence too
+    Lint {
+        /// The delta to lint, by id
+        delta: Option<String>,
         /// Revision to diff against; overrides base resolution
         #[arg(long)]
         base: Option<String>,
         /// Trunk branch for the merge-base; default main, else master, else origin/HEAD
         #[arg(long)]
         trunk: Option<String>,
-        /// Turn a readiness condition into errors
-        #[arg(long, value_enum)]
-        require: Vec<RequireArg>,
+        /// Apply the rules of the transition into this status: in-progress or complete
+        #[arg(long)]
+        gate: Option<String>,
         #[arg(long, conflicts_with = "hook")]
         json: bool,
         /// Read a lazyspec payload on stdin, print findings JSON, exit 0
@@ -115,26 +112,28 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn check_command(
+fn lint_command(
+    delta: Option<String>,
     base: Option<String>,
     trunk: Option<String>,
-    require: &[RequireArg],
+    gate: Option<String>,
     json: bool,
     hook: bool,
 ) -> ExitCode {
-    let options = check::Options {
+    let gate = match gate.as_deref().map(shape::Gate::parse).transpose() {
+        Ok(gate) => gate,
+        Err(message) => return fail(message),
+    };
+    let options = lint::Options {
         base: base.as_deref(),
         trunk: trunk.as_deref(),
-        require: check::Require {
-            intent: require.iter().any(|r| matches!(r, RequireArg::Intent)),
-            evidence: require.iter().any(|r| matches!(r, RequireArg::Evidence)),
-            clean: require.iter().any(|r| matches!(r, RequireArg::Clean)),
-        },
-        ..check::Options::default()
+        delta: delta.as_deref(),
+        gate,
+        ..lint::Options::default()
     };
     if hook {
         return hook_with_store(|store, root, payload| {
-            let findings = check::run(store, root, &options, Some(payload));
+            let findings = lint::run(store, root, &options, Some(payload));
             Output::findings(findings.iter().map(|f| f.for_hook(payload)).collect())
         });
     }
@@ -142,12 +141,21 @@ fn check_command(
         Ok(found) => found,
         Err(message) => return fail(message),
     };
-    let findings = check::run(&store, &root, &options, None);
+    if let Some(name) = options.delta {
+        if !world::World::load(&store, None)
+            .docs()
+            .iter()
+            .any(|d| d.doc_type == "delta" && d.is_named(name))
+        {
+            return fail(format!("unknown delta {name}"));
+        }
+    }
+    let findings = lint::run(&store, &root, &options, None);
     match json {
         true => println!("{}", serde_json::json!({ "findings": findings })),
         false => findings.iter().for_each(|f| println!("{}", f.render())),
     }
-    match check::has_error(&findings) {
+    match lint::has_error(&findings) {
         true => ExitCode::from(2),
         false => ExitCode::SUCCESS,
     }
@@ -218,13 +226,14 @@ fn session_start_command() -> ExitCode {
 
 fn main() -> ExitCode {
     match Cli::parse().command {
-        Command::Check {
+        Command::Lint {
+            delta,
             base,
             trunk,
-            require,
+            gate,
             json,
             hook,
-        } => check_command(base, trunk, &require, json, hook),
+        } => lint_command(delta, base, trunk, gate, json, hook),
         Command::Refs { claim } => refs_command(&claim),
         Command::Stop => stop_command(),
         Command::SessionStart => session_start_command(),
