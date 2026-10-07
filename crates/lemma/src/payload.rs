@@ -104,7 +104,7 @@ impl Doc {
         claims
     }
 
-    fn body_line_offset(&self, root: &Path) -> usize {
+    pub fn body_line_offset(&self, root: &Path) -> usize {
         let Ok(text) = std::fs::read_to_string(root.join(&self.path)) else {
             return 0;
         };
@@ -201,7 +201,7 @@ impl Finding {
     }
 
     pub fn in_part(mut self, part: &str) -> Self {
-        self.part = Some(part.to_string());
+        self.part = Some(part.to_string()).filter(|p| !p.is_empty());
         self
     }
 }

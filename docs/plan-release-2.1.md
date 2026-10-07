@@ -38,7 +38,7 @@ Markers and surface:
 - [x] W51 `claims`: decision 62 parsing. `Claim` gains `observed`, `assumed`, `per: Vec<Citation>`; mutual-exclusion finding. Tests: each marker parses; two markers error; `@per` lines parse and are ignored by check 4 identity, as are `[observed]` and `[assumed]`; fenced and commented markers ignored.
 - [x] W52 `check` and `fold`: decisions 62, 65. Check 3 cases; `--require evidence` assumption errors; `apply` refuses to fold `[assumed]`; check 4 error on `[assumed]` in a spec; `--require intent` and the alias; `readiness` loses the claim branch; intent count removed; `delta/SKILL.md` lifecycle steps 4 and 7 updated to match. Tests: one per rule; `--require claims` prints the hint.
 - [x] W53 `apply` preview and gate output: decisions 63, 64. Provenance resolution against the base (decision status via `git show <base>:<path>`); resolved and discarded assumptions from the claims part's history within the range (decision 64). Tests: grouping; `provenance: none` line; decision accepted after the base shows `(not accepted at base)`; an assumption resolved in place prints `was assumed`; one replaced names its replacement; a deleted one is listed as discarded; a delta created inside the range (absent at base) still resolves.
-- [ ] W54 `world` and dictums as claim sites: decision 67 binary half. Tests: dictum ref unresolved is a check 3 error; dictum region change is a check 2 error; the same change with the dictum striking and re-adding the id in the range is clean; a dictum is not an area for check 1; `lemma signal` pointers include the dictum on first touch.
+- [x] W54 `world` and dictums as claim sites: decision 67 binary half. Tests: dictum ref unresolved is a check 3 error; dictum region change is a check 2 error; the same change with the dictum striking and re-adding the id in the range is clean; a dictum is not an area for check 1; `lemma signal` pointers include the dictum on first touch.
 
 Format break, one migration:
 
@@ -48,3 +48,5 @@ Format break, one migration:
 - [ ] W60 W48 follow-ups, prose and migrate. F5: the `[assumed]` exits cover code that already embodies the assumption (record the implemented value in the open question), and an agent may write Open questions into a draft spec it created. F6: entry skill says `governs` is revisited when code lands. F1: README says re-adopting is `init --template --force` after a diff. F2: `migrate` removes `.lazyspec/dictums/` when `docs/convention/` holds the seeds (decision 69).
 - [ ] W58 review: whole-diff review against DECISION-002 and this plan.
 - [ ] W59 acceptance (human): hydra on 2.1 after `lemma migrate`; compare against the W48 result. Decide whether `[observed]` needs the ratio finding.
+
+Stopped after W54. W55 to W60 are superseded by DECISION-003 and `plan-release-3.md`.

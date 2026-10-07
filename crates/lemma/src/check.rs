@@ -6,7 +6,7 @@ use crate::git::{changed_since, git_output, touched_files};
 use crate::payload::{tests_or_default, Attributes, Doc, Finding as Wire, Payload};
 use crate::range::{self, Inputs, Rule};
 use crate::targets::Targets;
-use crate::world::{in_flight, Site, World};
+use crate::world::{carries_claims, in_flight, Site, World};
 use lazyspec::engine::store::Store;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -107,7 +107,7 @@ impl Finding {
     }
 
     pub fn in_part(mut self, part: &str) -> Self {
-        self.part = Some(part.to_string());
+        self.part = Some(part.to_string()).filter(|p| !p.is_empty());
         self
     }
 
@@ -280,14 +280,14 @@ fn moved_targets(world: &World, payload: Option<&Payload>) -> Option<BTreeSet<St
 fn touched_by(doc: &Doc, files: &[String]) -> bool {
     let dir = Path::new(&doc.path).parent().unwrap_or(Path::new(""));
     let governed = glob_set(&doc.governs);
-    let governs = doc.doc_type == "spec" && !doc.governs.is_empty();
+    let governs = matches!(doc.doc_type.as_str(), "spec" | "dictum") && !doc.governs.is_empty();
     files
         .iter()
         .any(|f| Path::new(f).starts_with(dir) || (governs && governed.is_match(f.as_str())))
 }
 
 fn scope_of<'a>(world: &'a World, payload: Option<&Payload>) -> Vec<&'a Doc> {
-    let applies = |d: &&Doc| d.doc_type == "spec" || in_flight(d);
+    let applies = |d: &&Doc| carries_claims(d);
     match payload {
         Some(payload) => payload
             .documents
@@ -425,6 +425,45 @@ fn struck_for(world: &World, spec: &Doc, completed: &[&Doc]) -> BTreeSet<String>
         .collect()
 }
 
+struct ChangeSite<'a> {
+    doc: &'a Doc,
+    part: &'static str,
+    path: String,
+    now: Vec<Claim>,
+    hand_edited: bool,
+}
+
+fn change_sites<'a>(root: &Path, world: &'a World) -> Vec<ChangeSite<'a>> {
+    let specs = world.specs().into_iter().filter_map(|spec| {
+        let part = spec.part(BEHAVIOUR_PART)?;
+        Some(ChangeSite {
+            doc: spec,
+            part: BEHAVIOUR_PART,
+            path: spec.part_path(BEHAVIOUR_PART),
+            now: parse(&part.body).claims,
+            hand_edited: false,
+        })
+    });
+    let dictums = world
+        .docs()
+        .iter()
+        .filter(|d| d.doc_type == "dictum")
+        .map(|dictum| ChangeSite {
+            doc: dictum,
+            part: "",
+            path: dictum.path.clone(),
+            now: dictum.index_claims(root),
+            hand_edited: true,
+        });
+    specs.chain(dictums).collect()
+}
+
+fn dictum_retires(old: &Claim, base: &[Claim], now: &[Claim]) -> bool {
+    let struck = now.iter().any(|c| c.id == old.id && c.struck);
+    let added = now.iter().any(|c| base.iter().all(|b| b.id != c.id));
+    struck && added
+}
+
 pub fn evidence_changes(
     root: &Path,
     world: &World,
@@ -437,24 +476,29 @@ pub fn evidence_changes(
     let changed_files: HashSet<&str> = span.files.iter().map(String::as_str).collect();
     let mut regions = Regions::new(root, base);
     let mut findings = Vec::new();
-    for spec in world.specs() {
-        let Some(part) = spec.part(BEHAVIOUR_PART) else {
-            continue;
+    for site in change_sites(root, world) {
+        let spec = site.doc;
+        let path = &site.path;
+        let mentions = |file: &str| {
+            site.now
+                .iter()
+                .any(|c| c.receipts.iter().any(|r| clean(&r.path) == file))
         };
-        if only.is_some_and(|file| !part.body.contains(file)) {
+        if only.is_some_and(|file| !mentions(file)) {
             continue;
         }
-        let path = spec.part_path(BEHAVIOUR_PART);
         let Some(at_base) = git_output(root, &["show", &format!("{base}:./{path}")]) else {
             continue;
         };
         let struck = struck_for(world, spec, completed);
-        let now = parse(&part.body).claims;
-        for old in parse(&at_base).claims.iter().filter(|c| !c.struck) {
-            let Some(live) = now.iter().find(|c| c.id == old.id && !c.struck) else {
-                continue;
+        let base_claims = parse(&at_base).claims;
+        for old in base_claims.iter().filter(|c| !c.struck) {
+            let live = site.now.iter().find(|c| c.id == old.id && !c.struck);
+            let excused = match site.hand_edited {
+                true => dictum_retires(old, &base_claims, &site.now),
+                false => live.is_none() || struck.contains(&old.id),
             };
-            if struck.contains(&old.id) {
+            if excused {
                 continue;
             }
             for r in &old.receipts {
@@ -468,26 +512,32 @@ pub fn evidence_changes(
                     continue;
                 }
                 let line = live
-                    .receipts
-                    .iter()
-                    .find(|n| n.path == r.path && n.symbol == r.symbol)
-                    .map_or(live.line, |n| n.line);
+                    .and_then(|l| {
+                        l.receipts
+                            .iter()
+                            .find(|n| n.path == r.path && n.symbol == r.symbol)
+                            .map(|n| n.line)
+                    })
+                    .unwrap_or_else(|| live.map_or(old.line, |c| c.line));
                 let name = ref_name(&r.path, r.symbol.as_deref());
+                let how = match site.hand_edited {
+                    true => format!("strike {} in the dictum and add a new id", old.id),
+                    false => format!("strike {} in a delta and add a new id", old.id),
+                };
                 let message = match old.observed {
                     true => format!(
                         "{}: characterised behaviour changed; confirm the change is intended",
                         old.id
                     ),
                     false => format!(
-                        "{}: evidence {name} changed since {short}; strike {} in a delta and add a new id, or revert the change",
-                        old.id, old.id
+                        "{}: evidence {name} changed since {short}; {how}, or revert the change",
+                        old.id
                     ),
                 };
-                findings.push(
-                    Finding::error(spec, &path, Some(line), message)
-                        .in_part(BEHAVIOUR_PART)
-                        .keyed(format!("check2:{}:{name}", old.id)),
-                );
+                let finding = Finding::error(spec, path, Some(line), message)
+                    .in_part(site.part)
+                    .keyed(format!("check2:{}:{name}", old.id));
+                findings.push(finding);
             }
         }
     }
@@ -501,12 +551,33 @@ pub fn ref_name(path: &str, symbol: Option<&str>) -> String {
     }
 }
 
+fn located_sites<'a>(root: &Path, world: &'a World, doc: &'a Doc) -> Vec<Site<'a>> {
+    let mut sites = world.sites(doc);
+    if doc.doc_type == "dictum" {
+        let offset = doc.body_line_offset(root);
+        for claim in sites.iter_mut().flat_map(|s| s.claims.iter_mut()) {
+            claim.line += offset;
+        }
+    }
+    sites
+}
+
 pub fn integrity_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
-    let sites = world.sites(doc);
+    let sites = located_sites(root, world, doc);
     let mut findings = Vec::new();
+    if doc.doc_type == "dictum" {
+        findings.extend(assumed_in_spec(&sites));
+        findings.extend(
+            invalid_glob_findings(doc)
+                .into_iter()
+                .map(|w| from_wire(doc, w)),
+        );
+        findings.extend(sites.iter().flat_map(legacy_lines));
+        return findings;
+    }
     findings.extend(index_claims(root, doc));
     if doc.doc_type == "spec" {
-        findings.extend(assumed_in_spec(world, doc));
+        findings.extend(assumed_in_spec(&sites));
         findings.extend(
             invalid_glob_findings(doc)
                 .into_iter()
@@ -521,28 +592,27 @@ pub fn integrity_findings(root: &Path, world: &World, doc: &Doc, require: Requir
 }
 
 pub fn evidence_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
-    world
-        .sites(doc)
+    located_sites(root, world, doc)
         .iter()
         .flat_map(|site| claims_have_evidence(root, site, require))
         .collect()
 }
 
-fn assumed_in_spec(world: &World, spec: &Doc) -> Vec<Finding> {
-    world
-        .sites(spec)
+fn assumed_in_spec(sites: &[Site]) -> Vec<Finding> {
+    sites
         .iter()
         .flat_map(|site| {
             site.claims
                 .iter()
                 .filter(|c| c.assumed && !c.struck)
                 .map(|c| {
+                    let kind = site.doc.doc_type.as_str();
                     Finding::error(
-                        spec,
+                        site.doc,
                         &site.path,
                         Some(c.line),
                         format!(
-                            "{}: [assumed] claim in a spec; a spec records what is known. Resolve it in a delta or move it to open questions",
+                            "{}: [assumed] claim in a {kind}; a {kind} records what is known. Resolve it in a delta or move it to open questions",
                             c.id
                         ),
                     )
@@ -703,7 +773,8 @@ pub fn legacy_lines(site: &Site) -> Vec<Finding> {
 }
 
 fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Finding> {
-    let applies = site.doc.doc_type == "spec" || site.doc.status == "in-progress";
+    let applies =
+        matches!(site.doc.doc_type.as_str(), "spec" | "dictum") || site.doc.status == "in-progress";
     if !applies {
         return Vec::new();
     }
@@ -716,7 +787,7 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
     };
     let mut findings = Vec::new();
     for claim in site.claims.iter().filter(|c| !c.struck) {
-        if claim.assumed && require.evidence && site.doc.doc_type != "spec" {
+        if claim.assumed && require.evidence && site.doc.doc_type == "delta" {
             findings.push(finding(
                 true,
                 claim.line,

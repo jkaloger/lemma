@@ -4,7 +4,7 @@ use crate::folded::{completed_since, spec_edits};
 use crate::payload::Doc;
 use crate::project;
 use crate::session::say_once;
-use crate::world::{in_flight, World};
+use crate::world::{carries_claims, World};
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -202,7 +202,7 @@ fn newly_uncovered(
 
 fn owner_of<'a>(world: &'a World, file: &str) -> Option<&'a Doc> {
     world.docs().iter().find(|doc| {
-        let applies = doc.doc_type == "spec" || in_flight(doc);
+        let applies = carries_claims(doc);
         let owns = doc.path == file || doc.parts.iter().any(|p| doc.part_path(&p.name) == file);
         applies && owns
     })

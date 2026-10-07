@@ -20,6 +20,10 @@ pub fn in_flight(doc: &Doc) -> bool {
     doc.doc_type == "delta" && matches!(doc.status.as_str(), "draft" | "in-progress")
 }
 
+pub fn carries_claims(doc: &Doc) -> bool {
+    matches!(doc.doc_type.as_str(), "spec" | "dictum") || in_flight(doc)
+}
+
 impl World {
     pub fn load(store: &Store, payload: Option<&Payload>) -> Self {
         let mut docs = docs_from_store(store);
@@ -29,7 +33,7 @@ impl World {
         let moved = payload.documents.first().map(|d| d.id.as_str());
         let moving = payload.transition.as_ref().and(moved).map(str::to_string);
         for supplied in payload.documents.iter().chain(&payload.context) {
-            if !matches!(supplied.doc_type.as_str(), "spec" | "delta") {
+            if !matches!(supplied.doc_type.as_str(), "spec" | "delta" | "dictum") {
                 continue;
             }
             let mut doc = supplied.clone();
@@ -70,6 +74,15 @@ impl World {
     }
 
     pub fn sites<'a>(&'a self, doc: &'a Doc) -> Vec<Site<'a>> {
+        if doc.doc_type == "dictum" {
+            return vec![Site {
+                doc,
+                part: "",
+                path: doc.path.clone(),
+                claims: crate::claims::parse(&doc.body).claims,
+                governing: Some(doc),
+            }];
+        }
         if doc.doc_type == "spec" {
             return doc
                 .part(BEHAVIOUR_PART)
@@ -98,7 +111,7 @@ impl World {
     pub fn all_sites(&self) -> Vec<Site<'_>> {
         self.docs
             .iter()
-            .filter(|d| d.doc_type == "spec" || in_flight(d))
+            .filter(|d| carries_claims(d))
             .flat_map(|d| self.sites(d))
             .collect()
     }

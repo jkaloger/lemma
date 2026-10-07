@@ -319,3 +319,41 @@ pub fn transition_payload(from: &str, to: &str, moved: Value, context: Vec<Value
 }
 
 pub const INTENT: &str = "## Intent\n\nBecause.\n";
+
+pub const DICTUM_CONFIG: &str = r#"
+[[types]]
+name = "convention"
+plural = "convention"
+dir = "docs/convention"
+prefix = "CONVENTION"
+singleton = true
+lifecycle = { states = ["draft", "accepted"], edges = [{ from = "draft", to = "accepted" }] }
+
+[[types]]
+name = "dictum"
+plural = "dicta"
+dir = "docs/convention"
+prefix = "DICTUM"
+parent_type = "convention"
+lifecycle = { states = ["draft", "accepted"], edges = [{ from = "draft", to = "accepted" }] }
+"#;
+
+pub const DICTUM_PATH: &str = "docs/convention/DICTUM-001-testing.md";
+
+impl Repo {
+    pub fn with_dictums(&self) {
+        self.write(".lazyspec.toml", &format!("{CONFIG}{DICTUM_CONFIG}"));
+        self.write(
+            "docs/convention/CONVENTION.md",
+            "---\ntitle: \"Convention\"\ntype: convention\nstatus: accepted\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\n---\n\nHouse rules.\n",
+        );
+    }
+
+    pub fn dictum_file(&self, governs: &[&str], body: &str) {
+        let globs = quote_all(governs);
+        let content = format!(
+            "---\ntitle: \"Testing\"\ntype: dictum\nstatus: accepted\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n---\n\n{body}"
+        );
+        self.write(DICTUM_PATH, &content);
+    }
+}

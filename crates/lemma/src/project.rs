@@ -45,7 +45,12 @@ pub fn docs_from_store(store: &Store) -> Vec<Doc> {
     let mut docs: Vec<Doc> = store
         .all_docs()
         .into_iter()
-        .filter(|meta| matches!(meta.doc_type.to_string().as_str(), "spec" | "delta"))
+        .filter(|meta| {
+            matches!(
+                meta.doc_type.to_string().as_str(),
+                "spec" | "delta" | "dictum"
+            )
+        })
         .filter_map(|meta| stored_doc(store, meta))
         .collect();
     docs.sort_by(|a, b| a.id.cmp(&b.id));

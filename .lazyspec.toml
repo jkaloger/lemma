@@ -99,7 +99,7 @@ dir = ".lazyspec/templates"
 [[hooks]]
 name = "lemma-validate"
 event = "validate"
-types = ["spec", "delta", "decision"]
+types = ["spec", "delta", "decision", "dictum"]
 run = ["lemma", "check", "--hook"]
 
 [[hooks]]
