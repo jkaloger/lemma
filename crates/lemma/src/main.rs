@@ -270,6 +270,34 @@ fn review_draft_command(start: &Startup, prompt: &str, plan_prompt: &str) -> Exi
     ExitCode::SUCCESS
 }
 
+fn review_diff_command(
+    start: &Startup,
+    base: &str,
+    values: &std::collections::BTreeMap<&str, String>,
+) -> ExitCode {
+    let Startup {
+        root,
+        delta,
+        config,
+        ..
+    } = start;
+    let prompt = match rendered_prompt(prompts::Prompt::ReviewDiff, root, values) {
+        Ok(prompt) => prompt,
+        Err(message) => return fail(message),
+    };
+    let short: String = base.chars().take(8).collect();
+    println!(
+        "{} is in-progress: reviewing the diff against {short}",
+        delta.id
+    );
+    match review::review_diff(root, delta, &prompt, config) {
+        Ok(1) => println!("1 follow-up task written"),
+        Ok(n) => println!("{n} follow-up tasks written"),
+        Err(message) => return fail(message),
+    }
+    ExitCode::SUCCESS
+}
+
 fn review_command(id: &str, dry_run: bool) -> ExitCode {
     let start = match startup(id) {
         Ok(start) => start,
@@ -288,12 +316,14 @@ fn review_command(id: &str, dry_run: bool) -> ExitCode {
             (Ok(prompt), Ok(plan_prompt)) => review_draft_command(&start, &prompt, &plan_prompt),
             (Err(message), _) | (_, Err(message)) => fail(message),
         },
-        ("in-progress", false) => fail("review is not implemented yet"),
-        ("in-progress", true) => {
+        ("in-progress", dry_run) => {
             let world = world::World::load(store, None);
             let base = context::diff_base(root, delta);
             values.insert("diff", context::diff(root, &base, &world, delta));
-            print_prompt(prompts::Prompt::ReviewDiff, root, &values)
+            match dry_run {
+                true => print_prompt(prompts::Prompt::ReviewDiff, root, &values),
+                false => review_diff_command(&start, &base, &values),
+            }
         }
         _ => fail("review needs a draft or in-progress delta"),
     }

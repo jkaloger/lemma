@@ -69,17 +69,13 @@ fn review_needs_a_draft_or_in_progress_delta() {
 }
 
 #[test]
-fn review_of_an_in_progress_delta_and_build_without_dry_run_are_not_implemented_yet() {
+fn build_without_dry_run_is_not_implemented_yet() {
     let repo = project();
     delta(&repo, "in-progress");
 
-    let review = repo.run(&["review", "DELTA-001"], "");
     let build = repo.run(&["build", "DELTA-001"], "");
 
-    assert_eq!((review.code, build.code), (2, 2));
-    assert!(review
-        .stderr
-        .contains("lemma: review is not implemented yet"));
+    assert_eq!(build.code, 2);
     assert!(build.stderr.contains("lemma: build is not implemented yet"));
 }
 

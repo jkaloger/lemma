@@ -103,17 +103,17 @@ struct Drafted {
     report: Report,
 }
 
-fn read(root: &Path, delta: &Doc, part: &str) -> String {
+pub fn read(root: &Path, delta: &Doc, part: &str) -> String {
     std::fs::read_to_string(root.join(part_file(delta, part))).unwrap_or_default()
 }
 
-fn ensure_newline(text: &mut String) {
+pub fn ensure_newline(text: &mut String) {
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
 }
 
-fn collapsed(text: &str) -> String {
+pub fn collapsed(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -121,7 +121,7 @@ fn id_number(id: &str) -> Option<u32> {
     id.strip_prefix(ID_PREFIX)?.parse().ok()
 }
 
-fn next_number(ids: impl Iterator<Item = u32>) -> u32 {
+pub fn next_number(ids: impl Iterator<Item = u32>) -> u32 {
     ids.max().unwrap_or(0) + 1
 }
 
@@ -233,14 +233,15 @@ fn task_line(
             settles.push(id);
         }
     }
+    Ok(task_entry(number, &task.text, &settles))
+}
+
+pub fn task_entry(number: u32, text: &str, settles: &[String]) -> String {
     let tail = match settles.is_empty() {
         true => "chore".to_string(),
         false => format!("settles {}", settles.join(", ")),
     };
-    Ok(format!(
-        "- [ ] T{number} {} ({tail})",
-        collapsed(&task.text)
-    ))
+    format!("- [ ] T{number} {} ({tail})", collapsed(text))
 }
 
 fn follow_ups_line(tasks_text: &str) -> Option<usize> {
@@ -269,6 +270,34 @@ fn insert_tasks(tasks_text: &str, new: &[String]) -> String {
     out.extend(new.iter().map(String::as_str));
     out.push("");
     out.extend(&lines[heading..]);
+    out.join("\n")
+}
+
+pub fn append_follow_ups(tasks_text: &str, new: &[String]) -> String {
+    let Some(heading) = follow_ups_line(tasks_text) else {
+        let mut text = tasks_text.to_string();
+        ensure_newline(&mut text);
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&format!("## {FOLLOW_UPS}\n"));
+        new.iter()
+            .for_each(|line| text.push_str(&format!("{line}\n")));
+        return text;
+    };
+    let lines = lines_of(tasks_text);
+    let section_end = live_lines(tasks_text)
+        .into_iter()
+        .find(|(n, line)| *n > heading + 1 && heading_level(line).is_some())
+        .map_or(lines.len(), |(n, _)| n - 1);
+    let after = lines[heading..section_end]
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map_or(heading, |last| heading + last)
+        + 1;
+    let mut out: Vec<&str> = lines[..after].to_vec();
+    out.extend(new.iter().map(String::as_str));
+    out.extend(&lines[after..]);
     out.join("\n")
 }
 
