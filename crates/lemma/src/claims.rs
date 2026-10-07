@@ -142,7 +142,7 @@ pub fn bullets(body: &str) -> Vec<Bullet> {
                 .map(|caps| caps[2].to_string());
             let text = match id {
                 Some(_) => split_markers(text).1.to_string(),
-                None => rest.trim().to_string(),
+                None => without_markers(rest).trim().to_string(),
             };
             Some(Bullet { line, text, id })
         })
@@ -217,6 +217,13 @@ fn receipts(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<Rece
 
 pub const INTENT_MARKER: &str = "[intent]";
 pub const PROPOSED_MARKER: &str = "[proposed]";
+
+fn without_markers(mut text: &str) -> &str {
+    while let Some((_, rest)) = marker_token(text.trim_start()) {
+        text = rest;
+    }
+    text
+}
 
 fn marker_token(text: &str) -> Option<(&'static str, &str)> {
     [INTENT_MARKER, PROPOSED_MARKER]
@@ -408,7 +415,8 @@ mod tests {
 
     #[test]
     fn bullets_carry_their_id_when_planned() {
-        let found = bullets("- [AC-1] [intent] Feels fast.\n  - nested\n- Retries once.\n");
+        let found =
+            bullets("- [AC-1] [intent] Feels fast.\n  - nested\n- [intent] Retries once.\n");
         assert_eq!(
             found,
             vec![

@@ -92,11 +92,11 @@ $ lemma build DELTA-004
 T1 add Entry and Balance types (settles AC-1)
    runner: 2m04s, 6 files
    lint: clean
-   AC-1 @ref tests/ledger.rs::balance_sums_entries resolves
+   AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
    commit 3f1c9a2 DELTA-004 T1: add Entry and Balance types
 T2 balance endpoint (settles AC-2, AC-3)
    runner: 3m31s, 4 files
-   lint: AC-3 @ref tests/ledger.rs::balance_rejects_unknown_account does not resolve
+   lint: AC-3 @ref tests/ledger.rs#balance_rejects_unknown_account does not resolve
    stopped. T2 left unticked; working tree kept.
 ```
 

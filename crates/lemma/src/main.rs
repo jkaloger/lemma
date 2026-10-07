@@ -148,6 +148,9 @@ fn lint_command(
         Ok(gate) => gate,
         Err(message) => return fail(message),
     };
+    if gate.is_some() && delta.is_none() && !hook {
+        return fail("--gate needs a delta: lemma lint <delta> --gate <status>");
+    }
     let options = lint::Options {
         base: base.as_deref(),
         trunk: trunk.as_deref(),

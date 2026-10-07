@@ -405,3 +405,32 @@ fn remaining_review_lines_block_planning() {
     assert_eq!(snapshot(&repo), before);
     assert_eq!(plan_calls(&repo), 0);
 }
+
+#[test]
+fn a_marked_bullet_matches_the_planner_by_its_text_without_the_marker() {
+    let repo = project(
+        "- Reopen keeps the prior answer.\n- [intent] Feels fast.\n",
+        "",
+    );
+    plan_reply(
+        &repo,
+        json!({
+            "claims": [claim("Reopen keeps the prior answer."), claim("Feels fast.")],
+            "tasks": [task("reopen", json!([1, 2]))],
+        }),
+    );
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(
+        claims_of(&repo),
+        "- [AC-1] Reopen keeps the prior answer.\n- [AC-2] [intent] Feels fast.\n"
+    );
+    assert_eq!(tasks_of(&repo), "- [ ] T1 reopen (settles AC-1, AC-2)\n");
+    assert_eq!(
+        repo.run(&["lint", "DELTA-001", "--gate", "in-progress"], "")
+            .stdout,
+        ""
+    );
+}

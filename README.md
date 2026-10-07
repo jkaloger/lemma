@@ -21,7 +21,7 @@ lemma session-start | lemma signal | lemma stop
 
 ## Description
 
-lemma has three parts, released together under one version number.
+lemma has three parts, released together under one version number. This document describes 3.0.0.
 
 The **pack** is a `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies it into a project.
 
@@ -110,7 +110,7 @@ index.md: frontmatter and headings tidied
 
 ### lint
 
-`lemma lint` runs the coverage, history and dictum checks on the working tree against the base, and check 3 on dictums. Given a delta, it also runs the evidence and shape checks for that delta. `--gate <status>` adds the rules of the transition into `in-progress` or `complete`. Output is `path:line: severity: message`, one line per finding, empty when clean. `--json` prints `{"findings": [...]}`. Exit status is 2 on an error finding, else 0. An unknown delta or gate exits 2.
+`lemma lint` runs the coverage, history and dictum checks on the working tree against the base, and check 3 on dictums. Given a delta, it also runs the evidence and shape checks for that delta. `--gate <status>` adds the rules of the transition into `in-progress` or `complete`, and requires a delta outside hook mode. Output is `path:line: severity: message`, one line per finding, empty when clean. `--json` prints `{"findings": [...]}`. Exit status is 2 on an error finding, else 0. An unknown delta or gate exits 2.
 
 `--hook` reads a lazyspec payload on stdin, prints findings JSON, exits 0 and is scoped to the payload's documents. The `validate` event has no range, so coverage, history and dictum checks are skipped. A pre-transition payload ranges from the moved delta's base; coverage and dictum findings are limited to the specs the moved delta changes, and history findings pass through. A finding about a document outside the payload carries its path in the message instead of an id.
 
@@ -133,7 +133,7 @@ On an `in-progress` delta, `lemma review` renders the `review-diff` prompt with 
 3. Unless the task is a chore, each claim it settles is `[intent]`, or has at least one ref and every ref resolves.
 4. The task is ticked, then `git add -A` and `git commit -m "<delta> T<n>: <text>"`.
 
-Any failure prints the reason and `stopped. T<n> left unticked; working tree kept.`, and exits 2. The tree is never reset. A re-run resumes at the first unticked task. `--task T<n>` runs one task. When no task is left the output is `all tasks complete`.
+Any failure prints the reason and `stopped. T<n> left unticked; working tree kept.`, and exits 2. A failed commit leaves the task ticked and prints `stopped. T<n> ticked but not committed; working tree kept.` The tree is never reset. A re-run resumes at the first unticked task. `--task T<n>` runs one task. When no task is left the output is `all tasks complete`.
 
 ```
 $ lemma build DELTA-004

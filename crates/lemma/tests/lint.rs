@@ -803,6 +803,18 @@ mod shape {
         assert_eq!(missing.code, 2);
         assert!(missing.stderr.contains("unknown delta DELTA-099"));
     }
+
+    #[test]
+    fn a_gate_without_a_delta_is_refused() {
+        let run = check(&project(), &["--gate", "in-progress"]);
+
+        assert_eq!(run.code, 2);
+        assert!(
+            run.stderr.contains("--gate needs a delta"),
+            "{}",
+            run.stderr
+        );
+    }
 }
 
 mod hook {
