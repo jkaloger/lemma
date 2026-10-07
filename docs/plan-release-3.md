@@ -10,8 +10,8 @@ Out, each with a trigger in DECISION-003: lint via reviewer for prose rules; par
 ## Open questions
 
 - `claude -p --output-format json` shape and stability across versions. W66 pins what is read (`result`, `is_error`) and ignores the rest.
-- Whether runner sessions need the plugin hooks at all once build runs lint itself. W72 decides from dogfood; default is keep `signal` (context) and drop nothing.
-- What `lemma stop` guards when transitions are human-typed. W72.
+- Whether runner sessions need the plugin hooks at all once build runs lint itself. W72 decides from dogfood; default is keep `signal` (context) and drop nothing. W72: kept. Build runs lint after the runner returns; `signal` gives the runner context and findings while it works, and `stop` blocks a runner that leaves a touched delta's refs broken. Revisit in W75 if runner sessions show noise.
+- What `lemma stop` guards when transitions are human-typed. W72. W72: build never completes a delta, but an agent can still run `lazyspec advance`, so the completion rule stays, reworded to name completion as the human's step after `lemma review`.
 
 ## Decisions
 
@@ -41,7 +41,7 @@ Out, each with a trigger in DECISION-003: lint via reviewer for prose rules; par
 - [x] W69 review on in-progress: decision 79. Tests: diff scoped to governs and tests; follow-ups written with settles; nothing in claims; count reported.
 - [x] W70 build: decision 80. Tests with a fake runner that writes files from a fixture: ticks and commits per task; stops on lint failure with tree kept; stops on unresolved ref; resume from first unticked; `--task`; chore skips ref check; refuses dirty tree; refuses non in-progress; follow-ups run after main tasks; commit message format.
 - [x] W71 pack, plugin, CI, convention: decision 81. Tests: `tests/pack.rs` adopts the pack and lints clean; hook table matches; no skills dir.
-- [ ] W72 `signal` and `stop`: signal pointers add `related:` docs and the delta's parts; stop drops the in-session completion rule if W70 makes it dead, else rewords it. Tests updated.
+- [x] W72 `signal` and `stop`: signal pointers add `related:` docs and the delta's parts; stop drops the in-session completion rule if W70 makes it dead, else rewords it. Tests updated.
 - [ ] W73 README and version: decision 82.
 - [ ] W74 review: whole-diff review against DECISION-003 and this plan.
 - [ ] W75 dogfood (human): `lazyspec init --template . --force` on this repo; hand-write DELTA-001 for one 3.1 item; run review, plan, advance, build, review, advance end to end; log to `.scratch/dogfood-3.0.md`; decide each DECISION-003 trigger.

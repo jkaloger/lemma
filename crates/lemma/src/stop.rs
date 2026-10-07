@@ -60,7 +60,7 @@ fn unapproved_completions(
                 &d.path,
                 None,
                 format!(
-                    "{} is complete but was not when the session started; if a human moved it, leave it and ask them to commit; never change the status back",
+                    "{} is complete but was not when the session started; completing a delta is the human's step after `lemma review`. If a human moved it, leave it and ask them to commit; never change the status back",
                     d.id
                 ),
             )

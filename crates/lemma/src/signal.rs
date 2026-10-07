@@ -1,9 +1,10 @@
 use crate::evidence::clean;
 use crate::lint::{self, Finding, Options, Span};
-use crate::payload::Doc;
+use crate::payload::{Doc, CHANGES};
 use crate::project;
 use crate::session::say_once;
 use crate::world::{lints_on_edit, World};
+use lazyspec::engine::document::DocMeta;
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -104,7 +105,7 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
     }
     findings.sort();
     findings.dedup();
-    context_pointers(store, root, file)
+    context_pointers(store, &world, root, file)
         .into_iter()
         .chain(findings.iter().map(|f| Signal {
             key: stable_key(f),
@@ -125,7 +126,7 @@ fn stable_key(finding: &Finding) -> String {
     )
 }
 
-fn context_pointers(store: &Store, root: &Path, file: &str) -> Option<Signal> {
+fn context_pointers(store: &Store, world: &World, root: &Path, file: &str) -> Option<Signal> {
     let governing = store.governing(&root.join(file));
     let of_type = |doc_type: &str| {
         governing
@@ -140,30 +141,60 @@ fn context_pointers(store: &Store, root: &Path, file: &str) -> Option<Signal> {
         store
             .reverse_links_for(&spec.path)
             .iter()
-            .filter(|link| link.rel_type.as_str() == "affects")
+            .filter(|link| matches!(link.rel_type.as_str(), "affects" | "constrains"))
             .filter_map(|link| store.get(&link.endpoint))
     });
-    let mut seen = BTreeSet::new();
-    let docs: Vec<_> = specs
+    let titled = |meta: &DocMeta| (meta.id.clone(), format!("{} {}", meta.id, meta.title));
+    let mut pointers: Vec<(String, String)> = specs
         .iter()
         .copied()
         .chain(decisions)
         .chain(dictums)
-        .filter(|meta| seen.insert(meta.id.clone()))
+        .map(titled)
         .collect();
-    if docs.is_empty() {
+    let spec_ids: Vec<&str> = specs.iter().map(|meta| meta.id.as_str()).collect();
+    for delta in world.in_flight() {
+        let changes_one = world
+            .changed_specs(delta)
+            .iter()
+            .any(|spec| spec_ids.contains(&spec.id.as_str()));
+        if !changes_one {
+            continue;
+        }
+        pointers.push((delta.id.clone(), delta_pointer(delta)));
+        let related = delta
+            .related
+            .iter()
+            .filter(|r| r.rel_type != CHANGES)
+            .filter_map(|r| store.all_docs().into_iter().find(|m| m.id == r.target));
+        pointers.extend(related.map(titled));
+    }
+    let mut seen = BTreeSet::new();
+    pointers.retain(|(id, _)| seen.insert(id.clone()));
+    if pointers.is_empty() {
         return None;
     }
-    let ids: Vec<&str> = docs.iter().map(|meta| meta.id.as_str()).collect();
-    let pointers = docs
+    let ids: Vec<&str> = pointers.iter().map(|(id, _)| id.as_str()).collect();
+    let text = pointers
         .iter()
-        .map(|meta| format!("{} {}", meta.id, meta.title))
+        .map(|(_, text)| text.as_str())
         .collect::<Vec<_>>()
         .join(" · ");
     Some(Signal {
         key: format!("context:{}", ids.join(",")),
-        text: format!("{file} → {pointers}"),
+        text: format!("{file} → {text}"),
     })
+}
+
+fn delta_pointer(delta: &Doc) -> String {
+    let dir = Path::new(&delta.path)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parts: Vec<String> = std::iter::once("index.md".to_string())
+        .chain(delta.parts.iter().map(|part| format!("{}.md", part.name)))
+        .collect();
+    format!("{} {} ({dir}: {})", delta.id, delta.title, parts.join(" "))
 }
 
 fn newly_uncovered(

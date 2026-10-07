@@ -233,7 +233,37 @@ fn a_covering_delta_silences_the_coverage_finding() {
 
     let said = context_of(&edit(&repo, "b/y.rs"));
 
-    assert_eq!(said, "b/y.rs → SPEC-002 Spec 2");
+    assert_eq!(
+        said,
+        "b/y.rs → SPEC-002 Spec 2 · DELTA-001 Delta 1 (docs/deltas/DELTA-001-d: index.md)"
+    );
+}
+
+#[test]
+fn pointers_name_an_in_flight_deltas_parts_and_related_documents() {
+    let repo = project();
+    repo.write(
+        "docs/deltas/DELTA-001-d/index.md",
+        "---\ntitle: \"Retry\"\ntype: delta\nstatus: in-progress\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\nrelated:\n- changes: SPEC-001\n- affects: DECISION-002\n---\n\n## Intent\n\nBecause.\n",
+    );
+    repo.write(
+        "docs/decisions/DECISION-002-retry.md",
+        "---\ntitle: \"Retry budget\"\ntype: decision\nstatus: accepted\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\n---\n\nOnce.\n",
+    );
+    repo.delta_part(1, "design", "Retry once.\n");
+    repo.delta_claims(1, "- [AC-1] Retries once.\n");
+    repo.delta_tasks(1, "- [ ] T1 retry (settles AC-1)\n");
+    repo.delta_file(2, "complete", &["SPEC-001"], INTENT);
+    repo.delta_file(3, "draft", &["SPEC-002"], INTENT);
+    repo.commit("deltas");
+    repo.write("a/x.rs", "fn x() { 1; }\n");
+
+    let said = context_of(&edit(&repo, "a/x.rs"));
+
+    assert_eq!(
+        said,
+        "a/x.rs → SPEC-001 Spec 1 · DECISION-001 Store reopen · DELTA-001 Retry (docs/deltas/DELTA-001-d: index.md claims.md design.md tasks.md) · DECISION-002 Retry budget"
+    );
 }
 
 #[test]
