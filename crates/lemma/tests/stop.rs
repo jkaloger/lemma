@@ -213,10 +213,7 @@ mod on_a_branch {
     fn integrity_findings_are_left_to_check() {
         let repo = two_specs();
         branch(&repo);
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-2] Pinned.\n  @ref tests/store_test.rs#reopen_keeps_prior@3f9c2e1\n",
-        );
+        repo.spec_file(1, "active", &["a/**", "[bad"], INTENT);
 
         assert_eq!(stop(&repo).code, 0);
         assert_eq!(repo.run(&["check"], "").code, 2);

@@ -1,12 +1,9 @@
 use crate::claims::{has_intent, parse, Claim, BEHAVIOUR_PART};
 use crate::evidence::{clean, glob_set, invalid_globs, resolve, RefStatus, Regions};
-use crate::fold::fold;
-use crate::folded::{completed_since, folds_into, spec_edits};
 use crate::git::{changed_since, git_output, touched_files};
 use crate::payload::{tests_or_default, Attributes, Doc, Finding as Wire, Payload};
 use crate::range::{self, Inputs, Rule};
-use crate::targets::Targets;
-use crate::world::{carries_claims, in_flight, Site, World};
+use crate::world::{carries_claims, folds_into, in_flight, Site, World};
 use lazyspec::engine::store::Store;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -123,13 +120,6 @@ impl Finding {
         }
     }
 
-    pub fn bare_warning(message: impl Into<String>) -> Self {
-        Self {
-            severity: "warning",
-            ..Self::bare_error(message)
-        }
-    }
-
     pub fn is_error(&self) -> bool {
         self.severity == "error"
     }
@@ -209,7 +199,7 @@ pub fn run_with(
     let mut findings = match span {
         None => Vec::new(),
         Some(Ok(span)) => {
-            let found = range_findings(store, root, &world, span, full, payload);
+            let found = range_findings(store, root, &world, span, payload);
             if !full {
                 scope.retain(|doc| touched_by(doc, &span.files));
             }
@@ -224,12 +214,9 @@ pub fn run_with(
     };
     for doc in &scope {
         if full {
-            findings.extend(integrity_findings(root, &world, doc, options.require));
+            findings.extend(integrity_findings(&world, doc, options.require));
         }
         findings.extend(evidence_findings(root, &world, doc, options.require));
-    }
-    if full {
-        findings.extend(double_strikes(&world, &scope));
     }
     if full && options.require.clean {
         findings.extend(uncommitted(root, &world, &scope));
@@ -244,16 +231,12 @@ fn range_findings(
     root: &Path,
     world: &World,
     span: &Span,
-    full: bool,
     payload: Option<&Payload>,
 ) -> Vec<Finding> {
-    let completed = completed_since(root, world, &span.base, &span.files);
+    let completed = world.completed_since(root, &span.base, &span.files);
     let covered = covered_specs(world, &completed);
     let mut found = coverage(store, root, &covered, &span.files);
     found.extend(evidence_changes(root, world, span, &completed, None));
-    if full {
-        found.extend(spec_edits(root, world, &span.base, &span.files));
-    }
     if let Some(targets) = moved_targets(world, payload) {
         found.retain(|f| f.id.as_ref().is_some_and(|id| targets.contains(id)));
     }
@@ -524,16 +507,10 @@ pub fn evidence_changes(
                     true => format!("strike {} in the dictum and add a new id", old.id),
                     false => format!("strike {} in a delta and add a new id", old.id),
                 };
-                let message = match old.observed {
-                    true => format!(
-                        "{}: characterised behaviour changed; confirm the change is intended",
-                        old.id
-                    ),
-                    false => format!(
-                        "{}: evidence {name} changed since {short}; {how}, or revert the change",
-                        old.id
-                    ),
-                };
+                let message = format!(
+                    "{}: evidence {name} changed since {short}; {how}, or revert the change",
+                    old.id
+                );
                 let finding = Finding::error(spec, path, Some(line), message)
                     .in_part(site.part)
                     .keyed(format!("check2:{}:{name}", old.id));
@@ -562,64 +539,23 @@ fn located_sites<'a>(root: &Path, world: &'a World, doc: &'a Doc) -> Vec<Site<'a
     sites
 }
 
-pub fn integrity_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
-    let sites = located_sites(root, world, doc);
-    let mut findings = Vec::new();
-    if doc.doc_type == "dictum" {
-        findings.extend(assumed_in_spec(&sites));
-        findings.extend(
-            invalid_glob_findings(doc)
-                .into_iter()
-                .map(|w| from_wire(doc, w)),
-        );
-        findings.extend(sites.iter().flat_map(legacy_lines));
-        return findings;
+pub fn integrity_findings(world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
+    match doc.doc_type.as_str() {
+        "spec" | "dictum" => invalid_glob_findings(doc)
+            .into_iter()
+            .map(|w| from_wire(doc, w))
+            .collect(),
+        _ => target_globs(world, doc)
+            .into_iter()
+            .chain(require.intent.then(|| readiness(doc)).into_iter().flatten())
+            .collect(),
     }
-    findings.extend(index_claims(root, doc));
-    if doc.doc_type == "spec" {
-        findings.extend(assumed_in_spec(&sites));
-        findings.extend(
-            invalid_glob_findings(doc)
-                .into_iter()
-                .map(|w| from_wire(doc, w)),
-        );
-    } else {
-        findings.extend(delta_structure(world, doc, require));
-        findings.extend(fold_findings(doc, &sites));
-    }
-    findings.extend(sites.iter().flat_map(legacy_lines));
-    findings
 }
 
 pub fn evidence_findings(root: &Path, world: &World, doc: &Doc, require: Require) -> Vec<Finding> {
     located_sites(root, world, doc)
         .iter()
         .flat_map(|site| claims_have_evidence(root, site, require))
-        .collect()
-}
-
-fn assumed_in_spec(sites: &[Site]) -> Vec<Finding> {
-    sites
-        .iter()
-        .flat_map(|site| {
-            site.claims
-                .iter()
-                .filter(|c| c.assumed && !c.struck)
-                .map(|c| {
-                    let kind = site.doc.doc_type.as_str();
-                    Finding::error(
-                        site.doc,
-                        &site.path,
-                        Some(c.line),
-                        format!(
-                            "{}: [assumed] claim in a {kind}; a {kind} records what is known. Resolve it in a delta or move it to open questions",
-                            c.id
-                        ),
-                    )
-                    .in_part(site.part)
-                })
-                .collect::<Vec<_>>()
-        })
         .collect()
 }
 
@@ -658,48 +594,23 @@ fn from_wire(doc: &Doc, wire: Wire) -> Finding {
     }
 }
 
-fn index_claims(root: &Path, doc: &Doc) -> Vec<Finding> {
-    doc.index_claims(root)
+fn target_globs(world: &World, delta: &Doc) -> Vec<Finding> {
+    targets(world, delta)
         .into_iter()
-        .map(|claim| {
-            Finding::error(
-                doc,
-                &doc.path,
-                Some(claim.line),
-                format!(
-                    "{}: claim-shaped item is in index.md; claims live in a behaviour part",
-                    claim.id
-                ),
-            )
+        .flat_map(|spec| {
+            invalid_glob_findings(spec)
+                .into_iter()
+                .map(|w| from_wire(spec, w))
         })
         .collect()
 }
 
-fn delta_structure(world: &World, delta: &Doc, require: Require) -> Vec<Finding> {
-    let specs = world.specs();
-    let targets = Targets::of(delta, &specs);
-    let parts = delta.behaviour_parts();
-    let mut wires = Vec::new();
-    if targets.declared.is_empty() {
-        wires.push(Wire::error(
-            &delta.id,
-            None,
-            "delta has no folds-into link; link the spec it folds into",
-        ));
-    }
-    wires.extend(targets.unresolved_findings(delta));
-    wires.extend(targets.missing_parts(delta, delta.status != "draft" || require.intent));
-    wires.extend(targets.orphan_parts(&parts, delta));
-    let mut findings: Vec<Finding> = wires.into_iter().map(|w| from_wire(delta, w)).collect();
-    findings.extend(targets.resolved.iter().flat_map(|spec| {
-        invalid_glob_findings(spec)
-            .into_iter()
-            .map(|w| from_wire(spec, w))
-    }));
-    if require.intent {
-        findings.extend(readiness(delta));
-    }
-    findings
+fn targets<'a>(world: &'a World, delta: &Doc) -> Vec<&'a Doc> {
+    delta
+        .fold_targets()
+        .into_iter()
+        .filter_map(|t| world.spec_named(t))
+        .collect()
 }
 
 fn readiness(delta: &Doc) -> Vec<Finding> {
@@ -712,64 +623,6 @@ fn readiness(delta: &Doc) -> Vec<Finding> {
         None,
         "missing or empty `## Intent` section; state why the change is needed",
     )]
-}
-
-fn fold_findings(delta: &Doc, sites: &[Site]) -> Vec<Finding> {
-    sites
-        .iter()
-        .filter(|site| !site.claims.is_empty())
-        .filter_map(|site| Some((site, site.governing?)))
-        .flat_map(|(site, spec)| {
-            let Some(behaviour) = spec.part(BEHAVIOUR_PART) else {
-                return vec![Finding::error(
-                    delta,
-                    &site.path,
-                    None,
-                    format!(
-                        "fold target {} has no `{BEHAVIOUR_PART}` part to fold into",
-                        spec.id
-                    ),
-                )
-                .in_part(site.part)];
-            };
-            let claims: Vec<&Claim> = site.claims.iter().collect();
-            match fold(&behaviour.body, &claims) {
-                Ok(_) => Vec::new(),
-                Err(issues) => issues
-                    .into_iter()
-                    .map(|issue| {
-                        Finding::error(delta, &site.path, Some(issue.line), issue.message)
-                            .in_part(site.part)
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
-}
-
-pub const UNRESOLVED_ASSUMPTION: &str = "assumption unresolved; accept it as a claim, mark it [observed] with a test, delete it, or move it to the spec's open questions";
-
-pub fn legacy_lines(site: &Site) -> Vec<Finding> {
-    let legacy = site
-        .claims
-        .iter()
-        .flat_map(|c| &c.legacy)
-        .map(|l| Finding::error(site.doc, &site.path, Some(l.line), l.message()));
-    let conflicts = site.claims.iter().filter(|c| c.marker_conflict).map(|c| {
-        Finding::error(
-            site.doc,
-            &site.path,
-            Some(c.line),
-            format!(
-                "{}: [intent], [observed] and [assumed] are mutually exclusive; keep one",
-                c.id
-            ),
-        )
-    });
-    legacy
-        .chain(conflicts)
-        .map(|f| f.in_part(site.part))
-        .collect()
 }
 
 fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Finding> {
@@ -787,13 +640,6 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
     };
     let mut findings = Vec::new();
     for claim in site.claims.iter().filter(|c| !c.struck) {
-        if claim.assumed && require.evidence && site.doc.doc_type == "delta" {
-            findings.push(finding(
-                true,
-                claim.line,
-                format!("{}: {UNRESOLVED_ASSUMPTION}", claim.id),
-            ));
-        }
         for r in &claim.receipts {
             let name = ref_name(&r.path, r.symbol.as_deref());
             match resolve(root, &r.path, r.symbol.as_deref(), &tests) {
@@ -816,9 +662,7 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
                 )),
             }
         }
-        let unevidenced =
-            !claim.intent && !claim.assumed && claim.receipts.is_empty() && claim.legacy.is_empty();
-        if unevidenced {
+        if !claim.intent && claim.receipts.is_empty() {
             findings.push(finding(
                 require.evidence,
                 claim.line,
@@ -832,55 +676,13 @@ fn claims_have_evidence(root: &Path, site: &Site, require: Require) -> Vec<Findi
     findings
 }
 
-pub fn double_strikes(world: &World, scope: &[&Doc]) -> Vec<Finding> {
-    let mut strikes: BTreeMap<String, Vec<(&Doc, String, String, usize)>> = BTreeMap::new();
-    for delta in world.in_flight() {
-        for site in world.sites(delta) {
-            for claim in site.claims.iter().filter(|c| c.struck) {
-                strikes.entry(claim.id.clone()).or_default().push((
-                    delta,
-                    site.part.to_string(),
-                    site.path.clone(),
-                    claim.line,
-                ));
-            }
-        }
-    }
-    strikes
-        .into_iter()
-        .filter(|(_, holders)| holders.len() > 1)
-        .flat_map(|(id, holders)| {
-            let ids: Vec<&str> = holders.iter().map(|(d, ..)| d.id.as_str()).collect();
-            let names = ids.join(", ");
-            holders
-                .into_iter()
-                .filter(|(d, ..)| scope.iter().any(|s| s.id == d.id))
-                .map(|(delta, part, path, line)| {
-                    Finding::warning(
-                        delta,
-                        path,
-                        Some(line),
-                        format!(
-                            "{id} is struck by in-flight deltas {names}; the second fold will fail because the id is gone"
-                        ),
-                    )
-                    .in_part(&part)
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 fn uncommitted(root: &Path, world: &World, scope: &[&Doc]) -> Vec<Finding> {
     let dirty = touched_files(root);
-    let specs = world.specs();
     scope
         .iter()
         .filter(|d| in_flight(d))
         .flat_map(|delta| {
-            let targets = Targets::of(delta, &specs);
-            let governs: Vec<String> = targets
-                .resolved
+            let governs: Vec<String> = targets(world, delta)
                 .iter()
                 .flat_map(|s| s.governs.clone())
                 .collect();

@@ -1,20 +1,14 @@
-mod apply;
 mod check;
 mod claims;
 mod evidence;
-mod fold;
-mod folded;
 mod git;
-mod migrate;
 mod payload;
 mod project;
 mod range;
 mod refs;
-mod review;
 mod session;
 mod signal;
 mod stop;
-mod targets;
 #[cfg(test)]
 mod testgit;
 mod version;
@@ -42,15 +36,13 @@ struct Cli {
 #[derive(Clone, Copy, ValueEnum)]
 enum RequireArg {
     Intent,
-    /// Deprecated alias for intent
-    Claims,
     Evidence,
     Clean,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the four checks over the working tree against the base
+    /// Run checks 1 to 3 over the working tree against the base
     Check {
         /// Revision to diff against; overrides base resolution
         #[arg(long)]
@@ -67,8 +59,6 @@ enum Command {
         #[arg(long)]
         hook: bool,
     },
-    /// Fold a delta into its specs: the pre-transition hook, or a preview with a delta
-    Apply { delta: Option<String> },
     /// List the refs of a claim and whether each resolves
     Refs { claim: String },
     /// Bound a session's changes (Claude Code Stop hook)
@@ -77,8 +67,6 @@ enum Command {
     Signal,
     /// Record the session's base commit (Claude Code SessionStart hook)
     SessionStart,
-    /// Rewrite 1.x specs and deltas to the 2.0 claim format
-    Migrate,
 }
 
 fn read_stdin() -> String {
@@ -127,9 +115,6 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
     ExitCode::from(2)
 }
 
-const CLAIMS_DEPRECATED: &str =
-    "`--require claims` is deprecated and will be removed; use `--require intent`";
-
 fn check_command(
     base: Option<String>,
     trunk: Option<String>,
@@ -141,20 +126,15 @@ fn check_command(
         base: base.as_deref(),
         trunk: trunk.as_deref(),
         require: check::Require {
-            intent: require
-                .iter()
-                .any(|r| matches!(r, RequireArg::Intent | RequireArg::Claims)),
+            intent: require.iter().any(|r| matches!(r, RequireArg::Intent)),
             evidence: require.iter().any(|r| matches!(r, RequireArg::Evidence)),
             clean: require.iter().any(|r| matches!(r, RequireArg::Clean)),
         },
         ..check::Options::default()
     };
-    let deprecated = require.iter().any(|r| matches!(r, RequireArg::Claims));
-    let hint = deprecated.then(|| check::Finding::bare_warning(CLAIMS_DEPRECATED));
     if hook {
         return hook_with_store(|store, root, payload| {
             let findings = check::run(store, root, &options, Some(payload));
-            let findings: Vec<_> = hint.iter().cloned().chain(findings).collect();
             Output::findings(findings.iter().map(|f| f.for_hook(payload)).collect())
         });
     }
@@ -163,39 +143,11 @@ fn check_command(
         Err(message) => return fail(message),
     };
     let findings = check::run(&store, &root, &options, None);
-    let findings: Vec<_> = match (json, hint) {
-        (true, Some(hint)) => std::iter::once(hint).chain(findings).collect(),
-        (false, Some(hint)) => {
-            eprintln!("lemma: {}", hint.message);
-            findings
-        }
-        (_, None) => findings,
-    };
     match json {
         true => println!("{}", serde_json::json!({ "findings": findings })),
         false => findings.iter().for_each(|f| println!("{}", f.render())),
     }
     match check::has_error(&findings) {
-        true => ExitCode::from(2),
-        false => ExitCode::SUCCESS,
-    }
-}
-
-fn apply_preview(name: &str) -> ExitCode {
-    let (root, store) = match cli_store() {
-        Ok(found) => found,
-        Err(message) => return fail(message),
-    };
-    let preview = match apply::preview(&store, &root, name) {
-        Ok(preview) => preview,
-        Err(e) => return fail(format!("{e:#}")),
-    };
-    preview.lines.iter().for_each(|line| println!("{line}"));
-    preview
-        .findings
-        .iter()
-        .for_each(|f| println!("{}", f.render()));
-    match check::has_error(&preview.findings) {
         true => ExitCode::from(2),
         false => ExitCode::SUCCESS,
     }
@@ -252,17 +204,6 @@ fn signal_command() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn migrate_command() -> ExitCode {
-    let (root, store) = match cli_store() {
-        Ok(found) => found,
-        Err(message) => return fail(message),
-    };
-    migrate::run(&store, &root)
-        .iter()
-        .for_each(|path| println!("{path}"));
-    ExitCode::SUCCESS
-}
-
 fn session_start_command() -> ExitCode {
     let input: session::SessionStartInput = serde_json::from_str(&read_stdin()).unwrap_or_default();
     let dir = input.cwd.map(PathBuf::from).unwrap_or_else(current_dir);
@@ -284,12 +225,9 @@ fn main() -> ExitCode {
             json,
             hook,
         } => check_command(base, trunk, &require, json, hook),
-        Command::Apply { delta: None } => hook_with_store(apply::hook),
-        Command::Apply { delta: Some(name) } => apply_preview(&name),
         Command::Refs { claim } => refs_command(&claim),
         Command::Stop => stop_command(),
         Command::SessionStart => session_start_command(),
         Command::Signal => signal_command(),
-        Command::Migrate => migrate_command(),
     }
 }

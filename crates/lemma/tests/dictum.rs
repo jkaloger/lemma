@@ -48,16 +48,6 @@ fn a_dictum_claim_without_a_ref_is_flagged_unless_intent() {
 }
 
 #[test]
-fn an_assumed_dictum_claim_is_an_error() {
-    let repo = project("- [DT-1] [assumed] Maybe.\n");
-
-    let run = check(&repo);
-
-    assert_eq!(run.code, 2);
-    assert!(run.stdout.contains("DT-1: [assumed] claim in a dictum"));
-}
-
-#[test]
 fn a_dictum_claim_with_a_resolving_ref_is_clean() {
     let repo = project(CLAIM);
 
@@ -130,15 +120,6 @@ fn a_hand_edit_to_a_dictum_claim_is_not_a_check_4_error() {
     );
 
     assert_eq!(check(&repo).stdout, "");
-}
-
-#[test]
-fn a_legacy_line_in_a_dictum_is_still_flagged() {
-    let repo = project(
-        "- [DT-1] Claim.\n  @ref tests/store_test.rs#reopen_keeps_prior\n  @base abc1234\n",
-    );
-
-    assert!(check(&repo).code == 2);
 }
 
 #[test]

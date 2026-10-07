@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 
 const SPEC_CLAIM: &str =
     "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n";
-const UNRESOLVED: &str = "assumption unresolved; accept it as a claim, mark it [observed] with a test, delete it, or move it to the spec's open questions";
 const SPEC_PART: &str = "docs/specs/SPEC-001-s/behaviour.md";
 
 fn project() -> Repo {
@@ -569,72 +568,6 @@ mod claims_have_evidence {
         assert!(!hook.has_message("[intent]"), "{}", hook.stdout);
     }
 
-    const ASSUMED_D: &str = "- [AC-D1-1] [assumed] Probably retries.\n";
-
-    fn assumed_delta(repo: &Repo, claim: &str) {
-        delta(repo, 1, "in-progress", "SPEC-001", claim);
-        repo.commit("assumed delta");
-    }
-
-    #[test]
-    fn an_observed_claim_without_a_ref_is_flagged_like_a_normative_one() {
-        let repo = project();
-        repo.spec_behaviour(
-            1,
-            &format!("{SPEC_CLAIM}- [AC-S1-2] [observed] Characterised.\n"),
-        );
-        repo.commit("observed without ref");
-
-        let run = check(&repo, &[]);
-
-        assert!(
-            says(&run, "warning: AC-S1-2: claim has no `@ref`"),
-            "{}",
-            run.stdout
-        );
-    }
-
-    #[test]
-    fn an_assumed_claim_is_excluded_from_the_missing_ref_finding() {
-        let repo = project();
-        assumed_delta(&repo, ASSUMED_D);
-
-        let run = check(&repo, &[]);
-
-        assert!(!says(&run, "no `@ref`"), "{}", run.stdout);
-        assert_eq!(run.code, 0);
-    }
-
-    #[test]
-    fn require_evidence_errors_on_an_assumed_claim_without_a_ref() {
-        let repo = project();
-        assumed_delta(&repo, ASSUMED_D);
-
-        let run = check(&repo, &["--require", "evidence"]);
-
-        assert_eq!(run.code, 2);
-        assert!(says(&run, UNRESOLVED), "{}", run.stdout);
-        assert!(!says(&run, "no `@ref`"), "{}", run.stdout);
-    }
-
-    #[test]
-    fn require_evidence_errors_on_an_assumed_claim_that_has_a_ref() {
-        let repo = project();
-        assumed_delta(
-            &repo,
-            "- [AC-D1-1] [assumed] Probably retries.\n  @ref tests/store_test.rs#other_test\n",
-        );
-
-        let run = check(&repo, &["--require", "evidence"]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            says(&run, &format!("AC-D1-1: {UNRESOLVED}")),
-            "{}",
-            run.stdout
-        );
-    }
-
     #[test]
     fn an_unresolved_ref_is_always_an_error() {
         let repo = project();
@@ -706,190 +639,6 @@ mod integrity {
     use super::*;
 
     #[test]
-    fn a_pinned_ref_is_an_error_with_the_migrate_hint() {
-        let repo = project();
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] x\n  @ref tests/store_test.rs#reopen_keeps_prior@3f9c2e1\n",
-        );
-        repo.commit("pinned");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(run.stdout.contains(&format!(
-            "{SPEC_PART}:2: error: pinned ref; run lemma migrate"
-        )));
-    }
-
-    #[test]
-    fn base_and_checked_lines_are_errors() {
-        let repo = project();
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] x\n  @checked jack@3f9c2e1\n  @base 0123abcdef45\n",
-        );
-        repo.commit("legacy");
-
-        let run = check(&repo, &[]);
-
-        assert!(says(&run, "`@checked` line; run lemma migrate"));
-        assert!(says(&run, "`@base` line; run lemma migrate"));
-    }
-
-    #[test]
-    fn a_claim_with_two_markers_is_an_error_on_its_line() {
-        let repo = project();
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] [observed] [assumed] x\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("two markers");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            run.stdout.contains(&format!(
-                "{SPEC_PART}:1: error: AC-S1-1: [intent], [observed] and [assumed] are mutually exclusive; keep one"
-            )),
-            "{}",
-            run.stdout
-        );
-    }
-
-    #[test]
-    fn one_marker_per_claim_is_silent() {
-        let repo = project();
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] [observed] x\n  @ref tests/store_test.rs#reopen_keeps_prior\n- [AC-S1-2] [assumed] y\n  @ref tests/store_test.rs#other_test\n",
-        );
-        repo.commit("one marker each");
-
-        assert!(!says(&check(&repo, &[]), "mutually exclusive"));
-    }
-
-    #[test]
-    fn a_delta_claim_reusing_a_spec_id_is_immutable() {
-        let repo = project();
-        delta(
-            &repo,
-            1,
-            "draft",
-            "SPEC-001",
-            "- [AC-S1-1] Changed wording.\n",
-        );
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(run.stdout.contains(
-            "docs/deltas/DELTA-001-d/behaviour.SPEC-001.md:1: error: claims are immutable; strike AC-S1-1 and add a new id"
-        ));
-    }
-
-    #[test]
-    fn a_strike_of_an_id_the_spec_lacks_is_an_error() {
-        let repo = project();
-        delta(&repo, 1, "draft", "SPEC-001", "- ~~[AC-NOPE-1]~~ gone\n");
-
-        assert!(says(
-            &check(&repo, &[]),
-            "AC-NOPE-1 is struck but the spec has no such claim"
-        ));
-    }
-
-    #[test]
-    fn two_in_flight_deltas_striking_one_id_warn() {
-        let repo = project();
-        delta(&repo, 1, "draft", "SPEC-001", "- ~~[AC-S1-1]~~ gone\n");
-        delta(
-            &repo,
-            2,
-            "in-progress",
-            "SPEC-001",
-            "- ~~[AC-S1-1]~~ gone\n",
-        );
-        repo.commit("two strikes");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 0);
-        let warnings: Vec<&str> = lines(&run)
-            .into_iter()
-            .filter(|l| l.contains(": warning: AC-S1-1 is struck by in-flight deltas"))
-            .collect();
-        assert_eq!(warnings.len(), 2, "{}", run.stdout);
-    }
-
-    #[test]
-    fn a_fold_target_that_does_not_resolve_is_an_error() {
-        let repo = project();
-        repo.delta_file(1, "draft", &["SPEC-404"], INTENT);
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(says(
-            &run,
-            "fold target SPEC-404 does not resolve to a spec"
-        ));
-    }
-
-    #[test]
-    fn a_part_naming_no_fold_target_is_an_error() {
-        let repo = project();
-        repo.delta_file(1, "draft", &["SPEC-001"], INTENT);
-        repo.delta_part(1, "SPEC-001", "- [AC-D1-1] x\n");
-        repo.delta_part(1, "SPEC-009", "- [AC-D1-2] y\n");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(run
-            .stdout
-            .contains("behaviour.SPEC-009.md: error: part behaviour.SPEC-009 does not name"));
-    }
-
-    #[test]
-    fn a_fold_target_without_its_part_warns_on_a_draft_and_errors_in_progress() {
-        let repo = project();
-        repo.delta_file(1, "draft", &["SPEC-001"], INTENT);
-        let draft = check(&repo, &[]);
-        repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
-        let started = check(&repo, &[]);
-
-        assert_eq!(draft.code, 0);
-        assert!(draft
-            .stdout
-            .contains(": warning: fold target SPEC-001 has no `behaviour.SPEC-001` part"));
-        assert_eq!(started.code, 2);
-    }
-
-    #[test]
-    fn a_claim_in_index_md_is_an_error() {
-        let repo = project();
-        repo.spec_file(
-            1,
-            "active",
-            &["a/**"],
-            "## Intent\n\nBecause.\n\n- [AC-X-1] misplaced\n",
-        );
-        repo.spec_behaviour(1, SPEC_CLAIM);
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            run.stdout.contains("docs/specs/SPEC-001-s/index.md:"),
-            "{}",
-            run.stdout
-        );
-        assert!(says(&run, "AC-X-1: claim-shaped item is in index.md"));
-    }
-
-    #[test]
     fn an_invalid_glob_is_an_error() {
         let repo = project();
         repo.spec_file_with_tests(1, "active", &["a/**"], &["[bad"], INTENT);
@@ -906,7 +655,7 @@ mod require {
     use super::*;
 
     #[test]
-    fn intent_needs_intent_and_every_part_but_no_claim() {
+    fn intent_needs_intent_but_no_claim() {
         let repo = project();
         repo.delta_file(1, "draft", &["SPEC-001"], "## Intent\n\n");
 
@@ -916,11 +665,6 @@ mod require {
         assert_eq!(lax.code, 0);
         assert_eq!(strict.code, 2);
         assert!(says(&strict, "missing or empty `## Intent` section"));
-        assert!(says(
-            &strict,
-            "fold target SPEC-001 has no `behaviour.SPEC-001` part"
-        ));
-        assert!(strict.stdout.contains(": error: fold target SPEC-001"));
         assert!(!says(&strict, "no claims"));
     }
 
@@ -930,47 +674,6 @@ mod require {
         delta(&repo, 1, "draft", "SPEC-001", "");
 
         assert_eq!(check(&repo, &["--require", "intent"]).stdout, "");
-    }
-
-    #[test]
-    fn require_claims_is_an_alias_for_intent_with_a_deprecation_hint() {
-        let repo = project();
-        repo.delta_file(1, "draft", &["SPEC-001"], "## Intent\n\n");
-
-        let text = check(&repo, &["--require", "claims"]);
-        let json = check(&repo, &["--json", "--require", "claims"]);
-
-        assert_eq!(text.code, 2);
-        assert!(says(&text, "missing or empty `## Intent` section"));
-        assert!(
-            text.stderr.contains("`--require claims` is deprecated"),
-            "{}",
-            text.stderr
-        );
-        let hint = json
-            .findings()
-            .into_iter()
-            .find(|f| f["message"].as_str().unwrap().contains("deprecated"))
-            .unwrap();
-        assert_eq!(hint["severity"], "warning");
-    }
-
-    #[test]
-    fn require_claims_hint_is_a_warning_finding_in_hook_mode() {
-        let repo = project();
-        let payload = validate_payload(vec![with_parts(
-            doc("DELTA-001", "delta", "draft", &[], &["SPEC-001"], INTENT),
-            &[("behaviour.SPEC-001", "")],
-        )]);
-
-        let run = repo.run(&["check", "--hook", "--require", "claims"], &payload);
-
-        let hint = run
-            .findings()
-            .into_iter()
-            .find(|f| f["message"].as_str().unwrap().contains("deprecated"))
-            .unwrap();
-        assert_eq!(hint["severity"], "warning");
     }
 
     #[test]
@@ -1068,7 +771,10 @@ mod hook {
     #[test]
     fn it_exits_zero_and_prints_findings_json_even_with_errors() {
         let repo = project();
-        let payload = validate_payload(vec![delta_doc("draft", "- [AC-S1-1] Changed.\n")]);
+        let payload = validate_payload(vec![delta_doc(
+            "in-progress",
+            "- [AC-D1-1] Retries.\n  @ref tests/store_test.rs#missing\n",
+        )]);
 
         let run = repo.run(&["check", "--hook"], &payload);
 
@@ -1078,11 +784,11 @@ mod hook {
         assert_eq!(finding["severity"], "error");
         assert_eq!(finding["id"], "DELTA-001");
         assert_eq!(finding["part"], "behaviour.SPEC-001");
-        assert_eq!(finding["line"], 1);
+        assert_eq!(finding["line"], 2);
         assert!(finding["message"]
             .as_str()
             .unwrap()
-            .contains("claims are immutable"));
+            .contains("does not resolve"));
     }
 
     #[test]
@@ -1273,316 +979,5 @@ mod trunk {
         repo.commit("two areas");
 
         assert!(says(&check(&repo, &[]), "governed area"));
-    }
-}
-
-mod spec_edits {
-    use super::*;
-
-    const EDITED: &str = "spec behaviour edited outside a fold; change it through a delta";
-
-    fn branch(repo: &Repo) {
-        repo.git(&["checkout", "-q", "-b", "feature"]);
-    }
-
-    #[test]
-    fn a_hand_struck_claim_is_an_error_on_the_spec_part() {
-        let repo = project();
-        branch(&repo);
-        repo.spec_behaviour(
-            1,
-            "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("strike by hand");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            run.stdout
-                .contains(&format!("{SPEC_PART}:1: error: {EDITED}")),
-            "{}",
-            run.stdout
-        );
-    }
-
-    #[test]
-    fn a_hand_reworded_claim_is_an_error() {
-        let repo = project();
-        branch(&repo);
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] Reopen forgets the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("reword by hand");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(says(&run, EDITED), "{}", run.stdout);
-    }
-
-    #[test]
-    fn a_hand_added_claim_is_an_error() {
-        let repo = project();
-        branch(&repo);
-        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Added.\n"));
-        repo.commit("add by hand");
-
-        assert!(says(&check(&repo, &[]), EDITED));
-    }
-
-    fn spec_on_trunk(repo: &Repo, behaviour: &str) {
-        repo.spec_behaviour(1, behaviour);
-        repo.commit("spec behaviour");
-        branch(repo);
-    }
-
-    #[test]
-    fn a_hand_edit_to_a_continuation_line_is_an_error() {
-        let repo = project();
-        spec_on_trunk(
-            &repo,
-            "- [AC-S1-1] Reopen keeps\n  the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] Reopen keeps\n  nothing at all.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("edit the detail");
-
-        assert!(says(&check(&repo, &[]), EDITED));
-    }
-
-    #[test]
-    fn a_repointed_ref_is_an_error() {
-        let repo = project();
-        branch(&repo);
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#other_test\n",
-        );
-        repo.commit("repoint");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            says(
-                &run,
-                "AC-S1-1: ref tests/store_test.rs#reopen_keeps_prior removed from the spec outside a fold; change it through a delta"
-            ),
-            "{}",
-            run.stdout
-        );
-    }
-
-    #[test]
-    fn adding_a_ref_to_an_intent_claim_and_dropping_the_marker_is_silent() {
-        let repo = project();
-        spec_on_trunk(
-            &repo,
-            &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Feels fast.\n"),
-        );
-        repo.spec_behaviour(
-            1,
-            &format!(
-                "{SPEC_CLAIM}- [AC-S1-2] Feels fast.\n  @ref tests/store_test.rs#other_test\n"
-            ),
-        );
-        repo.commit("evidence the intent claim");
-
-        assert_eq!(check(&repo, &[]).stdout, "");
-    }
-
-    #[test]
-    fn adding_observed_assumed_and_per_to_a_claim_is_silent() {
-        let repo = project();
-        spec_on_trunk(&repo, SPEC_CLAIM);
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] [observed] Reopen keeps the prior answer.\n  @per DECISION-001\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("annotate");
-        assert!(!says(&check(&repo, &[]), EDITED));
-
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] [assumed] Reopen keeps the prior answer.\n  @per vendor contract\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("assume");
-        assert!(!says(&check(&repo, &[]), EDITED));
-    }
-
-    #[test]
-    fn stripping_a_pin_the_way_migrate_does_is_silent() {
-        let repo = project();
-        spec_on_trunk(
-            &repo,
-            "- [AC-S1-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior@3f9c2e1 [forced]\n  @checked tests/store_test.rs@3f9c2e1\n",
-        );
-        repo.spec_behaviour(1, SPEC_CLAIM);
-        repo.commit("migrate");
-
-        assert_eq!(check(&repo, &[]).stdout, "");
-    }
-
-    #[test]
-    fn a_fold_from_a_delta_completed_in_the_range_is_silent() {
-        let repo = project();
-        branch(&repo);
-        let new = "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n";
-        let strike = "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n";
-        delta(&repo, 1, "complete", "SPEC-001", &format!("{strike}{new}"));
-        repo.spec_behaviour(1, new);
-        repo.commit("delta completed and folded");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!((run.code, run.stdout.as_str()), (0, ""));
-    }
-
-    #[test]
-    fn a_fold_committed_apart_from_its_completion_is_an_error() {
-        let repo = project();
-        branch(&repo);
-        let new = "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n";
-        let strike = "- ~~[AC-S1-1]~~ Reopen keeps the prior answer.\n";
-        delta(&repo, 1, "complete", "SPEC-001", &format!("{strike}{new}"));
-        let completed = repo.commit("delta completed");
-        repo.spec_behaviour(1, new);
-        repo.commit("spec folded");
-
-        assert!(says(&check(&repo, &["--base", &completed]), EDITED));
-    }
-
-    #[test]
-    fn a_claim_replaced_before_the_range_is_not_refolded() {
-        let repo = project();
-        let added = "- [AC-D1-1] Added.\n  @ref tests/store_test.rs#other_test\n";
-        delta(&repo, 1, "complete", "SPEC-001", added);
-        delta(
-            &repo,
-            2,
-            "complete",
-            "SPEC-001",
-            "- ~~[AC-D1-1]~~ Added.\n- [AC-D2-1] Replaced.\n  @ref tests/store_test.rs#other_test\n",
-        );
-        let replaced = "- [AC-D2-1] Replaced.\n  @ref tests/store_test.rs#other_test\n";
-        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}{replaced}"));
-        repo.commit("added, then replaced, on main");
-        branch(&repo);
-        let new = "- [AC-D3-1] New.\n  @ref tests/store_test.rs#other_test\n";
-        delta(&repo, 3, "complete", "SPEC-001", new);
-        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}{replaced}{new}"));
-        repo.commit("delta completed and folded");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!((run.code, run.stdout.as_str()), (0, ""));
-    }
-
-    #[test]
-    fn a_fold_that_does_not_match_the_completed_delta_is_an_error() {
-        let repo = project();
-        branch(&repo);
-        let new = "- [AC-D1-1] New.\n  @ref tests/store_test.rs#other_test\n";
-        delta(&repo, 1, "complete", "SPEC-001", new);
-        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-D1-1] Different.\n"));
-        repo.commit("fold with a typo");
-
-        assert!(says(&check(&repo, &[]), EDITED));
-    }
-
-    #[test]
-    fn an_edit_on_trunk_before_the_range_is_not_flagged() {
-        let repo = project();
-        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-S1-2] [intent] Added.\n"));
-        repo.commit("by hand on main");
-
-        assert_eq!(check(&repo, &[]).stdout, "");
-    }
-
-    #[test]
-    fn a_change_to_governs_is_a_warning() {
-        let repo = project();
-        branch(&repo);
-        repo.spec_file(1, "active", &["a/**", "c/**"], INTENT);
-        repo.spec_behaviour(1, SPEC_CLAIM);
-        repo.commit("widen governs");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 0);
-        assert!(
-            run.stdout.contains(
-                "docs/specs/SPEC-001-s/index.md: warning: governs/tests changed in this range; review"
-            ),
-            "{}",
-            run.stdout
-        );
-    }
-
-    #[test]
-    fn a_change_to_tests_is_a_warning() {
-        let repo = project();
-        branch(&repo);
-        repo.spec_file_with_tests(1, "active", &["a/**"], &["tests/**"], INTENT);
-        repo.spec_behaviour(1, SPEC_CLAIM);
-        repo.commit("custom tests glob");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 0);
-        assert!(says(&run, "governs/tests changed in this range; review"));
-    }
-}
-
-mod assumption_and_characterisation {
-    use super::*;
-
-    #[test]
-    fn a_changed_test_under_an_observed_claim_asks_for_confirmation_as_an_error() {
-        let repo = project();
-        repo.spec_behaviour(
-            1,
-            "- [AC-S1-1] [observed] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#reopen_keeps_prior\n",
-        );
-        repo.commit("observed claim");
-        edit_reopen_body(&repo);
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            says(
-                &run,
-                &format!(
-                    "{SPEC_PART}:2: error: AC-S1-1: characterised behaviour changed; confirm the change is intended"
-                )
-            ),
-            "{}",
-            run.stdout
-        );
-        assert!(!says(&run, "strike AC-S1-1"), "{}", run.stdout);
-    }
-
-    #[test]
-    fn an_assumed_claim_in_a_spec_is_an_error() {
-        let repo = project();
-        repo.spec_behaviour(1, &format!("{SPEC_CLAIM}- [AC-S1-2] [assumed] Probably.\n"));
-        repo.commit("assumed in spec");
-
-        let run = check(&repo, &[]);
-
-        assert_eq!(run.code, 2);
-        assert!(
-            says(
-                &run,
-                &format!("{SPEC_PART}:3: error: AC-S1-2: [assumed] claim in a spec")
-            ),
-            "{}",
-            run.stdout
-        );
     }
 }

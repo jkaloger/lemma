@@ -22,37 +22,9 @@ pub struct Claim {
     pub end: usize,
     pub struck: bool,
     pub intent: bool,
-    pub observed: bool,
-    pub assumed: bool,
-    pub marker_conflict: bool,
     pub per: Vec<Citation>,
     pub receipts: Vec<Receipt>,
-    pub pinned: Vec<Receipt>,
-    pub legacy: Vec<LegacyLine>,
     pub block: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LegacyKind {
-    PinnedRef,
-    Base,
-    Checked,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacyLine {
-    pub line: usize,
-    pub kind: LegacyKind,
-}
-
-impl LegacyLine {
-    pub fn message(&self) -> &'static str {
-        match self.kind {
-            LegacyKind::PinnedRef => "pinned ref; run lemma migrate",
-            LegacyKind::Base => "`@base` line; run lemma migrate",
-            LegacyKind::Checked => "`@checked` line; run lemma migrate",
-        }
-    }
 }
 
 struct Section {
@@ -71,10 +43,6 @@ pub fn target_of(part_name: &str) -> Option<&str> {
         .strip_prefix(BEHAVIOUR_PART)?
         .strip_prefix('.')
         .filter(|target| !target.is_empty())
-}
-
-pub fn part_for(target_id: &str) -> String {
-    format!("{BEHAVIOUR_PART}.{target_id}")
 }
 
 #[derive(Debug, Default)]
@@ -187,87 +155,31 @@ fn claim_end(lines: &[&str], start: usize) -> usize {
 }
 
 pub const PER_MARKER: &str = "@per";
-pub const FORCED_MARKER: &str = "[forced]";
-const BASE_MARKER: &str = "@base";
 
-pub fn checked_pattern() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"@checked\s+([^@\s]+)@([0-9a-fA-F]+)").unwrap())
+fn receipts(lines: &[&str], live: &[bool], start: usize, end: usize) -> Vec<Receipt> {
+    (start..end)
+        .filter(|&i| live[i])
+        .flat_map(|i| {
+            lazyspec::engine::refs::parse_refs(lines[i])
+                .into_iter()
+                .map(move |r| Receipt {
+                    line: i + 1,
+                    path: r.path,
+                    symbol: r.symbol,
+                })
+        })
+        .collect()
 }
 
-pub fn is_base_line(line: &str) -> bool {
-    line.trim_start()
-        .strip_prefix(BASE_MARKER)
-        .is_some_and(|rest| rest.starts_with(' '))
-}
+const INTENT_MARKER: &str = "[intent]";
 
-pub fn is_pinned(found: &lazyspec::engine::refs::Ref, line: &str) -> bool {
-    found.commit_sha.is_some()
-        || found.blob_hash.is_some()
-        || line[found.span.1..].trim_start().starts_with(FORCED_MARKER)
-}
-
-fn scan(
-    lines: &[&str],
-    live: &[bool],
-    start: usize,
-    end: usize,
-) -> (Vec<Receipt>, Vec<Receipt>, Vec<LegacyLine>) {
-    let mut receipts = Vec::new();
-    let mut pinned = Vec::new();
-    let mut legacy = Vec::new();
-    for i in (start..end).filter(|&i| live[i]) {
-        let line = lines[i];
-        let mut found = |kind| legacy.push(LegacyLine { line: i + 1, kind });
-        for r in lazyspec::engine::refs::parse_refs(line) {
-            let receipt = Receipt {
-                line: i + 1,
-                path: r.path.clone(),
-                symbol: r.symbol.clone(),
-            };
-            match is_pinned(&r, line) {
-                true => {
-                    found(LegacyKind::PinnedRef);
-                    pinned.push(receipt);
-                }
-                false => receipts.push(receipt),
-            }
-        }
-        if checked_pattern().is_match(line) {
-            found(LegacyKind::Checked);
-        }
-        if is_base_line(line) {
-            found(LegacyKind::Base);
-        }
-    }
-    legacy.dedup();
-    (receipts, pinned, legacy)
-}
-
-const CLAIM_MARKERS: [&str; 3] = ["[intent]", "[observed]", "[assumed]"];
-
-fn marker_token(text: &str) -> Option<(&'static str, &str)> {
-    let text = text.trim_start();
-    CLAIM_MARKERS.iter().find_map(|marker| {
-        let rest = text.strip_prefix(marker)?;
-        (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((*marker, rest))
-    })
-}
-
-/// Splits the marker tokens that directly follow a claim's `[ID]` off its first line.
-/// Returns the markers and the line with them removed.
-pub fn split_markers(first_line: &str) -> (Vec<&'static str>, String) {
+fn leads_with_intent(first_line: &str) -> bool {
     let Some(caps) = item_pattern().captures(first_line) else {
-        return (Vec::new(), first_line.to_string());
+        return false;
     };
-    let head_end = caps.get(0).map_or(0, |m| m.end());
-    let mut markers = Vec::new();
-    let mut rest = &first_line[head_end..];
-    while let Some((marker, after)) = marker_token(rest) {
-        markers.push(marker);
-        rest = after;
-    }
-    (markers, format!("{}{rest}", &first_line[..head_end]))
+    let rest = first_line[caps.get(0).map_or(0, |m| m.end())..].trim_start();
+    rest.strip_prefix(INTENT_MARKER)
+        .is_some_and(|after| after.is_empty() || after.starts_with(char::is_whitespace))
 }
 
 pub fn per_text(line: &str) -> Option<&str> {
@@ -303,26 +215,15 @@ pub fn parse(body: &str) -> Behaviour {
             continue;
         };
         let end = claim_end(&lines, cursor);
-        let (receipts, pinned, legacy) = scan(&lines, &live, cursor, end);
-        let (markers, _) = split_markers(line);
-        let marked = |name| markers.contains(&name);
-        let intent = marked("[intent]");
-        let observed = marked("[observed]");
-        let assumed = marked("[assumed]");
         claims.push(Claim {
             id: caps[2].to_string(),
             line: cursor + 1,
             start: cursor,
             end,
             struck: caps.get(1).is_some(),
-            intent,
-            observed,
-            assumed,
-            marker_conflict: [intent, observed, assumed].iter().filter(|m| **m).count() > 1,
+            intent: leads_with_intent(line),
             per: citations(&lines, &live, cursor, end),
-            receipts,
-            pinned,
-            legacy,
+            receipts: receipts(&lines, &live, cursor, end),
             block: lines[cursor..end].iter().map(|s| s.to_string()).collect(),
         });
         cursor = end;
@@ -433,61 +334,14 @@ mod tests {
         assert!(!is_behaviour_part("behaviours"));
         assert_eq!(target_of("behaviour.SPEC-003"), Some("SPEC-003"));
         assert_eq!(target_of("behaviour"), None);
-        assert_eq!(part_for("SPEC-003"), "behaviour.SPEC-003");
     }
 
     #[test]
-    fn each_marker_parses_on_its_own() {
-        let b = parse("- [A-1] [intent] a\n- [A-2] [observed] b\n- [A-3] [assumed] c\n- [A-4] d\n");
-        let flags: Vec<_> = b
-            .claims
-            .iter()
-            .map(|c| (c.intent, c.observed, c.assumed))
-            .collect();
-        assert_eq!(
-            flags,
-            vec![
-                (true, false, false),
-                (false, true, false),
-                (false, false, true),
-                (false, false, false)
-            ]
-        );
-        assert!(b.claims.iter().all(|c| !c.marker_conflict));
-    }
-
-    #[test]
-    fn two_or_more_markers_are_a_conflict() {
-        for body in [
-            "- [A-1] [intent] [observed] x\n",
-            "- ~~[A-1]~~ [observed] [assumed] x\n",
-            "- [A-1] [intent] [observed] [assumed] x\n",
-        ] {
-            assert!(parse(body).claims[0].marker_conflict, "{body}");
-        }
-    }
-
-    #[test]
-    fn quoted_marker_words_are_prose_not_markers() {
-        for body in [
-            "- [A-1] [intent] apply refuses to fold `[assumed]` claims\n",
-            "- [A-1] [intent] an [assumed] claim is not yet normative\n",
-            "- [A-1] [intent] x\n  continues with [observed] and `[assumed]`\n",
-            "- [A-1] text then [intent]\n",
-            "- [A-1] one [observed] two\n",
-        ] {
-            let claim = &parse(body).claims[0];
-            assert!(!claim.marker_conflict, "{body}");
-            assert!(!claim.assumed && !claim.observed, "{body}");
-        }
+    fn intent_is_a_leading_token_only() {
+        assert!(parse("- [A-1] [intent] x `[intent]`\n").claims[0].intent);
+        assert!(parse("- ~~[A-1]~~ [intent] gone\n").claims[0].intent);
         assert!(!parse("- [A-1] text then [intent]\n").claims[0].intent);
-        assert!(parse("- [A-1] [intent] x `[assumed]`\n").claims[0].intent);
-    }
-
-    #[test]
-    fn a_struck_claim_keeps_its_leading_marker() {
-        let claim = &parse("- ~~[A-1]~~ [observed] gone\n").claims[0];
-        assert!(claim.struck && claim.observed);
+        assert!(!parse("- [A-1] [intentional] x\n").claims[0].intent);
     }
 
     #[test]
@@ -503,65 +357,15 @@ mod tests {
     }
 
     #[test]
-    fn fenced_and_commented_markers_and_per_lines_are_ignored() {
-        let body = "- [A-1] x\n  ```\n  [observed] [assumed]\n  @per DECISION-001\n  ```\n  <!-- [observed] @per DECISION-002 -->\n";
-        let claim = &parse(body).claims[0];
-        assert!(!claim.observed && !claim.assumed && !claim.marker_conflict);
-        assert!(claim.per.is_empty());
-    }
-
-    fn legacy_of(body: &str) -> Vec<(usize, &'static str)> {
-        parse(body).claims[0]
-            .legacy
-            .iter()
-            .map(|l| (l.line, l.message()))
-            .collect()
+    fn fenced_and_commented_per_lines_are_ignored() {
+        let body = "- [A-1] x\n  ```\n  @per DECISION-001\n  ```\n  <!-- @per DECISION-002 -->\n";
+        assert!(parse(body).claims[0].per.is_empty());
     }
 
     #[test]
-    fn unpinned_refs_are_the_only_clean_form() {
-        let b = parse("- [A-1] one\n  @ref tests/a.rs#f\n  @ref tests/a.rs#g\n");
-        let claim = &b.claims[0];
-        assert!(claim.legacy.is_empty());
-        assert_eq!(claim.receipts.len(), 2);
-        assert_eq!(claim.receipts.first().unwrap().symbol.as_deref(), Some("f"));
-    }
-
-    #[test]
-    fn commit_pinned_ref_is_a_legacy_line() {
-        let body = "- [A-1] one\n  @ref tests/a.rs#f@3f9c2e1\n";
-        assert_eq!(legacy_of(body), vec![(2, "pinned ref; run lemma migrate")]);
-        assert_eq!(parse(body).claims[0].receipts.len(), 0);
-    }
-
-    #[test]
-    fn blob_pinned_ref_is_a_legacy_line() {
-        let body = "- [A-1] one\n  @ref tests/a.rs#f@{blob:3f9c2e1}\n";
-        assert_eq!(legacy_of(body), vec![(2, "pinned ref; run lemma migrate")]);
-        assert_eq!(parse(body).claims[0].receipts.len(), 0);
-    }
-
-    #[test]
-    fn forced_marker_is_a_legacy_line() {
-        let body = "- [A-1] one\n  @ref tests/a.rs#f@abc [forced]\n";
-        assert_eq!(legacy_of(body), vec![(2, "pinned ref; run lemma migrate")]);
-    }
-
-    #[test]
-    fn base_and_checked_lines_are_legacy_lines_in_line_order() {
-        let body = "- [A-1] one\n  @checked jack@3f9c2e1\n  @base 0123abcdef45\n";
-        assert_eq!(
-            legacy_of(body),
-            vec![
-                (2, "`@checked` line; run lemma migrate"),
-                (3, "`@base` line; run lemma migrate")
-            ]
-        );
-    }
-
-    #[test]
-    fn legacy_markers_in_fences_comments_and_prose_are_ignored() {
-        let body = "- [A-1] strips `@base` lines\n  ```\n  @base 0123abcdef45\n  @ref a.rs#f@abc\n  ```\n  <!-- @checked jack@abc -->\n";
-        assert!(parse(body).claims[0].legacy.is_empty());
+    fn a_pinned_ref_is_read_as_its_path_and_symbol() {
+        let claim = &parse("- [A-1] one\n  @ref tests/a.rs#f@3f9c2e1\n").claims[0];
+        assert_eq!(claim.receipts[0].path, "tests/a.rs");
+        assert_eq!(claim.receipts[0].symbol.as_deref(), Some("f"));
     }
 }

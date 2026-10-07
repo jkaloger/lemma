@@ -225,28 +225,6 @@ fn coverage_is_said_once_per_spec_even_when_more_files_change() {
 }
 
 #[test]
-fn a_hand_edit_of_a_spec_part_is_reported_when_that_spec_is_edited() {
-    let repo = project();
-    repo.git(&["checkout", "-q", "-b", "feature"]);
-    repo.spec_behaviour(1, &format!("{CLAIM}- [AC-S1-2] [intent] By hand.\n"));
-    repo.write(
-        "docs/specs/SPEC-002-s/behaviour.md",
-        "- [AC-S2-1] [intent] Elsewhere.\n",
-    );
-
-    let said = context_of(&edit(&repo, SPEC_PART));
-
-    assert!(
-        said.contains(&format!(
-            "{SPEC_PART}:3: error: spec behaviour edited outside a fold; change it through a delta"
-        )),
-        "{said}"
-    );
-    assert!(!said.contains("SPEC-002"), "{said}");
-    assert!(silent(&edit(&repo, SPEC_PART)));
-}
-
-#[test]
 fn a_covering_delta_silences_the_coverage_finding() {
     let repo = project();
     repo.delta_file(1, "draft", &["SPEC-001", "SPEC-002"], INTENT);
@@ -265,9 +243,7 @@ fn editing_a_spec_part_reports_checks_three_and_four_for_that_document() {
     let repo = project();
     repo.spec_behaviour(
         1,
-        &format!(
-            "{CLAIM}- [AC-S1-2] Gone.\n  @ref tests/store_test.rs#missing\n- [AC-S1-3] Pinned.\n  @ref tests/store_test.rs#other_test@3f9c2e1\n"
-        ),
+        &format!("{CLAIM}- [AC-S1-2] Gone.\n  @ref tests/store_test.rs#missing\n"),
     );
     repo.write(
         "docs/specs/SPEC-002-s/behaviour.md",
@@ -282,12 +258,6 @@ fn editing_a_spec_part_reports_checks_three_and_four_for_that_document() {
         )),
         "{said}"
     );
-    assert!(
-        said.contains(&format!(
-            "{SPEC_PART}:6: error: pinned ref; run lemma migrate"
-        )),
-        "{said}"
-    );
     assert!(!said.contains("AC-S2-1"), "{said}");
 }
 
@@ -295,12 +265,16 @@ fn editing_a_spec_part_reports_checks_three_and_four_for_that_document() {
 fn editing_a_delta_part_reports_its_claims() {
     let repo = project();
     repo.delta_file(1, "in-progress", &["SPEC-001"], INTENT);
-    repo.delta_part(1, "SPEC-001", "- [AC-S1-1] Reworded.\n");
+    repo.delta_part(
+        1,
+        "SPEC-001",
+        "- [AC-D1-1] Retries.\n  @ref tests/store_test.rs#missing\n",
+    );
 
     let said = context_of(&edit(&repo, &delta_part_path(1, "SPEC-001")));
 
     assert!(
-        said.contains("claims are immutable; strike AC-S1-1"),
+        said.contains("AC-D1-1: ref tests/store_test.rs#missing does not resolve"),
         "{said}"
     );
 }

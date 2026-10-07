@@ -1,6 +1,5 @@
 use crate::check::{self, Finding, Options, Span};
 use crate::evidence::clean;
-use crate::folded::{completed_since, spec_edits};
 use crate::payload::Doc;
 use crate::project;
 use crate::session::say_once;
@@ -87,7 +86,7 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
             ..Options::default()
         };
         if let Ok(span) = check::resolve_span(root, &options, None) {
-            let completed = completed_since(root, &world, &span.base, &span.files);
+            let completed = world.completed_since(root, &span.base, &span.files);
             if referenced {
                 findings.extend(check::evidence_changes(
                     root,
@@ -101,13 +100,6 @@ fn signals(store: &Store, root: &Path, file: &str, session: &str) -> Vec<Signal>
                 findings.extend(newly_uncovered(
                     store, root, &world, &span, &completed, file,
                 ));
-            }
-            if let Some(spec) = owner.filter(|doc| doc.doc_type == "spec") {
-                findings.extend(
-                    spec_edits(root, &world, &span.base, &span.files)
-                        .into_iter()
-                        .filter(|f| f.id.as_deref() == Some(spec.id.as_str())),
-                );
             }
         }
     }
@@ -130,7 +122,7 @@ fn stable_key(finding: &Finding) -> String {
         return key.clone();
     }
     format!(
-        "check4:{}:{}:{}",
+        "doc:{}:{}:{}",
         finding.id.as_deref().unwrap_or_default(),
         finding.path.as_deref().unwrap_or_default(),
         finding.message
@@ -210,9 +202,8 @@ fn owner_of<'a>(world: &'a World, file: &str) -> Option<&'a Doc> {
 
 fn document_findings(root: &Path, world: &World, doc: &Doc) -> Vec<Finding> {
     let require = check::Require::default();
-    let mut findings = check::integrity_findings(root, world, doc, require);
+    let mut findings = check::integrity_findings(world, doc, require);
     findings.extend(check::evidence_findings(root, world, doc, require));
-    findings.extend(check::double_strikes(world, &[doc]));
     findings.retain(|f| f.id.as_deref() == Some(doc.id.as_str()));
     findings
 }

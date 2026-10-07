@@ -1,5 +1,4 @@
 use crate::check::{self, Finding, Options, Span, Suite};
-use crate::folded::completed_since;
 use crate::git::changed_since;
 use crate::session::{recorded_base, say_once};
 use crate::world::World;
@@ -53,7 +52,7 @@ fn unapproved_completions(
         Ok(span) if span.base == base => span.files.clone(),
         _ => changed_since(root, &base),
     };
-    let found: Vec<Finding> = completed_since(root, &world, &base, &files)
+    let found: Vec<Finding> = world.completed_since(root, &base, &files)
         .into_iter()
         .map(|d| {
             Finding::error(

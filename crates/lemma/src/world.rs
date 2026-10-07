@@ -1,7 +1,11 @@
 use crate::claims::{Claim, BEHAVIOUR_PART};
+use crate::git::git_output;
 use crate::payload::{Doc, Payload};
 use crate::project::docs_from_store;
+use lazyspec::engine::doc_json::doc_to_json;
+use lazyspec::engine::document::DocMeta;
 use lazyspec::engine::store::Store;
+use std::path::Path;
 
 pub struct World {
     docs: Vec<Doc>,
@@ -18,6 +22,16 @@ pub struct Site<'a> {
 
 pub fn in_flight(doc: &Doc) -> bool {
     doc.doc_type == "delta" && matches!(doc.status.as_str(), "draft" | "in-progress")
+}
+
+pub fn folds_into(delta: &Doc, spec: &Doc) -> bool {
+    delta.fold_targets().iter().any(|t| spec.is_named(t))
+}
+
+pub fn doc_at(root: &Path, rev: &str, path: &str) -> Option<Doc> {
+    let text = git_output(root, &["show", &format!("{rev}:./{path}")])?;
+    let meta = DocMeta::parse(&text).ok()?;
+    serde_json::from_value(doc_to_json(&meta)).ok()
 }
 
 pub fn carries_claims(doc: &Doc) -> bool {
@@ -114,5 +128,19 @@ impl World {
             .filter(|d| carries_claims(d))
             .flat_map(|d| self.sites(d))
             .collect()
+    }
+
+    /// Deltas that are `complete` now, whose `index.md` changed in the range and was not
+    /// `complete` at the base.
+    pub fn completed_since(&self, root: &Path, base: &str, files: &[String]) -> Vec<&Doc> {
+        let mut completed: Vec<&Doc> = self
+            .docs
+            .iter()
+            .filter(|d| d.doc_type == "delta" && d.status == "complete")
+            .filter(|d| files.contains(&d.path))
+            .filter(|d| doc_at(root, base, &d.path).is_none_or(|was| was.status != "complete"))
+            .collect();
+        completed.sort_by(|a, b| a.id.cmp(&b.id));
+        completed
     }
 }

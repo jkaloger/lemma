@@ -1,4 +1,4 @@
-use crate::claims::{is_behaviour_part, parse, target_of, Claim, BEHAVIOUR_PART};
+use crate::claims::{is_behaviour_part, parse, target_of, Claim};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -57,11 +57,7 @@ pub struct Doc {
     #[serde(default)]
     pub parts: Vec<Part>,
     #[serde(default)]
-    pub content_hash: String,
-    #[serde(default)]
     pub attributes: Attributes,
-    #[serde(skip)]
-    pub from_store: bool,
 }
 
 impl Doc {
@@ -89,12 +85,6 @@ impl Doc {
                 .to_string_lossy()
                 .into_owned(),
         }
-    }
-
-    pub fn spec_claims(&self) -> Vec<Claim> {
-        self.part(BEHAVIOUR_PART)
-            .map(|p| parse(&p.body).claims)
-            .unwrap_or_default()
     }
 
     pub fn index_claims(&self, root: &Path) -> Vec<Claim> {
@@ -140,8 +130,6 @@ impl Doc {
 #[derive(Debug, Deserialize)]
 pub struct Transition {
     pub from: String,
-    #[serde(default)]
-    pub to: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -167,10 +155,6 @@ pub struct Finding {
 }
 
 impl Finding {
-    pub fn warning(id: &str, line: Option<usize>, message: impl Into<String>) -> Self {
-        Self::new("warning", id, line, message)
-    }
-
     pub fn error(id: &str, line: Option<usize>, message: impl Into<String>) -> Self {
         Self::new("error", id, line, message)
     }
@@ -199,34 +183,15 @@ impl Finding {
             message: message.into(),
         }
     }
-
-    pub fn in_part(mut self, part: &str) -> Self {
-        self.part = Some(part.to_string()).filter(|p| !p.is_empty());
-        self
-    }
-}
-
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-pub struct Update {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part: Option<String>,
-    pub hash: String,
-    pub body: String,
 }
 
 #[derive(Debug, Serialize, Default)]
 pub struct Output {
     pub findings: Vec<Finding>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub updates: Vec<Update>,
 }
 
 impl Output {
     pub fn findings(findings: Vec<Finding>) -> Self {
-        Self {
-            findings,
-            updates: Vec::new(),
-        }
+        Self { findings }
     }
 }

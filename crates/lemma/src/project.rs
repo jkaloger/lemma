@@ -35,10 +35,7 @@ fn stored_doc(store: &Store, meta: &DocMeta) -> Option<Doc> {
         })
         .collect::<Option<Vec<_>>>()?
         .into();
-    serde_json::from_value::<Doc>(json).ok().map(|doc| Doc {
-        from_store: true,
-        ..doc
-    })
+    serde_json::from_value::<Doc>(json).ok()
 }
 
 pub fn docs_from_store(store: &Store) -> Vec<Doc> {

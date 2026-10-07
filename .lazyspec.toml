@@ -119,12 +119,3 @@ from = "in-progress"
 to = "complete"
 context_types = ["spec", "delta"]
 run = ["lemma", "check", "--hook", "--require", "evidence", "--require", "clean"]
-
-[[hooks]]
-name = "lemma-fold"
-event = "pre-transition"
-types = ["delta"]
-from = "in-progress"
-to = "complete"
-context_types = ["spec", "delta"]
-run = ["lemma", "apply"]
