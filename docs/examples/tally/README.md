@@ -100,7 +100,7 @@ T2 balance endpoint (settles AC-2, AC-3)
    stopped. T2 left unticked; working tree kept.
 ```
 
-Each task gets a fresh runner with the task line, `design.md`, the claims it settles, the dictums whose `governs` match, and the spec's intent. After the runner returns, `lint` runs, the settled claims' refs must resolve, the box is ticked and the task is committed. A failure stops the loop with the tree intact. Fix by hand or re-run; `build` resumes from the first unticked task.
+Each task gets a fresh runner with the task line, `design.md`, the claims it settles, the dictums whose `governs` match, and the spec's intent. After the runner returns, lemma writes the refs it reports under their claims (a runner that edits a delta file or reports `blocked` stops the loop), `lint` runs, the settled claims' refs must resolve, the box is ticked and the task is committed. A failure stops the loop with the tree intact. Fix by hand or re-run; `build` resumes from the first unticked task.
 
 ```
 $ lemma build DELTA-004

@@ -1,2 +1,2 @@
-runner   = "claude -p --output-format json --permission-mode acceptEdits"
-reviewer = "claude -p --output-format json --model opus"
+runner   = "claude -p --output-format json --json-schema {schema} --permission-mode acceptEdits"
+reviewer = "claude -p --output-format json --json-schema {schema} --model opus"

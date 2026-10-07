@@ -13,6 +13,7 @@ mod range;
 mod refs;
 mod review;
 mod runner;
+mod schema;
 mod session;
 mod shape;
 mod signal;
@@ -230,20 +231,12 @@ fn startup(id: &str) -> Result<Startup, String> {
     })
 }
 
-fn rendered_prompt(
-    prompt: prompts::Prompt,
-    root: &Path,
-    values: &std::collections::BTreeMap<&str, String>,
-) -> Result<String, String> {
-    Ok(prompts::render(&prompts::load(root, prompt)?, values))
-}
-
 fn print_prompt(
     prompt: prompts::Prompt,
     root: &Path,
     values: &std::collections::BTreeMap<&str, String>,
 ) -> ExitCode {
-    match rendered_prompt(prompt, root, values) {
+    match prompts::rendered(prompt, root, values) {
         Ok(text) => {
             println!("{text}");
             ExitCode::SUCCESS
@@ -252,7 +245,11 @@ fn print_prompt(
     }
 }
 
-fn review_draft_command(start: &Startup, prompt: &str, plan_prompt: &str) -> ExitCode {
+fn review_draft_command(
+    start: &Startup,
+    prompt: &str,
+    plan_values: &std::collections::BTreeMap<&str, String>,
+) -> ExitCode {
     let Startup {
         root,
         delta,
@@ -260,7 +257,7 @@ fn review_draft_command(start: &Startup, prompt: &str, plan_prompt: &str) -> Exi
         ..
     } = start;
     println!("{} is draft: reviewing the document", delta.id);
-    match review::review_draft(root, delta, prompt, plan_prompt, config) {
+    match review::review_draft(root, delta, prompt, plan_values, config) {
         Ok(review::Outcome::Remaining(n)) => {
             println!("review clean; {n} review lines remain, resolve them and run again")
         }
@@ -285,7 +282,7 @@ fn review_diff_command(
         config,
         ..
     } = start;
-    let prompt = match rendered_prompt(prompts::Prompt::ReviewDiff, root, values) {
+    let prompt = match prompts::rendered(prompts::Prompt::ReviewDiff, root, values) {
         Ok(prompt) => prompt,
         Err(message) => return fail(message),
     };
@@ -313,12 +310,9 @@ fn review_command(id: &str, dry_run: bool) -> ExitCode {
     let mut values = context::assemble(store, root, delta);
     match (delta.status.as_str(), dry_run) {
         ("draft", true) => print_prompt(prompts::Prompt::ReviewDoc, root, &values),
-        ("draft", false) => match (
-            rendered_prompt(prompts::Prompt::ReviewDoc, root, &values),
-            rendered_prompt(prompts::Prompt::Plan, root, &values),
-        ) {
-            (Ok(prompt), Ok(plan_prompt)) => review_draft_command(&start, &prompt, &plan_prompt),
-            (Err(message), _) | (_, Err(message)) => fail(message),
+        ("draft", false) => match prompts::rendered(prompts::Prompt::ReviewDoc, root, &values) {
+            Ok(prompt) => review_draft_command(&start, &prompt, &values),
+            Err(message) => fail(message),
         },
         ("in-progress", dry_run) => {
             let world = world::World::load(store, None);

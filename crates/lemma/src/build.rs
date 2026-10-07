@@ -4,9 +4,11 @@ use crate::git::git_output;
 use crate::lint::{self, ref_name};
 use crate::payload::{Doc, CLAIMS_PART, TASKS_PART};
 use crate::prompts::{self, Prompt};
+use crate::review::{part_file, PARTS};
 use crate::tasks::{self, Task};
 use crate::world::World;
-use crate::{context, plan, project, runner};
+use crate::{context, plan, project, runner, schema};
+use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -68,6 +70,112 @@ fn heading(task: &Task) -> String {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Verdict {
+    Done,
+    Blocked,
+}
+
+#[derive(Deserialize)]
+struct Reply {
+    outcome: Verdict,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    refs: Vec<RefEntry>,
+}
+
+#[derive(Deserialize)]
+struct RefEntry {
+    claim: String,
+    path: String,
+    symbol: String,
+}
+
+fn delta_parts(root: &Path, delta: &Doc) -> Vec<(String, String)> {
+    PARTS
+        .iter()
+        .map(|part| (part_file(delta, part), plan::read(root, delta, part)))
+        .collect()
+}
+
+fn reject_part_edits(root: &Path, delta: &Doc, before: &[(String, String)]) -> Result<(), Failure> {
+    let after = delta_parts(root, delta);
+    let Some(((path, _), _)) = before.iter().zip(&after).find(|(b, a)| b.1 != a.1) else {
+        return Ok(());
+    };
+    Err(unticked(vec![format!(
+        "   runner edited {path}; lemma writes delta parts"
+    )]))
+}
+
+fn with_refs(text: &str, task: &Task, refs: &[RefEntry]) -> Result<String, String> {
+    let mut text = text.to_string();
+    for entry in refs {
+        if !task.settles.contains(&entry.claim) {
+            return Err(format!("   {} does not settle {}", task.id, entry.claim));
+        }
+        let parsed = claims::parse(&text);
+        let claim = parsed
+            .claims
+            .iter()
+            .find(|c| c.id == entry.claim && !c.struck)
+            .ok_or_else(|| format!("   {} is not in claims.md", entry.claim))?;
+        let written = claim
+            .receipts
+            .iter()
+            .any(|r| r.path == entry.path && r.symbol.as_deref() == Some(&entry.symbol));
+        if written {
+            continue;
+        }
+        let line = format!("  @ref {}", ref_name(&entry.path, Some(&entry.symbol)));
+        let mut lines = claims::lines_of(&text);
+        lines.insert(claim.end, &line);
+        text = lines.join("\n");
+    }
+    Ok(text)
+}
+
+fn write_refs(root: &Path, delta: &Doc, task: &Task, refs: &[RefEntry]) -> Result<(), Failure> {
+    let before = plan::read(root, delta, CLAIMS_PART);
+    let after = with_refs(&before, task, refs).map_err(|line| unticked(vec![line]))?;
+    if after == before {
+        return Ok(());
+    }
+    let path = root.join(delta.part_path(CLAIMS_PART));
+    std::fs::write(&path, after)
+        .map_err(|e| unticked(vec![format!("   cannot write {}: {e}", path.display())]))
+}
+
+fn runner_reply(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    prompt: &str,
+    config: &runner::Config,
+) -> Result<Reply, Failure> {
+    let failed = |message: String| unticked(vec![format!("   runner: {message}")]);
+    let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
+    let schema = schema::build(task);
+    let started = std::time::Instant::now();
+    let reply = runner::run(
+        &config.runner,
+        prompt,
+        root,
+        &env,
+        config.timeout,
+        Some(&schema),
+    )
+    .map_err(failed)?;
+    println!(
+        "   runner: {}, {} files",
+        elapsed_text(started.elapsed()),
+        changed_paths(root)
+    );
+    serde_json::from_value(reply.json().map_err(failed)?).map_err(|e| failed(format!("reply: {e}")))
+}
+
 fn run_runner(
     root: &Path,
     store: &lazyspec::engine::store::Store,
@@ -77,19 +185,18 @@ fn run_runner(
 ) -> Result<(), Failure> {
     let mut values = context::assemble(store, root, delta);
     values.insert("task", context::task_text(delta, task));
-    let prompt = prompts::load(root, Prompt::Build)
-        .map(|template| prompts::render(&template, &values))
+    let prompt = prompts::rendered(Prompt::Build, root, &values)
         .map_err(|message| unticked(vec![format!("   runner: {message}")]))?;
-    let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
-    let started = std::time::Instant::now();
-    runner::run(&config.runner, &prompt, root, &env, config.timeout)
-        .map_err(|message| unticked(vec![format!("   runner: {message}")]))?;
-    println!(
-        "   runner: {}, {} files",
-        elapsed_text(started.elapsed()),
-        changed_paths(root)
-    );
-    Ok(())
+    let parts = delta_parts(root, delta);
+    let reply = runner_reply(root, delta, task, &prompt, config)?;
+    reject_part_edits(root, delta, &parts)?;
+    if let Verdict::Blocked = reply.outcome {
+        return Err(unticked(vec![format!(
+            "   runner blocked: {}",
+            reply.reason
+        )]));
+    }
+    write_refs(root, delta, task, &reply.refs)
 }
 
 fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {

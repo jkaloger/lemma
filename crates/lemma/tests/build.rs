@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 
 const CLAIMS_PATH: &str = "docs/deltas/DELTA-001-d/claims.md";
@@ -7,7 +8,9 @@ const BARE: &str = "- [AC-1] Reopen keeps the prior answer.\n- [AC-2] Writes are
 const REF_1: &str = "  @ref tests/store_test.rs#reopen_keeps_prior\n";
 const REF_2: &str = "  @ref tests/store_test.rs#other_test\n";
 const TWO_TASKS: &str = "- [ ] T1 reopen (settles AC-1)\n- [ ] T2 atomic (settles AC-2)\n";
-const RUNNER: &str = "#!/bin/sh\ncat > /dev/null\ncp -R \".fixture/$LEMMA_TASK/.\" .\necho '{\"result\":\"done\"}'\n";
+const RUNNER: &str = "#!/bin/sh\ncat > /dev/null\n[ -d \".fixture/$LEMMA_TASK\" ] && cp -R \".fixture/$LEMMA_TASK/.\" .\ncat \".fixture/$LEMMA_TASK.json\"\n";
+const REOPEN: (&str, &str, &str) = ("AC-1", "tests/store_test.rs", "reopen_keeps_prior");
+const OTHER: (&str, &str, &str) = ("AC-2", "tests/store_test.rs", "other_test");
 
 fn claims(ac1: bool, ac2: bool) -> String {
     let ref_of = |on: bool, line: &'static str| if on { line } else { "" };
@@ -45,6 +48,19 @@ fn fixture(repo: &Repo, task: &str, rel: &str, content: &str) {
     repo.write(&format!(".fixture/{task}/{rel}"), content);
 }
 
+fn reply(repo: &Repo, task: &str, outcome: &str, reason: &str, refs: &[(&str, &str, &str)]) {
+    let refs: Vec<Value> = refs
+        .iter()
+        .map(|(claim, path, symbol)| json!({"claim": claim, "path": path, "symbol": symbol}))
+        .collect();
+    let output = json!({"structured_output": {"outcome": outcome, "reason": reason, "refs": refs}});
+    repo.write(&format!(".fixture/{task}.json"), &output.to_string());
+}
+
+fn done(repo: &Repo, task: &str, refs: &[(&str, &str, &str)]) {
+    reply(repo, task, "done", "", refs);
+}
+
 fn build(repo: &Repo, args: &[&str]) -> Run {
     let mut full = vec!["build", "DELTA-001"];
     full.extend_from_slice(args);
@@ -63,10 +79,10 @@ fn subjects(repo: &Repo) -> Vec<String> {
 }
 
 fn two_task_fixtures(repo: &Repo) {
-    fixture(repo, "T1", CLAIMS_PATH, &claims(true, false));
     fixture(repo, "T1", "src/one.rs", "pub fn one() {}\n");
-    fixture(repo, "T2", CLAIMS_PATH, &claims(true, true));
+    done(repo, "T1", &[REOPEN]);
     fixture(repo, "T2", "src/two.rs", "pub fn two() {}\n");
+    done(repo, "T2", &[OTHER]);
 }
 
 #[test]
@@ -103,7 +119,7 @@ fn the_report_follows_the_documented_shape() {
     let lines: Vec<&str> = run.stdout.lines().collect();
     assert_eq!(lines[0], "T1 reopen (settles AC-1)");
     assert!(lines[1].starts_with("   runner: "), "{}", run.stdout);
-    assert!(lines[1].ends_with("s, 2 files"), "{}", run.stdout);
+    assert!(lines[1].ends_with("s, 1 files"), "{}", run.stdout);
     assert_eq!(lines[2], "   lint: clean");
     assert_eq!(
         lines[3],
@@ -116,9 +132,13 @@ fn the_report_follows_the_documented_shape() {
 #[test]
 fn a_lint_error_stops_with_the_tree_kept() {
     let repo = project("in-progress", TWO_TASKS);
-    let broken = format!("{BARE}  @ref tests/store_test.rs#missing_fn\n");
-    fixture(&repo, "T1", CLAIMS_PATH, &broken);
+    let broken = "- [AC-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#missing_fn\n- [AC-2] Writes are atomic.\n";
     fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(
+        &repo,
+        "T1",
+        &[("AC-1", "tests/store_test.rs", "missing_fn")],
+    );
     let before = repo.head();
 
     let run = build(&repo, &[]);
@@ -139,6 +159,7 @@ fn a_lint_error_stops_with_the_tree_kept() {
 fn a_settled_claim_without_a_ref_stops() {
     let repo = project("in-progress", TWO_TASKS);
     fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[]);
     let before = repo.head();
 
     let run = build(&repo, &[]);
@@ -159,12 +180,12 @@ fn a_settled_claim_without_a_ref_stops() {
 #[test]
 fn an_intent_claim_needs_no_ref() {
     let repo = project("in-progress", "- [ ] T1 reopen (settles AC-1)\n");
-    fixture(
-        &repo,
-        "T1",
+    repo.write(
         CLAIMS_PATH,
         "- [AC-1] [intent] Reopen keeps the prior answer.\n- [AC-2] Writes are atomic.\n",
     );
+    repo.commit("mark intent");
+    done(&repo, "T1", &[]);
 
     let run = build(&repo, &[]);
 
@@ -176,13 +197,12 @@ fn an_intent_claim_needs_no_ref() {
 fn a_rerun_resumes_at_the_first_unticked_task() {
     let repo = project("in-progress", TWO_TASKS);
     two_task_fixtures(&repo);
-    fixture(&repo, "T2", CLAIMS_PATH, &claims(true, false));
+    done(&repo, "T2", &[]);
     let stopped = build(&repo, &[]);
     assert_eq!(stopped.code, 2, "{}", stopped.stdout);
     assert_eq!(subjects(&repo)[0], "DELTA-001 T1: reopen");
     repo.write(CLAIMS_PATH, &claims(true, true));
     repo.commit("human fix");
-    fixture(&repo, "T2", CLAIMS_PATH, &claims(true, true));
 
     let run = build(&repo, &[]);
 
@@ -195,8 +215,8 @@ fn a_rerun_resumes_at_the_first_unticked_task() {
 #[test]
 fn task_runs_only_that_task() {
     let repo = project("in-progress", TWO_TASKS);
-    fixture(&repo, "T2", CLAIMS_PATH, &claims(false, true));
     fixture(&repo, "T2", "src/two.rs", "pub fn two() {}\n");
+    done(&repo, "T2", &[OTHER]);
 
     let run = build(&repo, &["--task", "T2"]);
 
@@ -234,6 +254,7 @@ fn an_unknown_task_is_refused() {
 fn a_chore_skips_the_ref_check() {
     let repo = project("in-progress", "- [ ] T1 wire it (chore)\n");
     fixture(&repo, "T1", "src/wire.rs", "pub fn wire() {}\n");
+    done(&repo, "T1", &[]);
 
     let run = build(&repo, &[]);
 
@@ -272,8 +293,9 @@ fn a_delta_that_is_not_in_progress_is_refused() {
 fn follow_ups_run_after_the_main_tasks() {
     let tasks = "- [ ] T1 reopen (settles AC-1)\n\n## Follow-ups\n- [ ] T2 tidy (chore)\n";
     let repo = project("in-progress", tasks);
-    fixture(&repo, "T1", CLAIMS_PATH, &claims(true, false));
+    done(&repo, "T1", &[REOPEN]);
     fixture(&repo, "T2", "src/tidy.rs", "pub fn tidy() {}\n");
+    done(&repo, "T2", &[]);
 
     let run = build(&repo, &[]);
 
@@ -282,4 +304,121 @@ fn follow_ups_run_after_the_main_tasks() {
         &subjects(&repo)[..2],
         ["DELTA-001 T2: tidy", "DELTA-001 T1: reopen"]
     );
+}
+
+#[test]
+fn refs_are_written_under_their_claim_once_and_resolve() {
+    let repo = project("in-progress", TWO_TASKS);
+    fixture(&repo, "T2", "src/two.rs", "pub fn two() {}\n");
+    done(&repo, "T2", &[OTHER, OTHER]);
+
+    let run = build(&repo, &["--task", "T2"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        repo.read(CLAIMS_PATH),
+        format!("- [AC-1] Reopen keeps the prior answer.\n- [AC-2] Writes are atomic.\n{REF_2}")
+    );
+    let refs = repo.run(&["refs", "DELTA-001/AC-2"], "");
+    assert_eq!(refs.code, 0, "{}", refs.stdout);
+    assert!(refs.stdout.contains("other_test ok"), "{}", refs.stdout);
+}
+
+#[test]
+fn a_ref_follows_the_continuation_lines_of_its_claim() {
+    let repo = project("in-progress", "- [ ] T1 reopen (settles AC-1)\n");
+    repo.write(
+        CLAIMS_PATH,
+        "- [AC-1] Reopen keeps the prior answer.\n  more detail\n- [AC-2] Writes are atomic.\n",
+    );
+    repo.commit("detail");
+    done(&repo, "T1", &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        repo.read(CLAIMS_PATH),
+        format!("- [AC-1] Reopen keeps the prior answer.\n  more detail\n{REF_1}- [AC-2] Writes are atomic.\n")
+    );
+}
+
+#[test]
+fn a_blocked_outcome_prints_the_reason_and_leaves_the_task_unticked() {
+    let repo = project("in-progress", TWO_TASKS);
+    reply(&repo, "T1", "blocked", "the store has no seam to test", &[]);
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("   runner blocked: the store has no seam to test\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(run
+        .stdout
+        .ends_with("   stopped. T1 left unticked; working tree kept.\n"));
+    assert_eq!(tasks(&repo), TWO_TASKS);
+    assert_eq!(repo.head(), before);
+}
+
+#[test]
+fn a_runner_that_edits_a_delta_part_stops_the_build() {
+    let repo = project("in-progress", TWO_TASKS);
+    fixture(&repo, "T1", CLAIMS_PATH, &claims(true, false));
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[REOPEN]);
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout.contains(&format!(
+            "   runner edited {CLAIMS_PATH}; lemma writes delta parts\n"
+        )),
+        "{}",
+        run.stdout
+    );
+    assert!(run
+        .stdout
+        .ends_with("   stopped. T1 left unticked; working tree kept.\n"));
+    assert_eq!(tasks(&repo), TWO_TASKS);
+    assert_eq!(repo.head(), before);
+}
+
+#[test]
+fn a_reply_with_no_json_stops_the_build() {
+    let repo = project("in-progress", TWO_TASKS);
+    repo.write(".fixture/T1.json", r#"{"result": "all done"}"#);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("   runner: runner reply has no JSON object\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(tasks(&repo), TWO_TASKS);
+}
+
+#[test]
+fn a_ref_to_a_claim_the_task_does_not_settle_stops() {
+    let repo = project("in-progress", TWO_TASKS);
+    done(&repo, "T1", &[REOPEN, OTHER]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("T1 does not settle AC-2"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(repo.read(CLAIMS_PATH), BARE);
 }

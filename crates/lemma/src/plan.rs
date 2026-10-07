@@ -1,11 +1,13 @@
 use crate::annotate::frontmatter_len;
 use crate::claims::{self, heading_level, lines_of, live_lines};
 use crate::payload::{Doc, CLAIMS_PART, INDEX_PART, TASKS_PART};
+use crate::prompts::{self, Prompt};
 use crate::review::part_file;
 use crate::runner;
+use crate::schema;
 use crate::tasks::{self, Tasks, FOLLOW_UPS};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 const ID_PREFIX: &str = "AC-";
@@ -156,7 +158,13 @@ fn is_planned(claims_text: &str, parsed: &Tasks) -> bool {
             .all(|c| settled.contains(c.id.as_str()))
 }
 
-fn tag_bullets(claims_text: &str) -> (String, Known, Vec<String>) {
+struct Tagged {
+    claims_text: String,
+    known: Known,
+    tagged: Vec<String>,
+}
+
+fn tag_bullets(claims_text: &str) -> Tagged {
     let bullets = claims::bullets(claims_text);
     let mut next = next_number(bullets.iter().filter_map(|b| id_number(b.id.as_deref()?)));
     let mut lines: Vec<String> = lines_of(claims_text)
@@ -177,7 +185,11 @@ fn tag_bullets(claims_text: &str) -> (String, Known, Vec<String>) {
         tagged.push(id.clone());
         known.push((id, bullet.text));
     }
-    (lines.join("\n"), known, tagged)
+    Tagged {
+        claims_text: lines.join("\n"),
+        known,
+        tagged,
+    }
 }
 
 fn add_proposed(
@@ -214,7 +226,6 @@ fn resolve(entry: &Settle, plan_ids: &[String], known: &Known) -> Option<String>
         Settle::Name(name) => known
             .iter()
             .find(|(id, _)| id == name)
-            .or_else(|| known.iter().find(|(_, text)| text == name.trim()))
             .map(|(id, _)| id.clone()),
     }
 }
@@ -301,8 +312,17 @@ pub fn append_follow_ups(tasks_text: &str, new: &[String]) -> String {
     out.join("\n")
 }
 
-fn draft(files: &Files, parsed: &Tasks, reply: Reply) -> Result<Drafted, String> {
-    let (mut claims_text, mut known, tagged) = tag_bullets(&files.claims);
+fn draft(
+    files: &Files,
+    parsed: &Tasks,
+    tagged_claims: Tagged,
+    reply: Reply,
+) -> Result<Drafted, String> {
+    let Tagged {
+        mut claims_text,
+        mut known,
+        tagged,
+    } = tagged_claims;
     let (plan_ids, proposed) = add_proposed(&mut claims_text, &mut known, &reply.claims);
     let first = next_number(parsed.tasks.iter().map(|t| t.number));
     let lines = (first..)
@@ -391,10 +411,37 @@ fn write_changed(
     std::fs::write(&path, after).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+fn ask_planner(
+    root: &Path,
+    delta: &Doc,
+    values: &BTreeMap<&str, String>,
+    files: &Files,
+    parsed: &Tasks,
+    config: &runner::Config,
+) -> Result<Drafted, String> {
+    let tagged = tag_bullets(&files.claims);
+    let mut values = values.clone();
+    values.insert("claims", tagged.claims_text.clone());
+    let prompt = prompts::rendered(Prompt::Plan, root, &values)?;
+    let known_ids: Vec<String> = tagged.known.iter().map(|(id, _)| id.clone()).collect();
+    let env = [("LEMMA_DELTA", delta.id.as_str())];
+    let schema = schema::plan(&known_ids);
+    let reply = runner::run(
+        &config.reviewer,
+        &prompt,
+        root,
+        &env,
+        config.timeout,
+        Some(&schema),
+    )?;
+    let reply = serde_json::from_value(reply.json()?).map_err(|e| format!("planner reply: {e}"))?;
+    draft(files, parsed, tagged, reply)
+}
+
 pub fn plan(
     root: &Path,
     delta: &Doc,
-    prompt: &str,
+    values: &BTreeMap<&str, String>,
     config: &runner::Config,
 ) -> Result<Report, String> {
     let files = Files {
@@ -413,13 +460,7 @@ pub fn plan(
                 ..Report::default()
             },
         },
-        false => {
-            let env = [("LEMMA_DELTA", delta.id.as_str())];
-            let result = runner::run(&config.reviewer, prompt, root, &env, config.timeout)?;
-            let reply = serde_json::from_value(runner::json_reply(&result)?)
-                .map_err(|e| format!("planner reply: {e}"))?;
-            draft(&files, &parsed, reply)?
-        }
+        false => ask_planner(root, delta, values, &files, &parsed, config)?,
     };
     let index = tidy_index(&files.index);
     drafted.report.index_tidied = index != files.index;

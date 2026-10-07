@@ -97,6 +97,14 @@ pub fn load(root: &Path, prompt: Prompt) -> Result<String, String> {
     }
 }
 
+pub fn rendered(
+    prompt: Prompt,
+    root: &Path,
+    values: &BTreeMap<&str, String>,
+) -> Result<String, String> {
+    Ok(render(&load(root, prompt)?, values))
+}
+
 pub fn render(template: &str, values: &BTreeMap<&str, String>) -> String {
     placeholder()
         .replace_all(template, |caps: &Captures| {

@@ -41,11 +41,7 @@ fn plan_reply(repo: &Repo, reply: Value) {
 }
 
 fn claim(text: &str) -> Value {
-    json!({"text": text, "proposed": false})
-}
-
-fn proposed(text: &str) -> Value {
-    json!({"text": text, "proposed": true})
+    json!({"text": text})
 }
 
 fn task(text: &str, settles: Value) -> Value {
@@ -85,8 +81,8 @@ fn ids_are_assigned_in_document_order_continuing_from_the_highest() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("First."), claim("Second."), claim("Third."), claim("Fourth.")],
-            "tasks": [task("Build it", json!([1, 2, 3, 4]))]
+            "claims": [],
+            "tasks": [task("Build it", json!(["AC-3", "AC-2", "AC-4", "AC-5"]))]
         }),
     );
 
@@ -114,7 +110,7 @@ fn a_single_new_id_is_named_alone() {
     let repo = project("- Only.\n", "");
     plan_reply(
         &repo,
-        json!({"claims": [claim("Only.")], "tasks": [task("Do", json!([1]))]}),
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
     let run = review(&repo);
@@ -134,8 +130,8 @@ fn human_bullet_text_is_preserved_byte_for_byte() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Reopen keeps `Head::prior`, even after a crash!")],
-            "tasks": [task("Do", json!([1]))]
+            "claims": [],
+            "tasks": [task("Do", json!(["AC-1"]))]
         }),
     );
 
@@ -155,13 +151,8 @@ fn proposed_claims_are_appended_with_the_marker() {
     plan_reply(
         &repo,
         json!({
-            "claims": [
-                claim("Human claim."),
-                claim("Another."),
-                proposed("Writes are atomic."),
-                claim("Invented but not marked.")
-            ],
-            "tasks": [task("Do", json!([1, 2, 3, 4]))]
+            "claims": [claim("Writes are atomic."), claim("Invented but not marked.")],
+            "tasks": [task("Do", json!(["AC-1", "AC-2", 1, 2]))]
         }),
     );
 
@@ -186,8 +177,8 @@ fn only_proposed_claims_are_reported_without_a_tag_count() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Human claim."), proposed("Extra.")],
-            "tasks": [task("Do", json!([1, 2]))]
+            "claims": [claim("Extra.")],
+            "tasks": [task("Do", json!(["AC-1", 1]))]
         }),
     );
 
@@ -207,8 +198,8 @@ fn tasks_are_appended_after_hand_written_ones_and_before_follow_ups() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("A."), claim("B.")],
-            "tasks": [task("Build  A", json!([1])), task("Wire B", json!([]))]
+            "claims": [],
+            "tasks": [task("Build  A", json!(["AC-1"])), task("Wire B", json!([]))]
         }),
     );
 
@@ -227,7 +218,7 @@ fn tasks_follow_a_template_comment_on_a_new_line() {
     let repo = project("- [AC-1] A.\n", "<!-- one task per commit -->");
     plan_reply(
         &repo,
-        json!({"claims": [claim("A.")], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
     review(&repo);
@@ -246,7 +237,7 @@ fn a_ticked_task_refuses_and_the_planner_is_not_called() {
     );
     plan_reply(
         &repo,
-        json!({"claims": [claim("Plain.")], "tasks": [task("Do", json!([1]))]}),
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
     let before = snapshot(&repo);
 
@@ -272,7 +263,7 @@ fn frontmatter_keys_are_put_in_canonical_order() {
     );
     plan_reply(
         &repo,
-        json!({"claims": [claim("A.")], "tasks": [task("Do", json!([1]))]}),
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
     let run = review(&repo);
@@ -300,7 +291,7 @@ fn headings_are_normalised_outside_fences() {
     );
     plan_reply(
         &repo,
-        json!({"claims": [claim("A.")], "tasks": [task("Do", json!([1]))]}),
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
 
     review(&repo);
@@ -319,8 +310,8 @@ fn rerunning_on_a_planned_delta_changes_nothing() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("First."), claim("Second.")],
-            "tasks": [task("Do first", json!([1])), task("Do second", json!([2]))]
+            "claims": [],
+            "tasks": [task("Do first", json!(["AC-1"])), task("Do second", json!(["AC-2"]))]
         }),
     );
 
@@ -340,15 +331,15 @@ fn rerunning_on_a_planned_delta_changes_nothing() {
 }
 
 #[test]
-fn settles_resolve_by_number_by_id_and_by_text() {
+fn settles_resolve_by_id_and_by_position_in_the_reply_claims() {
     let repo = project("- [AC-1] Alpha.\n- Beta.\n- Gamma.\n", "");
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Alpha."), claim("Beta."), claim("Gamma."), proposed("Delta.")],
+            "claims": [claim("Delta.")],
             "tasks": [
-                task("One", json!([2, "AC-1", "Gamma.", 2])),
-                task("Two", json!(["Delta."]))
+                task("One", json!(["AC-2", "AC-1", "AC-3", "AC-2"])),
+                task("Two", json!([1]))
             ]
         }),
     );
@@ -363,13 +354,55 @@ fn settles_resolve_by_number_by_id_and_by_text() {
 }
 
 #[test]
+fn a_settles_entry_naming_a_claim_by_its_text_is_an_error() {
+    let repo = project("- Alpha.\n", "");
+    plan_reply(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do it", json!(["Alpha."]))]}),
+    );
+    let before = snapshot(&repo);
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stderr
+            .contains("lemma: plan task `Do it` settles unknown claim `Alpha.`"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(snapshot(&repo), before);
+}
+
+#[test]
+fn an_echoed_claim_maps_to_its_id_instead_of_being_appended_again() {
+    let repo = project("- Alpha.\n- [AC-2] Beta.\n", "");
+    plan_reply(
+        &repo,
+        json!({
+            "claims": [claim("Alpha."), claim("Beta."), claim("Gamma.")],
+            "tasks": [task("Do", json!([1, 2, 3]))]
+        }),
+    );
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(
+        claims_of(&repo),
+        "- [AC-3] Alpha.\n- [AC-2] Beta.\n- [AC-4] [proposed] Gamma.\n"
+    );
+    assert_eq!(tasks_of(&repo), "- [ ] T1 Do (settles AC-3, AC-2, AC-4)\n");
+}
+
+#[test]
 fn an_unresolvable_settles_entry_errors_and_writes_nothing() {
     let repo = project("- Alpha.\n", "");
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Alpha."), proposed("Extra.")],
-            "tasks": [task("Do it", json!([1, "AC-9"]))]
+            "claims": [claim("Extra.")],
+            "tasks": [task("Do it", json!(["AC-1", "AC-9"]))]
         }),
     );
     let before = snapshot(&repo);
@@ -387,11 +420,46 @@ fn an_unresolvable_settles_entry_errors_and_writes_nothing() {
 }
 
 #[test]
+fn the_planner_prompt_shows_the_assigned_ids() {
+    let repo = project("- First.\n- [AC-4] Second.\n- Third.\n", "");
+    plan_reply(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-5", "AC-4", "AC-6"]))]}),
+    );
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let prompt = repo.read("stdin.txt");
+    assert!(prompt.contains(PLAN_MARKER), "{prompt}");
+    assert!(
+        prompt.contains("- [AC-5] First.\n- [AC-4] Second.\n- [AC-6] Third.\n"),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn a_failed_planner_writes_nothing_not_even_the_tagged_ids() {
+    let repo = project("- First.\n", "");
+    repo.write(
+        "plan.json",
+        &json!({"is_error": true, "result": "rate limited"}).to_string(),
+    );
+    let before = snapshot(&repo);
+
+    let run = review(&repo);
+
+    assert_eq!(run.code, 2);
+    assert!(run.stderr.contains("rate limited"), "{}", run.stderr);
+    assert_eq!(snapshot(&repo), before);
+}
+
+#[test]
 fn remaining_review_lines_block_planning() {
     let repo = project("- Plain.\n  @review Which one?\n", "");
     plan_reply(
         &repo,
-        json!({"claims": [claim("Plain.")], "tasks": [task("Do", json!([1]))]}),
+        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
     );
     let before = snapshot(&repo);
 
@@ -415,8 +483,8 @@ fn a_marked_bullet_matches_the_planner_by_its_text_without_the_marker() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Reopen keeps the prior answer."), claim("Feels fast.")],
-            "tasks": [task("reopen", json!([1, 2]))],
+            "claims": [],
+            "tasks": [task("reopen", json!(["AC-1", "AC-2"]))],
         }),
     );
 

@@ -116,11 +116,11 @@ index.md: frontmatter and headings tidied
 
 ### review
 
-`lemma review <delta>` on a `draft` delta renders the `review-doc` prompt and runs the reviewer. The reply is `{"findings":[{"part","anchor","text"}]}`. `part` is `index`, `design`, `claims` or `tasks`. The anchor is a claim id, the exact text of a claim with no id, a task id, a heading's text, or the part name for the whole part. Every anchor is resolved before anything is written; an unknown anchor is an error naming it and nothing is written. An identical line under the same anchor is not written twice. With no findings and no review lines left, the run plans; with review lines left it prints `review clean; <n> review lines remain, resolve them and run again`.
+`lemma review <delta>` on a `draft` delta renders the `review-doc` prompt and runs the reviewer. The reply is `{"findings":[{"part","anchor","text"}]}`, and its schema is built from the delta: `part` is `index`, `design`, `claims` or `tasks`, and `anchor` is limited to what that part accepts, a claim id, the exact text of a claim with no id, a task id, a heading's text, or the part name for the whole part. Every anchor is resolved before anything is written; an unknown anchor is an error naming it and nothing is written. An identical line under the same anchor is not written twice. With no findings and no review lines left, the run plans; with review lines left it prints `review clean; <n> review lines remain, resolve them and run again`.
 
-Planning renders the `plan` prompt. The reply is `{"claims":[{"text","proposed"}],"tasks":[{"text","settles":[..]}]}`. Every bullet without an id gets `AC-<n>` in document order, its text unchanged. A planner claim whose text matches no bullet is appended as `- [AC-<n>] [proposed] <text>`. A task's `settles` entries name claims by position in the reply's `claims` (from 1), by id, or by exact text; an unresolvable entry is an error and nothing is written. Tasks are numbered after the highest existing `T<n>` and appended after the main tasks, before `## Follow-ups`. Frontmatter keys are reordered to `title, type, status, author, date, tags, related`, then the rest; `Intent` and `Out of scope` headings are normalised to `##`. Planning refuses when any task is ticked. A delta whose bullets all have ids and whose claims are all settled is only tidied and prints `already planned`.
+Planning first assigns `AC-<n>` to every bullet without an id, in document order, its text unchanged, in memory, and renders the `plan` prompt from that, so the planner sees the ids and does not echo claims. The reply is `{"claims":[{"text"}],"tasks":[{"text","settles":[..]}]}`. `claims` holds only new behaviour, each appended as `- [AC-<n>] [proposed] <text>`; one whose text equals an existing claim maps to that claim's id instead. A task's `settles` entries are an existing claim id or the position, from 1, of a claim in the reply's `claims`; an unresolvable entry is an error. Nothing is written, including the new ids, unless the reply is accepted. Tasks are numbered after the highest existing `T<n>` and appended after the main tasks, before `## Follow-ups`. Frontmatter keys are reordered to `title, type, status, author, date, tags, related`, then the rest; `Intent` and `Out of scope` headings are normalised to `##`. Planning refuses when any task is ticked. A delta whose bullets all have ids and whose claims are all settled is only tidied and prints `already planned`.
 
-On an `in-progress` delta, `lemma review` renders the `review-diff` prompt with the diff since the delta's base. The reply is `{"findings":[{"text","settles":[..]}]}`. Each finding is appended under `## Follow-ups` as an unticked task, created if missing, settling the ids given or a chore. A finding whose text matches an existing task is skipped. Nothing is written to `claims.md`. Any other status is an error.
+On an `in-progress` delta, `lemma review` renders the `review-diff` prompt with the diff since the delta's base. The reply is `{"findings":[{"text","settles":[..]}]}`, with `settles` limited to live claim ids. Each finding is appended under `## Follow-ups` as an unticked task, created if missing, settling the ids given or a chore. A finding whose text matches an existing task is skipped. Nothing is written to `claims.md`. Any other status is an error.
 
 `--dry-run` prints the assembled prompt and exits.
 
@@ -128,10 +128,12 @@ On an `in-progress` delta, `lemma review` renders the `review-diff` prompt with 
 
 `lemma build <delta>` refuses a delta that is not `in-progress` and a working tree with uncommitted or untracked changes. For each unticked task in order, main tasks before follow-ups:
 
-1. The `build` prompt is rendered with the task and the claims it settles, and the runner runs with `LEMMA_DELTA` and `LEMMA_TASK` set.
-2. `lemma lint <delta>` runs; any error stops the loop.
-3. Unless the task is a chore, each claim it settles is `[intent]`, or has at least one ref and every ref resolves.
-4. The task is ticked, then `git add -A` and `git commit -m "<delta> T<n>: <text>"`.
+1. The `build` prompt is rendered with the task and the claims it settles, and the runner runs with `LEMMA_DELTA` and `LEMMA_TASK` set. The reply is `{"outcome":"done"|"blocked","reason","refs":[{"claim","path","symbol"}]}`; `claim` is limited to the claims the task settles and a chore has no refs.
+2. If the runner changed `index.md`, `design.md`, `claims.md` or `tasks.md`, the task fails with `runner edited <path>; lemma writes delta parts`. If `outcome` is `blocked`, it fails with `runner blocked: <reason>`. A reply with no JSON is a failure.
+3. Each ref is written as an `@ref <path>#<symbol>` line under its claim, after the claim's existing lines; a ref already there is skipped. A ref to a claim the task does not settle is a failure.
+4. `lemma lint <delta>` runs; any error stops the loop.
+5. Unless the task is a chore, each claim it settles is `[intent]`, or has at least one ref and every ref resolves.
+6. The task is ticked, then `git add -A` and `git commit -m "<delta> T<n>: <text>"`.
 
 Any failure prints the reason and `stopped. T<n> left unticked; working tree kept.`, and exits 2. A failed commit leaves the task ticked and prints `stopped. T<n> ticked but not committed; working tree kept.` The tree is never reset. A re-run resumes at the first unticked task. `--task T<n>` runs one task. When no task is left the output is `all tasks complete`.
 
@@ -205,18 +207,18 @@ The base is the revision the history and dictum checks diff against and that bou
 ### lemma.toml
 
 ```toml
-runner   = "claude -p --output-format json --permission-mode acceptEdits"
-reviewer = "claude -p --output-format json --model opus"
+runner   = "claude -p --output-format json --json-schema {schema} --permission-mode acceptEdits"
+reviewer = "claude -p --output-format json --json-schema {schema} --model opus"
 timeout  = 1800
 ```
 
 | Key        | Default                          | Effect                                    |
 | ---------- | -------------------------------- | ----------------------------------------- |
-| `runner`   | `claude -p --output-format json` | Command `lemma build` runs per task        |
+| `runner`   | `claude -p --output-format json --json-schema {schema}` | Command `lemma build` runs per task |
 | `reviewer` | the `runner` value               | Command `lemma review` runs                |
 | `timeout`  | `1800`                           | Seconds before a run is killed             |
 
-An unknown key is an error. A command is split into words on whitespace, with single and double quotes grouping; no shell is involved. The prompt is written to stdin and the working directory is the repository root. Stdout is parsed as JSON: `result` is the reply text, and `"is_error": true` or a non-zero exit is a failure. Other fields are ignored. A reviewer reply is the first JSON object found in `result`.
+An unknown key is an error. A command is split into words on whitespace, with single and double quotes grouping; no shell is involved. The prompt is written to stdin and the working directory is the repository root. Every run passes a JSON Schema for its reply (draft-07, `additionalProperties: false`, all fields required), generated from the delta. In each word of the command, `{schema}` is replaced by the schema as compact JSON and `{schema_file}` by the path of a temporary file holding it, which exists for the run; a command naming either is an error when no schema is given. Stdout is parsed as JSON. A non-null `structured_output` is the reply, and `result` is then optional. Otherwise the reply is the first JSON object found in `result`, so a runner that does not validate against a schema still works. `"is_error": true`, a `subtype` other than `success`, or a non-zero exit is a failure; the message is `result`, else the `subtype`. Other fields are ignored.
 
 ### Prompts
 
@@ -231,6 +233,8 @@ An unknown key is an error. A command is split into words on whitespace, with si
 | `delta`, `design`, `claims`, `tasks` | The delta's parts                                                                  |
 | `task`        | The task line and the claims it settles (build)                                                           |
 | `diff`        | `git diff <base>` limited to the changed specs' `governs` and test globs (review-diff)                    |
+
+In the `plan` prompt `claims` already carries the ids lemma assigned. The `build` prompt tells the runner not to edit any delta part; lemma writes the refs from its reply.
 
 Two glob lists overlap when they share a glob, when one glob matches the other's text, or when some repository file matches a glob from each. An unknown key refuses `review` and `build` at startup.
 

@@ -1,6 +1,10 @@
 You are reviewing a draft delta before any code is written. A human wrote it; you annotate, they decide. Do not rewrite the delta.
 
-Read the convention, the dictums, the intent of the specs this delta changes and the related documents, then the delta's four parts. Report only what would make the work wrong, unbounded or unverifiable:
+Read the convention, the dictums, the intent of the specs this delta changes and the related documents, then the delta's four parts.
+
+Claims in a draft have no ids, refs or tasks: planning assigns ids, the build writes refs and tests. Do not report their absence. Dictum rules about tests and refs (e.g. TEST-1, TEST-3, TEST-4) bind the build, not this review; apply them only as "this claim could never be tested".
+
+Report only what would make the work wrong, unbounded or unverifiable:
 
 - Intent that does not say why, or that contradicts a spec's intent, constraints or non-goals.
 - Design that breaks a dictum or a decision, or leaves a choice open that the claims depend on.
