@@ -1,5 +1,7 @@
 use crate::annotate::annotate;
+use crate::claims::review_lines;
 use crate::payload::{Doc, CLAIMS_PART, DESIGN_PART, INDEX_PART, TASKS_PART};
+use crate::plan;
 use crate::runner;
 use serde::Deserialize;
 use std::path::Path;
@@ -8,7 +10,8 @@ const PARTS: [&str; 4] = [INDEX_PART, DESIGN_PART, CLAIMS_PART, TASKS_PART];
 const ERROR_SEPARATOR: &str = "\nlemma: ";
 
 pub enum Outcome {
-    Clean,
+    Remaining(usize),
+    Planned(plan::Report),
     Written(usize),
 }
 
@@ -47,7 +50,7 @@ fn parse_findings(reply: serde_json::Value) -> Result<Vec<Finding>, String> {
     Ok(reply.findings)
 }
 
-fn part_file(delta: &Doc, part: &str) -> String {
+pub fn part_file(delta: &Doc, part: &str) -> String {
     match part {
         INDEX_PART => delta.path.clone(),
         part => delta.part_path(part),
@@ -92,13 +95,14 @@ pub fn review_draft(
     root: &Path,
     delta: &Doc,
     prompt: &str,
+    plan_prompt: &str,
     config: &runner::Config,
 ) -> Result<Outcome, String> {
     let env = [("LEMMA_DELTA", delta.id.as_str())];
     let result = runner::run(&config.reviewer, prompt, root, &env, config.timeout)?;
     let findings = parse_findings(runner::json_reply(&result)?)?;
     if findings.is_empty() {
-        return Ok(Outcome::Clean);
+        return clean(root, delta, plan_prompt, config);
     }
     let (drafts, added) = apply(root, delta, &findings)?;
     for draft in drafts.iter().filter(|d| d.current != d.original) {
@@ -107,4 +111,20 @@ pub fn review_draft(
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }
     Ok(Outcome::Written(added))
+}
+
+fn clean(
+    root: &Path,
+    delta: &Doc,
+    plan_prompt: &str,
+    config: &runner::Config,
+) -> Result<Outcome, String> {
+    let remaining: usize = PARTS
+        .iter()
+        .map(|part| review_lines(delta.part_text(part)).len())
+        .sum();
+    if remaining > 0 {
+        return Ok(Outcome::Remaining(remaining));
+    }
+    plan::plan(root, delta, plan_prompt, config).map(Outcome::Planned)
 }

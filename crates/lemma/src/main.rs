@@ -5,6 +5,7 @@ mod evidence;
 mod git;
 mod lint;
 mod payload;
+mod plan;
 mod project;
 mod prompts;
 mod range;
@@ -247,7 +248,7 @@ fn print_prompt(
     }
 }
 
-fn review_draft_command(start: &Startup, prompt: &str) -> ExitCode {
+fn review_draft_command(start: &Startup, prompt: &str, plan_prompt: &str) -> ExitCode {
     let Startup {
         root,
         delta,
@@ -255,8 +256,13 @@ fn review_draft_command(start: &Startup, prompt: &str) -> ExitCode {
         ..
     } = start;
     println!("{} is draft: reviewing the document", delta.id);
-    match review::review_draft(root, delta, prompt, config) {
-        Ok(review::Outcome::Clean) => println!("review clean"),
+    match review::review_draft(root, delta, prompt, plan_prompt, config) {
+        Ok(review::Outcome::Remaining(n)) => {
+            println!("review clean; {n} review lines remain, resolve them and run again")
+        }
+        Ok(review::Outcome::Planned(report)) => {
+            report.lines().iter().for_each(|line| println!("{line}"))
+        }
         Ok(review::Outcome::Written(1)) => println!("1 review line written"),
         Ok(review::Outcome::Written(n)) => println!("{n} review lines written"),
         Err(message) => return fail(message),
@@ -275,9 +281,12 @@ fn review_command(id: &str, dry_run: bool) -> ExitCode {
     let mut values = context::assemble(store, root, delta);
     match (delta.status.as_str(), dry_run) {
         ("draft", true) => print_prompt(prompts::Prompt::ReviewDoc, root, &values),
-        ("draft", false) => match rendered_prompt(prompts::Prompt::ReviewDoc, root, &values) {
-            Ok(prompt) => review_draft_command(&start, &prompt),
-            Err(message) => fail(message),
+        ("draft", false) => match (
+            rendered_prompt(prompts::Prompt::ReviewDoc, root, &values),
+            rendered_prompt(prompts::Prompt::Plan, root, &values),
+        ) {
+            (Ok(prompt), Ok(plan_prompt)) => review_draft_command(&start, &prompt, &plan_prompt),
+            (Err(message), _) | (_, Err(message)) => fail(message),
         },
         ("in-progress", false) => fail("review is not implemented yet"),
         ("in-progress", true) => {

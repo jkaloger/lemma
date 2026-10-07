@@ -18,7 +18,7 @@ pub fn annotate(part: &str, file: &str, anchor: &str, text: &str) -> Option<Stri
     ))
 }
 
-fn frontmatter_len(file: &str) -> usize {
+pub fn frontmatter_len(file: &str) -> usize {
     if !file.starts_with("---\n") {
         return 0;
     }

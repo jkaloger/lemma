@@ -200,8 +200,9 @@ fn a_reply_without_findings_is_an_error() {
 }
 
 #[test]
-fn zero_findings_reports_clean_and_changes_nothing() {
+fn zero_findings_with_review_lines_left_reports_clean_and_changes_nothing() {
     let repo = project();
+    repo.delta_claims(1, &format!("{CLAIMS}  @review Still open?\n"));
     reply_with(&repo, json!({"findings": []}));
     let before = snapshot(&repo);
 
@@ -210,7 +211,7 @@ fn zero_findings_reports_clean_and_changes_nothing() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         run.stdout,
-        "DELTA-001 is draft: reviewing the document\nreview clean\n"
+        "DELTA-001 is draft: reviewing the document\nreview clean; 1 review lines remain, resolve them and run again\n"
     );
     assert_eq!(snapshot(&repo), before);
 }
