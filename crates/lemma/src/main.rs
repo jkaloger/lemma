@@ -1,11 +1,16 @@
 mod claims;
+mod context;
 mod evidence;
 mod git;
 mod lint;
 mod payload;
 mod project;
+mod prompts;
 mod range;
 mod refs;
+// the real runs of review and build, a later work item, are its callers
+#[allow(dead_code)]
+mod runner;
 mod session;
 mod shape;
 mod signal;
@@ -55,6 +60,23 @@ enum Command {
         /// Read a lazyspec payload on stdin, print findings JSON, exit 0
         #[arg(long)]
         hook: bool,
+    },
+    /// Review a delta: prose while draft, the diff while in progress
+    Review {
+        delta: String,
+        /// Print the assembled prompt and exit
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Build an in-progress delta task by task
+    Build {
+        delta: String,
+        /// Run only this task, as T<n>
+        #[arg(long)]
+        task: Option<String>,
+        /// Print the assembled prompt and exit
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List the refs of a claim and whether each resolves
     Refs { claim: String },
@@ -176,6 +198,91 @@ fn refs_command(claim: &str) -> ExitCode {
     }
 }
 
+struct Startup {
+    root: PathBuf,
+    store: Store,
+    delta: payload::Doc,
+}
+
+fn startup(id: &str) -> Result<Startup, String> {
+    let (root, store) = cli_store()?;
+    let delta = world::World::load(&store, None)
+        .docs()
+        .iter()
+        .find(|d| d.doc_type == "delta" && d.is_named(id))
+        .cloned()
+        .ok_or(format!("unknown delta {id}"))?;
+    prompts::Prompt::ALL
+        .into_iter()
+        .try_for_each(|prompt| prompts::load(&root, prompt).map(drop))?;
+    runner::load(&root)?;
+    Ok(Startup { root, store, delta })
+}
+
+fn print_prompt(
+    prompt: prompts::Prompt,
+    root: &Path,
+    values: &std::collections::BTreeMap<&str, String>,
+) -> ExitCode {
+    match prompts::load(root, prompt) {
+        Ok(template) => {
+            println!("{}", prompts::render(&template, values));
+            ExitCode::SUCCESS
+        }
+        Err(message) => fail(message),
+    }
+}
+
+fn review_command(id: &str, dry_run: bool) -> ExitCode {
+    let start = match startup(id) {
+        Ok(start) => start,
+        Err(message) => return fail(message),
+    };
+    if !dry_run {
+        return fail("review is not implemented yet");
+    }
+    let Startup { root, store, delta } = start;
+    let mut values = context::assemble(&store, &root, &delta);
+    match delta.status.as_str() {
+        "draft" => print_prompt(prompts::Prompt::ReviewDoc, &root, &values),
+        "in-progress" => {
+            let world = world::World::load(&store, None);
+            let base = context::diff_base(&root, &delta);
+            values.insert("diff", context::diff(&root, &base, &world, &delta));
+            print_prompt(prompts::Prompt::ReviewDiff, &root, &values)
+        }
+        _ => fail("review needs a draft or in-progress delta"),
+    }
+}
+
+fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
+    let start = match startup(id) {
+        Ok(start) => start,
+        Err(message) => return fail(message),
+    };
+    if !dry_run {
+        return fail("build is not implemented yet");
+    }
+    let Startup { root, store, delta } = start;
+    let parsed = tasks::parse(delta.part_body(payload::TASKS_PART));
+    let chosen = match task {
+        Some(name) => match parsed.named(name) {
+            Some(task) => task,
+            None => return fail(format!("unknown task {name}")),
+        },
+        None => match parsed.first_unticked() {
+            Some(task) => task,
+            None => {
+                println!("all tasks complete");
+                return ExitCode::SUCCESS;
+            }
+        },
+    };
+    let mut values = context::assemble(&store, &root, &delta);
+    values.insert("task", context::task_text(&delta, chosen));
+    print_prompt(prompts::Prompt::Build, &root, &values)
+}
+
 fn stop_command() -> ExitCode {
     let input: StopInput = serde_json::from_str(&read_stdin()).unwrap_or_default();
     if input.stop_hook_active {
@@ -234,6 +341,12 @@ fn main() -> ExitCode {
             json,
             hook,
         } => lint_command(delta, base, trunk, gate, json, hook),
+        Command::Review { delta, dry_run } => review_command(&delta, dry_run),
+        Command::Build {
+            delta,
+            task,
+            dry_run,
+        } => build_command(&delta, task.as_deref(), dry_run),
         Command::Refs { claim } => refs_command(&claim),
         Command::Stop => stop_command(),
         Command::SessionStart => session_start_command(),

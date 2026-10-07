@@ -32,6 +32,17 @@ impl Tasks {
     pub fn main(&self) -> impl Iterator<Item = &Task> {
         self.tasks.iter().filter(|t| !t.follow_up)
     }
+
+    pub fn first_unticked(&self) -> Option<&Task> {
+        let unticked = |t: &&Task| !t.ticked;
+        self.main()
+            .find(unticked)
+            .or_else(|| self.tasks.iter().filter(|t| t.follow_up).find(unticked))
+    }
+
+    pub fn named(&self, id: &str) -> Option<&Task> {
+        self.tasks.iter().find(|t| t.id == id)
+    }
 }
 
 fn checkbox() -> &'static Regex {

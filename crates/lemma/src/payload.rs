@@ -43,6 +43,8 @@ pub struct Attributes {
 pub struct Doc {
     pub id: String,
     #[serde(default)]
+    pub title: String,
+    #[serde(default)]
     pub path: String,
     #[serde(rename = "type", default)]
     pub doc_type: String,

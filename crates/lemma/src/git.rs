@@ -33,3 +33,9 @@ pub fn changed_since(root: &Path, rev: &str) -> Vec<String> {
     let all: BTreeSet<String> = tracked.into_iter().chain(untracked_files(root)).collect();
     all.into_iter().collect()
 }
+
+pub fn repo_files(root: &Path) -> Vec<String> {
+    let tracked = nul_separated(root, &["ls-files", "-z"]);
+    let all: BTreeSet<String> = tracked.into_iter().chain(untracked_files(root)).collect();
+    all.into_iter().collect()
+}

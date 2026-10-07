@@ -368,3 +368,13 @@ impl Repo {
         self.write(DICTUM_PATH, &content);
     }
 }
+
+impl Repo {
+    pub fn named_dictum_file(&self, n: u32, governs: &[&str], body: &str) {
+        let globs = quote_all(governs);
+        let content = format!(
+            "---\ntitle: \"Dictum {n}\"\ntype: dictum\nstatus: accepted\nauthor: \"t\"\ndate: 2026-01-01\ntags: []\ngoverns: [{globs}]\n---\n\n{body}"
+        );
+        self.write(&format!("docs/convention/DICTUM-00{n}-d.md"), &content);
+    }
+}

@@ -2,6 +2,7 @@ use crate::claims::{parse, Claim};
 use crate::evidence::{clean, glob_set, invalid_globs, resolve, RefStatus, Regions};
 use crate::git::{changed_since, git_output};
 use crate::payload::{Doc, Finding as Wire, Payload, CLAIMS_PART};
+use crate::prompts::{self, Prompt};
 use crate::range::{self, Inputs, Rule};
 use crate::shape::{self, Gate};
 use crate::world::{in_flight, Site, World};
@@ -101,6 +102,14 @@ impl Finding {
     pub fn in_part(mut self, part: &str) -> Self {
         self.part = Some(part.to_string()).filter(|p| !p.is_empty());
         self
+    }
+
+    pub fn at(path: impl Into<String>, line: usize, message: impl Into<String>) -> Self {
+        Self {
+            path: Some(path.into()),
+            line: Some(line),
+            ..Self::bare_error(message)
+        }
     }
 
     pub fn bare_error(message: impl Into<String>) -> Self {
@@ -207,6 +216,9 @@ pub fn run_with(
             vec![Finding::bare_error(message)]
         }
     };
+    if full && (payload.is_none() || is_validate(payload)) {
+        findings.extend(prompt_findings(root));
+    }
     for doc in &scope {
         if full {
             findings.extend(integrity_findings(root, &world, doc, options.gate));
@@ -216,6 +228,20 @@ pub fn run_with(
     findings.sort();
     findings.dedup();
     findings
+}
+
+fn prompt_findings(root: &Path) -> Vec<Finding> {
+    Prompt::ALL
+        .into_iter()
+        .filter_map(|prompt| Some((prompt, prompts::pack_text(root, prompt)?)))
+        .flat_map(|(prompt, text)| {
+            prompts::unknown_keys(&text)
+                .into_iter()
+                .map(move |(line, key)| {
+                    Finding::at(prompt.pack_path(), line, prompts::unknown_key_message(&key))
+                })
+        })
+        .collect()
 }
 
 fn range_findings(
