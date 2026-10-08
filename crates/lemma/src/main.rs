@@ -254,7 +254,7 @@ fn print_prompt(
 }
 
 fn next(step: impl std::fmt::Display) {
-    println!("next: {step}");
+    println!("{} {step}", console::style("next:").dim());
 }
 
 fn lines_remain(n: usize) -> String {

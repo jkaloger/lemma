@@ -2052,7 +2052,10 @@ version = "3.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "console",
+ "dialoguer",
  "globset",
+ "indicatif",
  "lazyspec",
  "regex",
  "serde",
@@ -2061,6 +2064,7 @@ dependencies = [
  "toml",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "uuid",
 ]
 
 [[package]]

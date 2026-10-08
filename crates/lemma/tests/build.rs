@@ -425,3 +425,44 @@ fn a_ref_to_a_claim_the_task_does_not_settle_stops() {
     );
     assert_eq!(repo.read(CLAIMS_PATH), BARE);
 }
+
+#[test]
+fn a_runner_with_session_prints_the_watch_line_before_the_report() {
+    let repo = project("in-progress", TWO_TASKS);
+    two_task_fixtures(&repo);
+    let script = repo.path("fake-runner.sh");
+    repo.write(
+        "lemma.toml",
+        &format!("runner = \"{} {{session}}\"\n", script.display()),
+    );
+    repo.commit("session runner");
+
+    let run = build(&repo, &["--task", "T1"]);
+
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(lines[0], "T1 reopen (settles AC-1)");
+    let watch = lines[1];
+    assert!(
+        watch.starts_with("   watch: tail -f ~/.claude/projects/*/")
+            && watch.contains(".jsonl | jq -r '"),
+        "{}",
+        run.stdout
+    );
+    let session = watch
+        .split("projects/*/")
+        .nth(1)
+        .and_then(|rest| rest.split(".jsonl").next())
+        .unwrap();
+    assert_eq!(session.len(), 36, "{session}");
+    assert!(lines[2].starts_with("   runner: "), "{}", run.stdout);
+}
+
+#[test]
+fn a_runner_without_session_prints_no_watch_line() {
+    let repo = project("in-progress", TWO_TASKS);
+    two_task_fixtures(&repo);
+
+    let run = build(&repo, &["--task", "T1"]);
+
+    assert!(!run.stdout.contains("watch:"), "{}", run.stdout);
+}

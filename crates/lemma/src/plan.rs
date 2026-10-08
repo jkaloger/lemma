@@ -426,7 +426,8 @@ fn ask_planner(
     let known_ids: Vec<String> = tagged.known.iter().map(|(id, _)| id.clone()).collect();
     let env = [("LEMMA_DELTA", delta.id.as_str())];
     let schema = schema::plan(&known_ids);
-    let reply = runner::run(
+    let reply = runner::tracked(
+        "plan",
         &config.reviewer,
         &prompt,
         root,

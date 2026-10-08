@@ -159,7 +159,8 @@ fn runner_reply(
     let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
     let schema = schema::build(task);
     let started = std::time::Instant::now();
-    let reply = runner::run(
+    let reply = runner::tracked(
+        &format!("{} runner", task.id),
         &config.runner,
         prompt,
         root,
@@ -208,7 +209,7 @@ fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {
     let findings = lint::run(&store, root, &options, None);
     let mut errors = findings.iter().filter(|f| f.is_error()).map(|f| f.render());
     let Some(first) = errors.next() else {
-        println!("   lint: clean");
+        println!("{}", console::style("   lint: clean").green());
         return Ok(());
     };
     let rest = errors.map(|line| format!("{LINT_CONTINUATION}{line}"));
@@ -304,7 +305,11 @@ fn commit(root: &Path, delta: &Doc, task: &Task) -> Result<(), Failure> {
     git_run(root, &["add", "-A"]).map_err(failed)?;
     git_run(root, &["commit", "-q", "-m", &message]).map_err(failed)?;
     let sha = git_output(root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
-    println!("   commit {} {message}", sha.trim());
+    println!(
+        "   {} {} {message}",
+        console::style("commit").green(),
+        sha.trim()
+    );
     Ok(())
 }
 
@@ -315,7 +320,7 @@ fn build_task(
     task: &Task,
     config: &runner::Config,
 ) -> Result<(), Failure> {
-    println!("{}", heading(task));
+    println!("{}", console::style(heading(task)).bold());
     run_runner(root, store, delta, task, config)?;
     check_lint(root, &delta.id)?;
     check_settled(root, &delta.id, task)?;
@@ -324,13 +329,17 @@ fn build_task(
 }
 
 fn report(failure: &Failure, task: &Task) {
-    failure.detail.iter().for_each(|line| println!("{line}"));
+    let red = |line: &str| println!("{}", console::style(line).red());
+    failure.detail.iter().for_each(|line| red(line));
     match failure.ticked {
-        true => println!(
+        true => red(&format!(
             "   stopped. {} ticked but not committed; working tree kept.",
             task.id
-        ),
-        false => println!("   stopped. {} left unticked; working tree kept.", task.id),
+        )),
+        false => red(&format!(
+            "   stopped. {} left unticked; working tree kept.",
+            task.id
+        )),
     }
 }
 

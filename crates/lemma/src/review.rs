@@ -110,7 +110,8 @@ pub fn review_draft(
 ) -> Result<Outcome, String> {
     let env = [("LEMMA_DELTA", delta.id.as_str())];
     let schema = schema::review_doc(root, delta);
-    let reply = runner::run(
+    let reply = runner::tracked(
+        "review",
         &config.reviewer,
         prompt,
         root,
@@ -165,7 +166,8 @@ pub fn review_diff(
 ) -> Result<usize, String> {
     let env = [("LEMMA_DELTA", delta.id.as_str())];
     let schema = schema::review_diff(&plan::read(root, delta, CLAIMS_PART));
-    let reply = runner::run(
+    let reply = runner::tracked(
+        "review",
         &config.reviewer,
         prompt,
         root,

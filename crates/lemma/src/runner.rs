@@ -6,10 +6,13 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const DEFAULT_RUNNER: &str = "claude -p --output-format json --json-schema {schema}";
+const DEFAULT_RUNNER: &str =
+    "claude -p --session-id {session} --output-format json --json-schema {schema}";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;
 const SCHEMA: &str = "{schema}";
 const SCHEMA_FILE: &str = "{schema_file}";
+const SESSION: &str = "{session}";
+const WATCH_FILTER: &str = r#"select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | "\(.name) \(.input | tostring | .[0:100])""#;
 const STDERR_TAIL_LINES: usize = 5;
 const POLL: Duration = Duration::from_millis(20);
 
@@ -151,6 +154,50 @@ fn with_schema(words: Vec<String>, schema: Option<&Value>) -> Result<Argv, Strin
         words,
         _schema_file: schema_file,
     })
+}
+
+pub fn watch_line(session: &str) -> String {
+    format!("   watch: tail -f ~/.claude/projects/*/{session}.jsonl | jq -r '{WATCH_FILTER}'")
+}
+
+fn with_session(command: &str) -> (String, Option<String>) {
+    if !command.contains(SESSION) {
+        return (command.to_string(), None);
+    }
+    let session = uuid::Uuid::new_v4().to_string();
+    (command.replace(SESSION, &session), Some(session))
+}
+
+fn spinner(label: &str) -> indicatif::ProgressBar {
+    let bar =
+        indicatif::ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
+    bar.set_style(
+        indicatif::ProgressStyle::with_template("{spinner} {msg} {elapsed}")
+            .expect("the spinner template is valid"),
+    );
+    bar.set_message(label.to_string());
+    bar.enable_steady_tick(Duration::from_millis(100));
+    bar
+}
+
+/// `run` with `{session}` filled in, the watch line printed, and a spinner on stderr while it waits.
+pub fn tracked(
+    label: &str,
+    command: &str,
+    prompt: &str,
+    root: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    schema: Option<&Value>,
+) -> Result<Reply, String> {
+    let (command, session) = with_session(command);
+    if let Some(session) = session {
+        println!("{}", watch_line(&session));
+    }
+    let bar = spinner(label);
+    let reply = run(&command, prompt, root, env, timeout, schema);
+    bar.finish_and_clear();
+    reply
 }
 
 pub fn run(
@@ -499,6 +546,46 @@ printf '{"result": "ok", "usage": {}}'"#,
     }
 
     #[test]
+    fn session_is_replaced_with_a_fresh_uuid_per_call() {
+        let command = "claude --session-id {session} -p";
+
+        let (first, one) = with_session(command);
+        let (second, two) = with_session(command);
+
+        let (one, two) = (one.unwrap(), two.unwrap());
+        assert_eq!(first, format!("claude --session-id {one} -p"));
+        assert_ne!(one, two);
+        assert!(uuid::Uuid::parse_str(&one).is_ok(), "{one}");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_command_without_session_has_no_session() {
+        let (command, session) = with_session("claude -p");
+
+        assert_eq!(command, "claude -p");
+        assert!(session.is_none());
+    }
+
+    #[test]
+    fn tracked_hands_the_runner_the_session_it_announced() {
+        let (root, command) = root_with_script(r#"cat >/dev/null; printf '{"result": "%s"}' "$1""#);
+
+        let reply = tracked(
+            "label",
+            &format!("{command} {{session}}"),
+            "",
+            root.path(),
+            &[],
+            LONG,
+            None,
+        )
+        .unwrap();
+
+        assert!(uuid::Uuid::parse_str(&reply.text).is_ok(), "{}", reply.text);
+    }
+
+    #[test]
     fn config_defaults_when_there_is_no_lemma_toml() {
         let root = tempfile::tempdir().unwrap();
 
@@ -506,7 +593,7 @@ printf '{"result": "ok", "usage": {}}'"#,
 
         assert_eq!(
             config.runner,
-            "claude -p --output-format json --json-schema {schema}"
+            "claude -p --session-id {session} --output-format json --json-schema {schema}"
         );
         assert_eq!(config.reviewer, config.runner);
         assert_eq!(config.timeout, Duration::from_secs(1800));
