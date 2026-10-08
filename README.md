@@ -89,10 +89,10 @@ A **review line** is an annotation an agent writes and a human deletes to resolv
 
 1. A human creates the delta, writes `Intent`, `Out of scope`, design prose and claims as plain bullets, and links the specs it changes.
 2. `lemma review <delta>` on a `draft` delta runs the reviewer. Findings are written as review lines. The human edits the delta, deletes each review line it resolves and runs `lemma review` again. Review never plans; the human decides when review is done.
-3. `lemma plan <delta>` plans a `draft` delta with no review lines left: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and runs `lazyspec advance`.
+3. `lemma plan <delta>` plans a `draft` delta with no review lines left: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and moves the delta on with `lazyspec update <id> --status in-progress`, or lets `lemma build` offer the move.
 4. `lemma build <delta>` runs each unticked task in a fresh runner and commits it.
 5. `lemma review <delta>` on an `in-progress` delta reviews the diff and writes follow-up tasks. The human deletes those it rejects; `lemma build` runs the rest.
-6. `lazyspec advance` moves the delta to `complete`.
+6. `lazyspec update <id> --status complete` moves the delta to `complete`.
 
 ```
 $ lemma review DELTA-004
@@ -110,10 +110,10 @@ review clean, planning
 claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
 tasks.md: 3 tasks written
 index.md: frontmatter and headings tidied
-next: read the diff, accept or reject each [proposed] claim, then lazyspec advance DELTA-004
+next: read the diff, accept or reject each [proposed] claim, then lazyspec update DELTA-004 --status in-progress
 ```
 
-The human types four commands: `lemma review`, `lemma plan`, `lemma build` and `lazyspec advance`. Every lemma command that does work ends with a `next:` line naming the next step; errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none.
+The human types four commands: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`. Every lemma command that does work ends with a `next:` line naming the next step; errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none.
 
 ## Commands
 

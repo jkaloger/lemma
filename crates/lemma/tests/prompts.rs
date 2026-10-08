@@ -140,7 +140,7 @@ fn build_dry_run_with_every_task_ticked_says_all_complete() {
         (run.code, run.stdout.as_str()),
         (
             0,
-            "all tasks complete\nnext: lemma review DELTA-001 to review the diff, or lazyspec advance DELTA-001 to complete\n"
+            "all tasks complete\nnext: lemma review DELTA-001 to review the diff, or lazyspec update DELTA-001 --status complete\n"
         )
     );
 }

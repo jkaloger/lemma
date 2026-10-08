@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 
 const NEXT: &str =
-    "next: lemma review DELTA-001 to review the diff, or lazyspec advance DELTA-001 to complete\n";
+    "next: lemma review DELTA-001 to review the diff, or lazyspec update DELTA-001 --status complete\n";
 
 const CLAIMS_PATH: &str = "docs/deltas/DELTA-001-d/claims.md";
 const BARE: &str = "- [AC-1] Reopen keeps the prior answer.\n- [AC-2] Writes are atomic.\n";
@@ -290,6 +290,9 @@ fn a_delta_that_is_not_in_progress_is_refused() {
     assert!(run
         .stderr
         .contains("lemma: build needs an in-progress delta; DELTA-001 is draft"));
+    assert!(run
+        .stderr
+        .contains("`lazyspec update DELTA-001 --status in-progress`"));
 }
 
 #[test]

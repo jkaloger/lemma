@@ -150,7 +150,7 @@ fn the_count_is_reported_and_a_rerun_writes_nothing() {
     assert!(second.stdout.contains("0 follow-up tasks written\n"));
     assert!(second
         .stdout
-        .ends_with("next: lazyspec advance DELTA-001 to complete\n"));
+        .ends_with("next: lazyspec update DELTA-001 --status complete\n"));
     assert_eq!(tasks(&repo), written);
 }
 

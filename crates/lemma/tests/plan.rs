@@ -73,7 +73,7 @@ fn tasks_of(repo: &Repo) -> String {
     repo.read(&delta_part_path(1, "tasks"))
 }
 
-const NEXT: &str = "next: read the diff, accept or reject each [proposed] claim, then lazyspec advance DELTA-001\n";
+const NEXT: &str = "next: read the diff, accept or reject each [proposed] claim, then lazyspec update DELTA-001 --status in-progress\n";
 
 #[test]
 fn ids_are_assigned_in_document_order_continuing_from_the_highest() {

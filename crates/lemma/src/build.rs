@@ -283,7 +283,7 @@ fn tick(root: &Path, delta: &Doc, task: &Task) -> Result<(), Failure> {
         .map_err(|e| unticked(vec![format!("   cannot write {}: {e}", path.display())]))
 }
 
-fn git_run(root: &Path, args: &[&str]) -> Result<(), String> {
+pub(crate) fn git_run(root: &Path, args: &[&str]) -> Result<(), String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -343,19 +343,24 @@ fn report(failure: &Failure, task: &Task) {
     }
 }
 
+pub(crate) fn require_clean(root: &Path) -> Result<(), String> {
+    match git_output(root, &["status", "--porcelain"])
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
+        true => Ok(()),
+        false => Err("build needs a clean working tree; commit or stash first".to_string()),
+    }
+}
+
 pub fn run(
     root: &Path,
     id: &str,
     only: Option<&str>,
     config: &runner::Config,
 ) -> Result<Outcome, String> {
-    if !git_output(root, &["status", "--porcelain"])
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        return Err("build needs a clean working tree; commit or stash first".to_string());
-    }
+    require_clean(root)?;
     let (_, delta) = load_delta(root, id)?;
     let parsed = tasks::parse(delta.part_body(TASKS_PART));
     if let Some(name) = only {

@@ -1,3 +1,4 @@
+mod advance;
 mod annotate;
 mod build;
 mod claims;
@@ -323,7 +324,7 @@ fn review_diff_command(
                 n => println!("{n} follow-up tasks written"),
             }
             match n {
-                0 => next(format!("lazyspec advance {} to complete", delta.id)),
+                0 => next(advance::update_command(&delta.id, "complete")),
                 _ => next(format!(
                     "delete the follow-ups you reject, then lemma build {}",
                     delta.id
@@ -401,8 +402,8 @@ fn plan_command(id: &str, dry_run: bool) -> ExitCode {
         Ok(report) => {
             report.lines().iter().for_each(|line| println!("{line}"));
             next(format!(
-                "read the diff, accept or reject each [proposed] claim, then lazyspec advance {}",
-                delta.id
+                "read the diff, accept or reject each [proposed] claim, then {}",
+                advance::update_command(&delta.id, "in-progress")
             ));
             ExitCode::SUCCESS
         }
@@ -412,7 +413,8 @@ fn plan_command(id: &str, dry_run: bool) -> ExitCode {
 
 fn next_after_build(id: &str) {
     next(format!(
-        "lemma review {id} to review the diff, or lazyspec advance {id} to complete"
+        "lemma review {id} to review the diff, or {}",
+        advance::update_command(id, "complete")
     ));
 }
 
@@ -421,13 +423,19 @@ fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
         Ok(start) => start,
         Err(message) => return fail(message),
     };
-    if start.delta.status != "in-progress" {
+    if start.delta.status != "in-progress" && (dry_run || start.delta.status != "draft") {
         return fail(format!(
             "build needs an in-progress delta; {} is {}",
             start.delta.id, start.delta.status
         ));
     }
     if !dry_run {
+        if start.delta.status == "draft" {
+            if let Err(message) = advance::offer(&start.root, &start.delta.id, &start.delta.status)
+            {
+                return fail(message);
+            }
+        }
         return match build::run(&start.root, &start.delta.id, task, &start.config) {
             Ok(build::Outcome::Complete) => {
                 next_after_build(&start.delta.id);

@@ -31,7 +31,7 @@ runner   = "claude -p --output-format json --permission-mode acceptEdits"
 reviewer = "claude -p --output-format json --model opus"
 ```
 
-Agents never type `lemma`. The lazyspec transition hooks call `lemma lint`; the Claude Code hooks call `lemma signal` and `lemma stop`. The human types four: `lemma review`, `lemma plan`, `lemma build` and `lazyspec advance`. Each lemma command ends with a `next:` line naming the next step.
+Agents never type `lemma`. The lazyspec transition hooks call `lemma lint`; the Claude Code hooks call `lemma signal` and `lemma stop`. The human types four: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`. Each lemma command ends with a `next:` line naming the next step.
 
 ## Workflow
 
@@ -79,7 +79,7 @@ review clean, planning
 claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
 tasks.md: 3 tasks written
 index.md: frontmatter and headings tidied
-next: read the diff, accept or reject each [proposed] claim, then lazyspec advance DELTA-004
+next: read the diff, accept or reject each [proposed] claim, then lazyspec update DELTA-004 --status in-progress
 ```
 
 Plan refuses while any review line remains. Plan gives each bullet an id. A behaviour the planner thinks is missing is added as `[proposed]`; delete the tag to accept it or the line to reject it. Tasks you wrote by hand are kept; plan only appends. Read the diff in git before advancing. Plan refuses to run once any task is ticked.
@@ -87,7 +87,7 @@ Plan refuses while any review line remains. Plan gives each bullet an id. A beha
 ### 3. Start
 
 ```
-$ lazyspec advance DELTA-004
+$ lazyspec update DELTA-004 --status in-progress
 lemma lint --gate in-progress: intent present, 4 claims, 3 tasks, every claim settled, no review lines, no [proposed]
 DELTA-004 draft → in-progress
 ```
@@ -117,7 +117,7 @@ T2 balance endpoint (settles AC-2, AC-3)   resuming
 T3 wire into router (chore)
    commit c42d7f0 DELTA-004 T3: wire into router
 all tasks complete
-next: lemma review DELTA-004 to review the diff, or lazyspec advance DELTA-004 to complete
+next: lemma review DELTA-004 to review the diff, or lazyspec update DELTA-004 --status complete
 ```
 
 ### 5. Review the change
@@ -142,7 +142,7 @@ Delete the ones you disagree with. `lemma build DELTA-004` runs the rest.
 ### 6. Complete
 
 ```
-$ lazyspec advance DELTA-004
+$ lazyspec update DELTA-004 --status complete
 lemma lint --gate complete: 5 tasks ticked, 4 claims, 3 refs resolve, 1 [intent], no review lines
 DELTA-004 in-progress → complete
 ```
