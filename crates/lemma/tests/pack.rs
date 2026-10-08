@@ -165,5 +165,5 @@ fn the_plugin_ships_hooks_only() {
         &std::fs::read_to_string(plugin.join(".claude-plugin/plugin.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(manifest["version"], "3.0.0");
+    assert_eq!(manifest["version"], "3.1.0");
 }

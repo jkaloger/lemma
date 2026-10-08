@@ -343,6 +343,8 @@ fn report(failure: &Failure, task: &Task) {
     }
 }
 
+pub(crate) const DIRTY_TREE: &str = "build needs a clean working tree; commit or stash first";
+
 pub(crate) fn require_clean(root: &Path) -> Result<(), String> {
     match git_output(root, &["status", "--porcelain"])
         .unwrap_or_default()
@@ -350,7 +352,7 @@ pub(crate) fn require_clean(root: &Path) -> Result<(), String> {
         .is_empty()
     {
         true => Ok(()),
-        false => Err("build needs a clean working tree; commit or stash first".to_string()),
+        false => Err(DIRTY_TREE.to_string()),
     }
 }
 

@@ -446,15 +446,15 @@ fn a_runner_with_session_prints_the_watch_line_before_the_report() {
     assert_eq!(lines[0], "T1 reopen (settles AC-1)");
     let watch = lines[1];
     assert!(
-        watch.starts_with("   watch: tail -f ~/.claude/projects/*/")
-            && watch.contains(".jsonl | jq -r '"),
+        watch.starts_with("   watch: tail -n +1 -F \"$HOME/.claude/projects/-")
+            && watch.contains(".jsonl\" | jq -r '"),
         "{}",
         run.stdout
     );
     let session = watch
-        .split("projects/*/")
-        .nth(1)
-        .and_then(|rest| rest.split(".jsonl").next())
+        .split(".jsonl")
+        .next()
+        .and_then(|head| head.rsplit('/').next())
         .unwrap();
     assert_eq!(session.len(), 36, "{session}");
     assert!(lines[2].starts_with("   runner: "), "{}", run.stdout);

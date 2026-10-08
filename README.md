@@ -22,7 +22,7 @@ lemma session-start | lemma signal | lemma stop
 
 ## Description
 
-lemma has three parts, released together under one version number. This document describes 3.0.0.
+lemma has three parts, released together under one version number. This document describes 3.1.0.
 
 The **pack** is a `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies it into a project.
 
@@ -89,7 +89,7 @@ A **review line** is an annotation an agent writes and a human deletes to resolv
 
 1. A human creates the delta, writes `Intent`, `Out of scope`, design prose and claims as plain bullets, and links the specs it changes.
 2. `lemma review <delta>` on a `draft` delta runs the reviewer. Findings are written as review lines. The human edits the delta, deletes each review line it resolves and runs `lemma review` again. Review never plans; the human decides when review is done.
-3. `lemma plan <delta>` plans a `draft` delta with no review lines left: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and moves the delta on with `lazyspec update <id> --status in-progress`, or lets `lemma build` offer the move.
+3. `lemma plan <delta>` plans a `draft` delta with no review lines left: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and runs `lemma build`, which offers the move to `in-progress`.
 4. `lemma build <delta>` runs each unticked task in a fresh runner and commits it.
 5. `lemma review <delta>` on an `in-progress` delta reviews the diff and writes follow-up tasks. The human deletes those it rejects; `lemma build` runs the rest.
 6. `lazyspec update <id> --status complete` moves the delta to `complete`.
@@ -97,23 +97,26 @@ A **review line** is an annotation an agent writes and a human deletes to resolv
 ```
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 3 review lines written
 next: resolve each review line (edit, then delete the line) and run lemma review DELTA-004 again, or lemma plan DELTA-004 once none remain
 
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 review clean
 next: lemma plan DELTA-004
 
 $ lemma plan DELTA-004
 review clean, planning
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
 tasks.md: 3 tasks written
 index.md: frontmatter and headings tidied
-next: read the diff, accept or reject each [proposed] claim, then lazyspec update DELTA-004 --status in-progress
+next: read the diff, accept or reject each [proposed] claim, then lemma build DELTA-004
 ```
 
-The human types four commands: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`. Every lemma command that does work ends with a `next:` line naming the next step; errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none.
+The human types four commands: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`, the last only for `complete`. Every lemma command that does work ends with a `next:` line naming the next step; errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none.
 
 ## Commands
 
@@ -143,7 +146,9 @@ Every command that does work ends with a final stdout line `next: <step>`, using
 
 ### build
 
-`lemma build <delta>` refuses a delta that is not `in-progress` and a working tree with uncommitted or untracked changes. For each unticked task in order, main tasks before follow-ups:
+`lemma build <delta>` refuses a delta that is not `in-progress` or `draft`, and `--dry-run` refuses a `draft` one; each refusal names `lazyspec update <id> --status in-progress`. A `draft` delta is offered the move first: on a terminal, build asks `<id> is draft; move it to in-progress? [y/N]`. Off a terminal, or on no, build refuses without moving it.
+
+Before asking, build refuses any uncommitted or untracked path outside the delta's own directory, which holds the plan output and the human's `[proposed]` edits, with `build needs a clean working tree; commit or stash first`. On yes, build lints the delta with `--gate in-progress`. Error findings print as `path:line: severity: message`, and build stops with `<id> stayed draft; fix the findings above and run lemma build <id> again`; `lazyspec` is not run, so this holds when it skips untrusted hooks. Otherwise build runs `lazyspec update <id> --status in-progress` with inherited stdio. A non-zero exit, or a status that is not `in-progress` afterwards, stops with the same `stayed draft` message. Build then commits the delta directory, and only it, as `<id>: in-progress`; a failed commit stops with `<id> moved to in-progress but not committed; commit it and run lemma build <id>`. An `in-progress` delta needs a clean working tree. For each unticked task in order, main tasks before follow-ups:
 
 1. The `build` prompt is rendered with the task and the claims it settles, and the runner runs with `LEMMA_DELTA` and `LEMMA_TASK` set. The reply is `{"outcome":"done"|"blocked","reason","refs":[{"claim","path","symbol"}]}`; `claim` is limited to the claims the task settles and a chore has no refs.
 2. If the runner changed `index.md`, `design.md`, `claims.md` or `tasks.md`, the task fails with `runner edited <path>; lemma writes delta parts`. If `outcome` is `blocked`, it fails with `runner blocked: <reason>`. A reply with no JSON is a failure.
@@ -157,6 +162,7 @@ Any failure prints the reason and `stopped. T<n> left unticked; working tree kep
 ```
 $ lemma build DELTA-004
 T1 add `Balance` type and the `SUM` query (settles AC-1)
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
    runner: 2m04s, 6 files
    lint: clean
    AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
@@ -224,18 +230,22 @@ The base is the revision the history and dictum checks diff against and that bou
 ### lemma.toml
 
 ```toml
-runner   = "claude -p --output-format json --json-schema {schema} --permission-mode acceptEdits"
-reviewer = "claude -p --output-format json --json-schema {schema} --model opus"
+runner   = "claude -p --session-id {session} --output-format json --json-schema {schema} --permission-mode acceptEdits"
+reviewer = "claude -p --session-id {session} --output-format json --json-schema {schema} --model opus"
 timeout  = 1800
 ```
 
 | Key        | Default                          | Effect                                    |
 | ---------- | -------------------------------- | ----------------------------------------- |
-| `runner`   | `claude -p --output-format json --json-schema {schema}` | Command `lemma build` runs per task |
+| `runner`   | `claude -p --session-id {session} --output-format json --json-schema {schema}` | Command `lemma build` runs per task |
 | `reviewer` | the `runner` value               | Command `lemma review` and `lemma plan` run |
 | `timeout`  | `1800`                           | Seconds before a run is killed             |
 
 An unknown key is an error. A command is split into words on whitespace, with single and double quotes grouping; no shell is involved. The prompt is written to stdin and the working directory is the repository root. Every run passes a JSON Schema for its reply (draft-07, `additionalProperties: false`, all fields required), generated from the delta. In each word of the command, `{schema}` is replaced by the schema as compact JSON and `{schema_file}` by the path of a temporary file holding it, which exists for the run; a command naming either is an error when no schema is given. Stdout is parsed as JSON. A non-null `structured_output` is the reply, and `result` is then optional. Otherwise the reply is the first JSON object found in `result`, so a runner that does not validate against a schema still works. `"is_error": true`, a `subtype` other than `success`, or a non-zero exit is a failure; the message is `result`, else the `subtype`. Other fields are ignored.
+
+`{session}` in a runner or reviewer command is replaced, per call, by a fresh v4 UUID; a command without it runs as before, with no session and no watch line. The default passes it as `--session-id`, so Claude Code writes the run's transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` as it goes. Before each runner call (review, plan and every build task) lemma prints one stdout line, `   watch: tail -n +1 -F "$HOME/.claude/projects/<encoded root>/<uuid>.jsonl" | jq -r '<filter>'`, where the encoded root is the canonical repository root with every non-alphanumeric character replaced by `-`, and the filter prints one line per tool call: the tool name and the first 100 characters of its input. Run it in a second terminal. lemma does not read the transcript.
+
+While a runner call waits, a spinner with the label and elapsed time draws on stderr, only when stderr is a terminal; it clears when the call ends. Output is coloured only on a terminal: task headings are bold, `commit` and `lint: clean` green, `stopped` and errors red, and the `next:` label dim. `NO_COLOR` or output that is not a terminal turns colour off.
 
 ### Prompts
 

@@ -156,8 +156,19 @@ fn with_schema(words: Vec<String>, schema: Option<&Value>) -> Result<Argv, Strin
     })
 }
 
-pub fn watch_line(session: &str) -> String {
-    format!("   watch: tail -f ~/.claude/projects/*/{session}.jsonl | jq -r '{WATCH_FILTER}'")
+fn encoded_root(root: &Path) -> String {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    root.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+pub fn watch_line(root: &Path, session: &str) -> String {
+    let encoded = encoded_root(root);
+    format!(
+        "   watch: tail -n +1 -F \"$HOME/.claude/projects/{encoded}/{session}.jsonl\" | jq -r '{WATCH_FILTER}'"
+    )
 }
 
 fn with_session(command: &str) -> (String, Option<String>) {
@@ -180,8 +191,30 @@ fn spinner(label: &str) -> indicatif::ProgressBar {
     bar
 }
 
-/// `run` with `{session}` filled in, the watch line printed, and a spinner on stderr while it waits.
 pub fn tracked(
+    label: &str,
+    command: &str,
+    prompt: &str,
+    root: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    schema: Option<&Value>,
+) -> Result<Reply, String> {
+    tracked_to(
+        &mut std::io::stdout(),
+        label,
+        command,
+        prompt,
+        root,
+        env,
+        timeout,
+        schema,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tracked_to(
+    out: &mut impl Write,
     label: &str,
     command: &str,
     prompt: &str,
@@ -192,7 +225,7 @@ pub fn tracked(
 ) -> Result<Reply, String> {
     let (command, session) = with_session(command);
     if let Some(session) = session {
-        println!("{}", watch_line(&session));
+        let _ = writeln!(out, "{}", watch_line(root, &session));
     }
     let bar = spinner(label);
     let reply = run(&command, prompt, root, env, timeout, schema);
@@ -570,8 +603,10 @@ printf '{"result": "ok", "usage": {}}'"#,
     #[test]
     fn tracked_hands_the_runner_the_session_it_announced() {
         let (root, command) = root_with_script(r#"cat >/dev/null; printf '{"result": "%s"}' "$1""#);
+        let mut out = Vec::new();
 
-        let reply = tracked(
+        let reply = tracked_to(
+            &mut out,
             "label",
             &format!("{command} {{session}}"),
             "",
@@ -582,7 +617,42 @@ printf '{"result": "ok", "usage": {}}'"#,
         )
         .unwrap();
 
+        let printed = String::from_utf8(out).unwrap();
         assert!(uuid::Uuid::parse_str(&reply.text).is_ok(), "{}", reply.text);
+        assert!(
+            printed.contains(&format!("/{}.jsonl\"", reply.text)),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn the_encoded_root_replaces_every_non_alphanumeric_character() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("x.y_z");
+        std::fs::create_dir(&nested).unwrap();
+        let canonical = nested.canonicalize().unwrap();
+
+        let expected: String = canonical
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+
+        assert_eq!(encoded_root(&nested), expected);
+        assert!(encoded_root(&nested).ends_with("-x-y-z"));
+        assert_eq!(encoded_root(Path::new("/Users/a/x.y_z")), "-Users-a-x-y-z");
+    }
+
+    #[test]
+    fn the_watch_line_follows_the_session_file_under_the_encoded_root() {
+        let line = watch_line(Path::new("/Users/a/x.y_z"), "abc");
+
+        assert!(
+            line.starts_with(
+                "   watch: tail -n +1 -F \"$HOME/.claude/projects/-Users-a-x-y-z/abc.jsonl\" | jq -r '"
+            ),
+            "{line}"
+        );
     }
 
     #[test]

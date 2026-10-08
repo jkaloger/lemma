@@ -27,11 +27,13 @@ cargo install lemma
 `lemma.toml`:
 
 ```toml
-runner   = "claude -p --output-format json --permission-mode acceptEdits"
-reviewer = "claude -p --output-format json --model opus"
+runner   = "claude -p --session-id {session} --output-format json --json-schema {schema} --permission-mode acceptEdits"
+reviewer = "claude -p --session-id {session} --output-format json --json-schema {schema} --model opus"
 ```
 
-Agents never type `lemma`. The lazyspec transition hooks call `lemma lint`; the Claude Code hooks call `lemma signal` and `lemma stop`. The human types four: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`. Each lemma command ends with a `next:` line naming the next step.
+`{session}` becomes a fresh UUID per runner call, and lemma prints a `watch:` line for it before the call. Run that line in a second terminal to follow the agent's tool calls. While a call runs, a spinner shows on stderr when stderr is a terminal. Colour is on only on a terminal and off under `NO_COLOR`.
+
+Agents never type `lemma`. The lazyspec transition hooks call `lemma lint`; the Claude Code hooks call `lemma signal` and `lemma stop`. The human types four: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`, the last only for `complete`. Each lemma command ends with a `next:` line naming the next step.
 
 ## Workflow
 
@@ -49,6 +51,7 @@ Fill the human parts by hand: `Intent` and `Out of scope` in `index.md`, design 
 ```
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 3 review lines written
 next: resolve each review line (edit, then delete the line) and run lemma review DELTA-004 again, or lemma plan DELTA-004 once none remain
 ```
@@ -71,37 +74,47 @@ Edit, delete each line as you resolve it, run again. lemma remembers the finding
 ```
 $ lemma review DELTA-004
 DELTA-004 is draft: reviewing the document
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 review clean
 next: lemma plan DELTA-004
 
 $ lemma plan DELTA-004
 review clean, planning
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
 tasks.md: 3 tasks written
 index.md: frontmatter and headings tidied
-next: read the diff, accept or reject each [proposed] claim, then lazyspec update DELTA-004 --status in-progress
+next: read the diff, accept or reject each [proposed] claim, then lemma build DELTA-004
 ```
 
 Plan refuses while any review line remains. Plan gives each bullet an id. A behaviour the planner thinks is missing is added as `[proposed]`; delete the tag to accept it or the line to reject it. Tasks you wrote by hand are kept; plan only appends. Read the diff in git before advancing. Plan refuses to run once any task is ticked.
 
 ### 3. Start
 
+The plan output and your `[proposed]` edits sit in the delta directory and are committed with the move; build refuses uncommitted changes anywhere else. `lemma build` then offers the move:
+
 ```
-$ lazyspec update DELTA-004 --status in-progress
+$ lemma build DELTA-004
+DELTA-004 is draft; move it to in-progress? [y/N] y
 lemma lint --gate in-progress: intent present, 4 claims, 3 tasks, every claim settled, no review lines, no [proposed]
 DELTA-004 draft → in-progress
 ```
 
+The gate runs first. If it finds errors, they print and build stops with `DELTA-004 stayed draft; fix the findings above and run lemma build DELTA-004 again`. Otherwise `lazyspec update DELTA-004 --status in-progress` runs and lemma commits the delta directory as `DELTA-004: in-progress`. Off a terminal, or on `N`, build refuses and names `lazyspec update DELTA-004 --status in-progress`.
+
 ### 4. Build
 
+The same command continues into the tasks:
+
 ```
-$ lemma build DELTA-004
 T1 add Entry and Balance types (settles AC-1)
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
    runner: 2m04s, 6 files
    lint: clean
    AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
    commit 3f1c9a2 DELTA-004 T1: add Entry and Balance types
 T2 balance endpoint (settles AC-2, AC-3)
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
    runner: 3m31s, 4 files
    lint: AC-3 @ref tests/ledger.rs#balance_rejects_unknown_account does not resolve
    stopped. T2 left unticked; working tree kept.
@@ -125,6 +138,7 @@ next: lemma review DELTA-004 to review the diff, or lazyspec update DELTA-004 --
 ```
 $ lemma review DELTA-004
 DELTA-004 is in-progress: reviewing the diff against main
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
 2 follow-up tasks written
 next: delete the follow-ups you reject, then lemma build DELTA-004
 ```
