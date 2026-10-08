@@ -7,7 +7,7 @@ Report only what matters:
 - Behaviour the diff adds that no claim covers and the intent does not ask for.
 - A defect: wrong result, unhandled error, unbounded work, a race.
 
-Do not report style the formatter or linter owns, or preferences. Write each finding as one task sentence: what to change, where, and the rule it rests on. Name the claims the fix proves by id in `settles`; leave `settles` empty for a fix that proves none.
+Do not report style the formatter or linter owns, or preferences. Write each finding as a task title: an imperative of at most 10 words saying what changes, not how; the build agent reads the design and claims for the rest. Name the claims the fix proves by id in `settles`; leave `settles` empty for a fix that proves none.
 
 Reply with JSON only, no prose around it:
 

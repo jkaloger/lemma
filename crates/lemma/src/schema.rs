@@ -94,6 +94,12 @@ pub fn review_doc(root: &Path, delta: &Doc) -> Value {
     object(json!({"findings": array_of(json!({"anyOf": findings}))}))
 }
 
+const TASK_TEXT_MAX: usize = 80;
+
+fn task_text() -> Value {
+    json!({"type": "string", "maxLength": TASK_TEXT_MAX})
+}
+
 pub fn plan(known_ids: &[String]) -> Value {
     let by_position = json!({"type": "integer", "minimum": 1});
     let settle = match known_ids.is_empty() {
@@ -103,7 +109,7 @@ pub fn plan(known_ids: &[String]) -> Value {
     object(json!({
         "claims": array_of(object(json!({"text": {"type": "string"}}))),
         "tasks": array_of(object(json!({
-            "text": {"type": "string"},
+            "text": task_text(),
             "settles": array_of(settle),
         }))),
     }))
@@ -113,7 +119,7 @@ pub fn review_diff(claims_text: &str) -> Value {
     let settles = ids_array(&live_claim_ids(claims_text));
     object(json!({
         "findings": array_of(object(json!({
-            "text": {"type": "string"},
+            "text": task_text(),
             "settles": settles,
         }))),
     }))
@@ -217,6 +223,21 @@ mod tests {
         let settle = &schema["properties"]["tasks"]["items"]["properties"]["settles"]["items"];
         assert_eq!(settle["anyOf"][0]["enum"], json!(["AC-1"]));
         assert_eq!(settle["anyOf"][1]["type"], "integer");
+    }
+
+    #[test]
+    fn plan_and_review_diff_cap_task_text_at_80_characters() {
+        let planned = plan(&[]);
+        let reviewed = review_diff(CLAIMS);
+
+        assert_eq!(
+            planned["properties"]["tasks"]["items"]["properties"]["text"]["maxLength"],
+            80
+        );
+        assert_eq!(
+            reviewed["properties"]["findings"]["items"]["properties"]["text"]["maxLength"],
+            80
+        );
     }
 
     #[test]

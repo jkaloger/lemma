@@ -271,3 +271,19 @@ fn dictums_overlap_through_files_both_globs_match() {
     assert!(run.stdout.contains("DICTUM_A_BODY"));
     assert!(!run.stdout.contains("DICTUM_B_BODY"));
 }
+
+#[test]
+fn the_default_plan_and_review_diff_prompts_ask_for_short_task_titles() {
+    let repo = project();
+    delta(&repo, "draft");
+    let planned = repo.run(&["plan", "DELTA-001", "--dry-run"], "");
+    delta(&repo, "in-progress");
+    repo.commit("start");
+    let reviewed = repo.run(&["review", "DELTA-001", "--dry-run"], "");
+
+    for run in [planned, reviewed] {
+        assert_eq!(run.code, 0, "{}", run.stderr);
+        assert!(run.stdout.contains("at most 10 words"), "{}", run.stdout);
+        assert!(!run.stdout.contains("name the files"), "{}", run.stdout);
+    }
+}
