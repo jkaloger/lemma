@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const KEYS: [&str; 11] = [
+pub const KEYS: [&str; 13] = [
     "convention",
     "dictums",
     "spec_intent",
@@ -14,6 +14,8 @@ pub const KEYS: [&str; 11] = [
     "tasks",
     "task",
     "diff",
+    "task_diff",
+    "delta_diff",
     "resolved",
 ];
 
@@ -23,14 +25,16 @@ pub enum Prompt {
     Plan,
     ReviewDiff,
     Build,
+    ReviewTask,
 }
 
 impl Prompt {
-    pub const ALL: [Prompt; 4] = [
+    pub const ALL: [Prompt; 5] = [
         Prompt::ReviewDoc,
         Prompt::Plan,
         Prompt::ReviewDiff,
         Prompt::Build,
+        Prompt::ReviewTask,
     ];
 
     pub fn file_name(self) -> &'static str {
@@ -39,6 +43,7 @@ impl Prompt {
             Prompt::Plan => "plan.md",
             Prompt::ReviewDiff => "review-diff.md",
             Prompt::Build => "build.md",
+            Prompt::ReviewTask => "review-task.md",
         }
     }
 
@@ -52,6 +57,7 @@ impl Prompt {
             Prompt::Plan => include_str!("../../../.lazyspec/prompts/plan.md"),
             Prompt::ReviewDiff => include_str!("../../../.lazyspec/prompts/review-diff.md"),
             Prompt::Build => include_str!("../../../.lazyspec/prompts/build.md"),
+            Prompt::ReviewTask => include_str!("../../../.lazyspec/prompts/review-task.md"),
         }
     }
 }

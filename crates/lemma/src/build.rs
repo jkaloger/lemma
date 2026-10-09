@@ -1,5 +1,6 @@
 use crate::claims::{self, Claim};
 use crate::evidence::{self, RefStatus};
+use crate::gate;
 use crate::git::git_output;
 use crate::lint::{self, ref_name};
 use crate::payload::{Doc, CLAIMS_PART, TASKS_PART};
@@ -14,21 +15,28 @@ use std::process::Command;
 use std::time::Duration;
 
 const LINT_CONTINUATION: &str = "         ";
+const REVIEW_CLEAN: &str = "Lemma-Review: clean";
 
 pub enum Outcome {
     Complete,
     Stopped,
 }
 
+enum Ending {
+    Unticked,
+    Ticked,
+    Reviewed(String),
+}
+
 struct Failure {
     detail: Vec<String>,
-    ticked: bool,
+    ending: Ending,
 }
 
 fn unticked(detail: Vec<String>) -> Failure {
     Failure {
         detail,
-        ticked: false,
+        ending: Ending::Unticked,
     }
 }
 
@@ -296,20 +304,49 @@ pub(crate) fn git_run(root: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn commit(root: &Path, delta: &Doc, task: &Task) -> Result<(), Failure> {
+fn commit(root: &Path, delta: &Doc, task: &Task, trailer: &str) -> Result<(), Failure> {
     let message = format!("{} {}: {}", delta.id, task.id, task.text);
     let failed = |why: String| Failure {
         detail: vec![format!("   commit failed: {why}")],
-        ticked: true,
+        ending: Ending::Ticked,
     };
     git_run(root, &["add", "-A"]).map_err(failed)?;
-    git_run(root, &["commit", "-q", "-m", &message]).map_err(failed)?;
+    git_run(root, &["commit", "-q", "-m", &message, "-m", trailer]).map_err(failed)?;
     let sha = git_output(root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     println!(
         "   {} {} {message}",
         console::style("commit").green(),
         sha.trim()
     );
+    Ok(())
+}
+
+fn review_gate(
+    root: &Path,
+    store: &lazyspec::engine::store::Store,
+    delta: &Doc,
+    task: &Task,
+    config: &runner::Config,
+) -> Result<(), Failure> {
+    let verdict = gate::review(root, store, delta, task, config)
+        .map_err(|message| unticked(vec![format!("   review: {message}")]))?;
+    if !verdict.stop.trim().is_empty() {
+        return Err(Failure {
+            detail: Vec::new(),
+            ending: Ending::Reviewed(format!("review: {}", verdict.stop.trim())),
+        });
+    }
+    if !verdict.findings.is_empty() {
+        return Err(Failure {
+            detail: verdict
+                .findings
+                .iter()
+                .map(|f| format!("   {}: {}", f.basis, f.text))
+                .collect(),
+            ending: Ending::Reviewed("left unticked after 0 fix rounds".to_string()),
+        });
+    }
+    println!("{}", console::style("   review: clean").green());
     Ok(())
 }
 
@@ -324,23 +361,23 @@ fn build_task(
     run_runner(root, store, delta, task, config)?;
     check_lint(root, &delta.id)?;
     check_settled(root, &delta.id, task)?;
+    review_gate(root, store, delta, task, config)?;
     tick(root, delta, task)?;
-    commit(root, delta, task)
+    commit(root, delta, task, REVIEW_CLEAN)
 }
 
 fn report(failure: &Failure, task: &Task) {
     let red = |line: &str| println!("{}", console::style(line).red());
     failure.detail.iter().for_each(|line| red(line));
-    match failure.ticked {
-        true => red(&format!(
-            "   stopped. {} ticked but not committed; working tree kept.",
-            task.id
-        )),
-        false => red(&format!(
-            "   stopped. {} left unticked; working tree kept.",
-            task.id
-        )),
-    }
+    let ending = match &failure.ending {
+        Ending::Ticked => "ticked but not committed".to_string(),
+        Ending::Unticked => "left unticked".to_string(),
+        Ending::Reviewed(why) => why.clone(),
+    };
+    red(&format!(
+        "   stopped. {} {ending}; working tree kept.",
+        task.id
+    ));
 }
 
 pub(crate) const DIRTY_TREE: &str = "build needs a clean working tree; commit or stash first";

@@ -125,6 +125,16 @@ pub fn review_diff(claims_text: &str) -> Value {
     }))
 }
 
+pub fn review_task(bases: &[String]) -> Value {
+    object(json!({
+        "stop": {"type": "string"},
+        "findings": array_of(object(json!({
+            "text": {"type": "string"},
+            "basis": {"enum": bases},
+        }))),
+    }))
+}
+
 pub fn build(task: &Task) -> Value {
     let refs = match task.chore {
         true => json!({"type": "array", "items": {"type": "string"}, "maxItems": 0}),

@@ -4,6 +4,7 @@ mod build;
 mod claims;
 mod context;
 mod evidence;
+mod gate;
 mod git;
 mod lint;
 mod payload;
