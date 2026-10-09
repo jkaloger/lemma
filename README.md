@@ -1,5 +1,5 @@
 <h1 align="center">
-  🤖
+  Λ
   <br>λῆμμα
 </h1>
 
