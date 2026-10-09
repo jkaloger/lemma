@@ -3,7 +3,10 @@
   <br>λῆμμα
 </h1>
 
-Stepping stones for LLM assisted development.
+Stepping stones for LLM-assisted development.
+
+> [!NOTE]
+> In mathematics and other fields, a **lemma** is a generally minor proven proposition used to prove a larger statement. It is also known as a “helping theorem” or an “auxiliary theorem”. [Source: Wikipedia, “Lemma (mathematics)”](<https://en.wikipedia.org/wiki/Lemma_(mathematics)>).
 
 Lemma is my opinionated approach to using LLMs in software engineering. It prioritises small, verifiable changes over larger orchestration/software factory patterns.
 
@@ -21,33 +24,37 @@ lemma session-start | lemma signal | lemma stop
 
 ## Description
 
-lemma has three parts
+Lemma has three parts:
 
 - The **pack** contains `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies the pack into a project.
 
-- The **plugin** is a Claude Code plugin containing hook entries.
+- The **plugin** is a Claude Code plugin that registers hooks.
 
-- The **binary** is a Rust executable named `lemma`. It links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; lemma does not define lifecycle rules. Orchestration runs agents as child processes and reads their JSON output without a shell layer.
+- The **binary** is a Rust executable named `lemma` that links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; Lemma does not define lifecycle rules. For a task, the binary invokes a configured runner or reviewer as a child process and reads its JSON response directly, without a shell layer.
 
-lemma checks change coverage, document shape and the connection between claims and tests. The test runner and CI own test results. Human review determines whether a test proves its claim. lemma does not run tests.
+Lemma checks change coverage, document shape and the links between claims and tests. It does not run tests or decide whether a test proves a claim. The test runner and CI report test results; human review judges whether the evidence supports the claim. Automation can enforce our workflow's boundaries, but people remain responsible for intent and acceptance.
+
+> [!WARNING]
+> `lemma` is not a vibe coding tool, and as such requires careful consideration, planning and time to use.
+> The result is much more laborious than spec driven/software factory/orchestration/vibe coding patterns, but I think results in better quality engineering outcomes.
 
 ## Document types
 
-| Type         | Statuses                               | Written by                                          |
-| ------------ | -------------------------------------- | --------------------------------------------------- |
-| `spec`       | `draft` → `active`                     | humans                                              |
-| `delta`      | `draft` → `in-progress` → `complete`   | humans; agents annotate, plan and build             |
-| `decision`   | `proposed` → `accepted` → `superseded` | humans and agents; accepted decisions are immutable |
-| `convention` | `draft` → `accepted`                   | humans                                              |
-| `dictum`     | `draft` → `accepted`                   | humans                                              |
+| Type         | Statuses                               | Written by                                                    |
+| ------------ | -------------------------------------- | ------------------------------------------------------------- |
+| `spec`       | `draft` → `active`                     | humans                                                        |
+| `delta`      | `draft` → `in-progress` → `complete`   | humans write; reviewers annotate; planners and runners assist |
+| `decision`   | `proposed` → `accepted` → `superseded` | humans and agents; accepted decisions are immutable           |
+| `convention` | `draft` → `accepted`                   | humans                                                        |
+| `dictum`     | `draft` → `accepted`                   | humans                                                        |
 
 A **spec** is an `index.md` with `## Intent`, `## Constraints`, `## Non-goals` and `## Open questions`, a `governs` list of globs and an optional `tests` list of globs. Specs hold no claims. A change under a spec's `governs` globs makes the spec drift-stale. When `tests` is absent, it defaults to `**/tests/**`, `**/*_test.*`, `**/*.test.*` and `**/*.spec.*`.
 
-A **delta** is the unit of work. It links each changed spec using the `changes` relationship, for example `related: [- changes: SPEC-002]`. The `delta-changes-spec` edge is required. A delta is in flight while `draft` or `in-progress`. A `complete` delta is immutable.
+A **delta** is the unit of change. It links each changed spec using the `changes` relationship, for example `related: [- changes: SPEC-002]`. The `delta-changes-spec` edge is required. A delta is in flight while `draft` or `in-progress`. A `complete` delta is immutable.
 
 A **decision** records one choice and links the documents it affects or constrains. A superseding decision links the decision it replaces.
 
-A **convention** and **dictum** state rules applied to every change. Dictum rules are claims edited by hand. When a referenced test must change, the rule is struck (`- ~~[ID]~~`) and a new id is added in the same change.
+A **convention** and a **dictum** state rules that apply across changes. Dictum rules are claims edited by hand. When a referenced test must change, the rule is struck (`- ~~[ID]~~`) and a new id is added in the same change.
 
 ## Delta parts
 
@@ -60,7 +67,7 @@ A delta contains four parts:
 | `claims.md` | Claims; the file has no heading                                                 |
 | `tasks.md`  | Ordered checklist, followed optionally by `## Follow-ups` with the same grammar |
 
-A **claim** is a list item with an id unique within the delta:
+A **claim** is a list item whose id is unique within its delta:
 
 ```md
 - [AC-1] The balance of an account is the sum of its entries in minor units.
@@ -72,7 +79,7 @@ A claim starts as a plain bullet without an id. `lemma plan` assigns ids. The `[
 
 A **ref** is an indented `@ref <path>#<symbol>` line under a claim. It names a test file matching a changed spec's `tests` globs and a symbol in that file. An `@per <citation>` line is treated as a citation and otherwise ignored. A claim is cited outside its delta as `DELTA-004/AC-2`; a dictum rule is cited by its id.
 
-A **task** settles claims or records a chore:
+A **task** either settles one or more claims or records a chore:
 
 ```md
 - [ ] T1 add `Balance` type and the `SUM` query (settles AC-1)
@@ -89,13 +96,13 @@ A **review line** is an agent annotation for a human to resolve and delete. It i
 
 ## Workflow
 
-1. A human creates a delta, writes its intent, scope, design and claims as plain bullets, and links the specs it changes.
-2. `lemma review <delta>` reviews a `draft` delta. Findings are written as review lines. The human edits the delta, deletes each resolved review line and runs review again. Review does not plan.
-3. `lemma plan <delta>` plans a `draft` delta with no review lines. It assigns claim ids, appends missing behaviour as `[proposed]` claims and adds tasks. The human reviews the diff, accepts or removes each `[proposed]` tag, then runs `lemma build` to offer the move to `in-progress`.
-4. `lemma build <delta>` runs each unticked task in a fresh runner, reviews the task diff and commits it.
-5. `lazyspec update <id> --status complete` moves the delta to `complete`.
+1. A human creates a delta, records its intent and scope, describes the design, lists claims as plain bullets, and links the specs it changes.
+2. `lemma review <delta>` reviews a `draft` delta and records findings as review lines. The human resolves the findings, removes the corresponding lines and runs review again. Review does not plan work.
+3. `lemma plan <delta>` plans a `draft` delta with no outstanding review lines. It assigns claim ids, proposes any missing behaviour as `[proposed]` claims and adds tasks. The human reviews the diff and accepts or removes each `[proposed]` marker before using `lemma build` to move the delta to `in-progress`.
+4. `lemma build <delta>` handles one task at a time. A fresh runner attempts each unticked task; Lemma checks the result, obtains a task review and commits the accepted change.
+5. `lazyspec update <id> --status complete` marks the delta complete.
 
-The human runs `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`; the last command applies only to completion. `lemma review` applies to `draft` deltas. `lemma build` reviews each task in an `in-progress` delta. Every work-performing lemma command ends with a `next:` line naming the next step. Errors, `--dry-run` prompts, `lint`, `refs` and hooks print no `next:` line.
+The human remains responsible for running `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`. The final command is used only to complete a delta. Review applies to `draft` deltas; build reviews each task in an `in-progress` delta. Each work-performing Lemma command ends with a `next:` line that names the next step. Errors, `--dry-run` prompts, `lint`, `refs` and hooks do not print a `next:` line.
 
 ## Commands
 
@@ -130,7 +137,7 @@ Before the prompt, build requires a clean working tree outside the delta directo
 An `in-progress` delta requires a clean working tree. Build processes unticked main tasks in order, then follow-ups. For each task:
 
 1. The `build` prompt includes the task and its claims. The runner receives `LEMMA_DELTA` and `LEMMA_TASK`. Its reply is `{"outcome":"done"|"blocked","reason","refs":[{"claim","path","symbol"}]}`. `claim` must be one of the claims settled by the task. A chore has no refs.
-2. A runner that changes `index.md`, `design.md`, `claims.md` or `tasks.md` fails with `runner edited <path>; lemma writes delta parts`. A blocked outcome fails with its reason. A reply without JSON fails.
+2. A runner that changes `index.md`, `design.md`, `claims.md` or `tasks.md` fails with `runner edited <path>; Lemma writes delta parts`. A blocked outcome fails with its reason. A reply without JSON fails.
 3. Refs are written under their claims after existing lines. Existing refs are skipped. A ref for a claim the task does not settle fails.
 4. `lemma lint <delta>` runs. Any error stops the task.
 5. Unless the task is a chore, every settled claim must be `[intent]`, or have at least one ref and all refs must resolve.
@@ -141,7 +148,7 @@ A failure before the review gate leaves the task unticked and preserves the work
 
 #### Review gate
 
-After the runner, lint and settled-claim checks pass, lemma runs `git add -A` and invokes the `reviewer` command with the `review-task` prompt. The prompt includes the task, its claims, conventions, dictums, spec intent, related documents, design, claims, `task_diff` and `delta_diff`.
+After the runner, lint and settled-claim checks pass, Lemma runs `git add -A` and invokes the `reviewer` command with the `review-task` prompt. The prompt includes the task, its claims, conventions, dictums, spec intent, related documents, design, claims, `task_diff` and `delta_diff`.
 
 `task_diff` is `git diff --cached HEAD`, containing the staged work of this task, including untracked files. `delta_diff` is `git diff <base> HEAD`, containing committed work for the delta so far as read-only context. The prompt directs the reviewer to judge only the task diff and use the delta diff to detect a task undoing earlier work.
 
@@ -228,9 +235,9 @@ Invalid `governs` or `tests` globs are errors. An unknown `{{key}}` in a pack pr
 The base is the revision used by history and dictum checks and the start of the coverage range.
 
 1. `--base <rev>` takes precedence when specified.
-2. Otherwise, lemma resolves a trunk using `--trunk <name>` or, by default, `origin/main`, `origin/master`, the target of `origin/HEAD`, local `main`, then local `master`. If `git merge-base HEAD <trunk>` is not `HEAD`, lemma uses the merge base. When both remote-tracking and local trunks exist, lemma uses the merge base nearer to `HEAD`.
+2. Otherwise, Lemma resolves a trunk using `--trunk <name>` or, by default, `origin/main`, `origin/master`, the target of `origin/HEAD`, local `main`, then local `master`. If `git merge-base HEAD <trunk>` is not `HEAD`, Lemma uses the merge base. When both remote-tracking and local trunks exist, Lemma uses the merge base nearer to `HEAD`.
 3. Otherwise, when `HEAD` is on trunk, `lemma stop` and `lemma signal` use the session base. A transition gate and the build review gate's `delta_diff` use the parent of the commit that first added the delta's `index.md`, or `HEAD` if the delta is uncommitted. The `validate` event has no base.
-4. In other cases, lemma uses `HEAD`.
+4. In other cases, Lemma uses `HEAD`.
 
 ## Files
 
@@ -256,9 +263,9 @@ Unknown keys are errors. Commands are split into words on whitespace; single and
 
 In each command word, `{schema}` is replaced with compact JSON and `{schema_file}` with the path to a temporary schema file that exists for the run. A command containing either placeholder fails when no schema is available. Stdout is parsed as JSON. A non-null `structured_output` is the reply; `result` is optional in that case. Otherwise, the first JSON object in `result` is used. `is_error: true`, a `subtype` other than `success` or a non-zero exit is a failure. The message is `result`, or `subtype` if `result` is absent. Other fields are ignored.
 
-`{session}` in a runner or reviewer command is replaced with a fresh v4 UUID for each call. In a resume command it is replaced with the build call's UUID. Commands without the placeholder run without a session or watch line. The default command passes it as `--session-id`; Claude Code writes the transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` while it runs. lemma does not read the transcript.
+`{session}` in a runner or reviewer command is replaced with a fresh v4 UUID for each call. In a resume command it is replaced with the build call's UUID. Commands without the placeholder run without a session or watch line. The default command passes it as `--session-id`; Claude Code writes the transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` while it runs. Lemma does not read the transcript.
 
-Before each agent call, lemma prints a watch command for the transcript. Run it in a second terminal to view tool calls. While a call waits, a spinner with its label and elapsed time appears on stderr when stderr is a terminal. Terminal output uses colour unless `NO_COLOR` is set: task headings are bold, `commit` and `lint: clean` are green, `stopped` and errors are red, and the `next:` label is dim.
+Before each agent call, Lemma prints a watch command for the transcript. Run it in a second terminal to view tool calls. While a call waits, a spinner with its label and elapsed time appears on stderr when stderr is a terminal. Terminal output uses colour unless `NO_COLOR` is set: task headings are bold, `commit` and `lint: clean` are green, `stopped` and errors are red, and the `next:` label is dim.
 
 ### Prompts
 
@@ -277,7 +284,7 @@ Before each agent call, lemma prints a watch command for the transcript. Run it 
 | `delta_diff`                         | `git diff <base> HEAD` (`review-task`)                                                                                   |
 | `findings`                           | Review findings as `- [<basis>] <text>` (`fix`)                                                                          |
 
-The `plan` prompt includes claim ids assigned by lemma. The `build` prompt directs the runner not to edit delta parts; lemma writes refs from the reply. Unknown prompt keys prevent `review`, `plan` and `build` at startup. A pack prompt without `{{resolved}}` remains valid; exact-match finding suppression still applies.
+The `plan` prompt includes claim ids assigned by lemma. The `build` prompt directs the runner not to edit delta parts; Lemma writes refs from the reply. Unknown prompt keys prevent `review`, `plan` and `build` at startup. A pack prompt without `{{resolved}}` remains valid; exact-match finding suppression still applies.
 
 Two glob lists overlap when they share a glob, when one glob matches the other's text, or when a repository file matches a glob from each.
 
