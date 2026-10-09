@@ -56,6 +56,6 @@ Out:
 - [x] W80 DECISION-004, dec 98. accepted by human ("go then build").
 - [x] W81 review gate: dec 91, 92, 95, 96. `review-task.md` (pack + default), schema w/ basis enum from ctx, staged task diff + delta diff values, trailer. Tests (fake reviewer): clean → commit w/ `Lemma-Review: clean`; basis enum = ctx ids, unknown basis rejected; `stop` → exit 2, tree kept, unticked; task diff incl untracked files; reviewer sees delta-so-far diff.
 - [x] W82 fix round: dec 93, 94. `fix.md`, `resume` + `review_rounds` cfg, rerun checks after fix, refs replaced. Tests: findings → fix → clean commits, trailer counts; findings after cap stop w/ list + record file; resume cmd gets build session uuid; no `{session}` → fresh runner w/ fix section; fix breaking lint stops.
-- [ ] W83 drop in-progress review: dec 97. rm review-diff prompt, schema, writer, tests; error msg; leftover prompt file handled. Tests: in-progress review errors w/ msg; human Follow-ups still built after main.
+- [x] W83 drop in-progress review: dec 97. rm review-diff prompt, schema, writer, tests; error msg; leftover prompt file handled. Tests: in-progress review errors w/ msg; human Follow-ups still built after main.
 - [ ] W84 docs + version: README workflow 3 steps, build section gate/fix/stops/trailer, cfg keys; tally example transcripts; version per open q.
 - [ ] W85 review: whole-diff review against DECISION-004 + this plan.

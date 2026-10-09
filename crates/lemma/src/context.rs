@@ -1,5 +1,5 @@
 use crate::claims;
-use crate::git::{git_output, repo_files};
+use crate::git::repo_files;
 use crate::payload::{Doc, CLAIMS_PART, DESIGN_PART, TASKS_PART};
 use crate::range::{self, Inputs};
 use crate::tasks::Task;
@@ -133,22 +133,6 @@ pub fn diff_base(root: &Path, delta: &Doc) -> String {
         ..Inputs::default()
     };
     range::resolve(root, &inputs).rev
-}
-
-pub fn diff(root: &Path, base: &str, world: &World, delta: &Doc) -> String {
-    let globs: Vec<String> = world
-        .changed_specs(delta)
-        .iter()
-        .flat_map(|spec| spec.governs.clone())
-        .chain(world.delta_tests(delta))
-        .collect();
-    if globs.is_empty() {
-        return String::new();
-    }
-    let specs: Vec<String> = globs.iter().map(|g| format!(":(glob){g}")).collect();
-    let mut args = vec!["diff", base, "--"];
-    args.extend(specs.iter().map(String::as_str));
-    git_output(root, &args).unwrap_or_default()
 }
 
 pub fn task_text(delta: &Doc, task: &Task) -> String {

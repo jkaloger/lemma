@@ -3,8 +3,7 @@ use common::*;
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 
-const NEXT: &str =
-    "next: lemma review DELTA-001 to review the diff, or lazyspec update DELTA-001 --status complete\n";
+const NEXT: &str = "next: lazyspec update DELTA-001 --status complete\n";
 
 const CLAIMS_PATH: &str = "docs/deltas/DELTA-001-d/claims.md";
 const BARE: &str = "- [AC-1] Reopen keeps the prior answer.\n- [AC-2] Writes are atomic.\n";

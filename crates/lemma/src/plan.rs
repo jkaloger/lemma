@@ -284,34 +284,6 @@ fn insert_tasks(tasks_text: &str, new: &[String]) -> String {
     out.join("\n")
 }
 
-pub fn append_follow_ups(tasks_text: &str, new: &[String]) -> String {
-    let Some(heading) = follow_ups_line(tasks_text) else {
-        let mut text = tasks_text.to_string();
-        ensure_newline(&mut text);
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(&format!("## {FOLLOW_UPS}\n"));
-        new.iter()
-            .for_each(|line| text.push_str(&format!("{line}\n")));
-        return text;
-    };
-    let lines = lines_of(tasks_text);
-    let section_end = live_lines(tasks_text)
-        .into_iter()
-        .find(|(n, line)| *n > heading + 1 && heading_level(line).is_some())
-        .map_or(lines.len(), |(n, _)| n - 1);
-    let after = lines[heading..section_end]
-        .iter()
-        .rposition(|l| !l.trim().is_empty())
-        .map_or(heading, |last| heading + last)
-        + 1;
-    let mut out: Vec<&str> = lines[..after].to_vec();
-    out.extend(new.iter().map(String::as_str));
-    out.extend(&lines[after..]);
-    out.join("\n")
-}
-
 fn draft(
     files: &Files,
     parsed: &Tasks,

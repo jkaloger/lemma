@@ -40,23 +40,29 @@ fn review_dry_run_on_a_draft_renders_review_doc_with_claims_and_intent() {
 }
 
 #[test]
-fn review_dry_run_on_an_in_progress_delta_includes_the_diff() {
+fn review_on_an_in_progress_delta_says_build_reviews_each_task() {
     let repo = project();
     delta(&repo, "in-progress");
-    repo.commit("start");
-    repo.write("a/x.rs", "fn x() { changed_marker(); }\n");
-    repo.write("b/y.rs", "fn y() { elsewhere(); }\n");
 
-    let run = repo.run(&["review", "DELTA-001", "--dry-run"], "");
+    for args in [
+        &["review", "DELTA-001"][..],
+        &["review", "DELTA-001", "--dry-run"],
+    ] {
+        let run = repo.run(args, "");
 
-    assert_eq!(run.code, 0, "{}", run.stderr);
-    assert!(run.stdout.contains("changed_marker"), "{}", run.stdout);
-    assert!(!run.stdout.contains("elsewhere"));
-    assert!(!run.stdout.contains("{{"));
+        assert_eq!(run.code, 2);
+        assert!(
+            run.stderr.contains(
+                "review needs a draft delta; DELTA-001 is in-progress, and lemma build reviews each task"
+            ),
+            "{}",
+            run.stderr
+        );
+    }
 }
 
 #[test]
-fn review_needs_a_draft_or_in_progress_delta() {
+fn review_needs_a_draft_delta() {
     let repo = project();
     delta(&repo, "complete");
 
@@ -65,7 +71,7 @@ fn review_needs_a_draft_or_in_progress_delta() {
     assert_eq!(run.code, 2);
     assert!(run
         .stderr
-        .contains("review needs a draft or in-progress delta"));
+        .contains("review needs a draft delta; DELTA-001 is complete"));
 }
 
 #[test]
@@ -140,7 +146,7 @@ fn build_dry_run_with_every_task_ticked_says_all_complete() {
         (run.code, run.stdout.as_str()),
         (
             0,
-            "all tasks complete\nnext: lemma review DELTA-001 to review the diff, or lazyspec update DELTA-001 --status complete\n"
+            "all tasks complete\nnext: lazyspec update DELTA-001 --status complete\n"
         )
     );
 }
@@ -273,17 +279,24 @@ fn dictums_overlap_through_files_both_globs_match() {
 }
 
 #[test]
-fn the_default_plan_and_review_diff_prompts_ask_for_short_task_titles() {
+fn the_default_plan_prompt_asks_for_short_task_titles() {
     let repo = project();
     delta(&repo, "draft");
-    let planned = repo.run(&["plan", "DELTA-001", "--dry-run"], "");
-    delta(&repo, "in-progress");
-    repo.commit("start");
-    let reviewed = repo.run(&["review", "DELTA-001", "--dry-run"], "");
 
-    for run in [planned, reviewed] {
-        assert_eq!(run.code, 0, "{}", run.stderr);
-        assert!(run.stdout.contains("at most 10 words"), "{}", run.stdout);
-        assert!(!run.stdout.contains("name the files"), "{}", run.stdout);
-    }
+    let run = repo.run(&["plan", "DELTA-001", "--dry-run"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.contains("at most 10 words"), "{}", run.stdout);
+    assert!(!run.stdout.contains("name the files"), "{}", run.stdout);
+}
+
+#[test]
+fn a_leftover_review_diff_prompt_file_is_ignored() {
+    let repo = project();
+    delta(&repo, "draft");
+    write_prompt(&repo, "review-diff.md", "old {{diff}} {{nonsense}}\n");
+
+    let run = repo.run(&["review", "DELTA-001", "--dry-run"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
 }

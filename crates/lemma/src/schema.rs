@@ -25,22 +25,6 @@ fn array_of(items: Value) -> Value {
     json!({"type": "array", "items": items})
 }
 
-fn ids_array(ids: &[String]) -> Value {
-    match ids.is_empty() {
-        true => json!({"type": "array", "items": {"type": "string"}, "maxItems": 0}),
-        false => array_of(json!({"enum": ids})),
-    }
-}
-
-fn live_claim_ids(claims_text: &str) -> Vec<String> {
-    claims::parse(claims_text)
-        .claims
-        .into_iter()
-        .filter(|c| !c.struck)
-        .map(|c| c.id)
-        .collect()
-}
-
 fn push_unique(anchors: &mut Vec<String>, anchor: String) {
     if !anchor.is_empty() && !anchors.contains(&anchor) {
         anchors.push(anchor);
@@ -111,16 +95,6 @@ pub fn plan(known_ids: &[String]) -> Value {
         "tasks": array_of(object(json!({
             "text": task_text(),
             "settles": array_of(settle),
-        }))),
-    }))
-}
-
-pub fn review_diff(claims_text: &str) -> Value {
-    let settles = ids_array(&live_claim_ids(claims_text));
-    object(json!({
-        "findings": array_of(object(json!({
-            "text": task_text(),
-            "settles": settles,
         }))),
     }))
 }
@@ -236,29 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn plan_and_review_diff_cap_task_text_at_80_characters() {
+    fn plan_caps_task_text_at_80_characters() {
         let planned = plan(&[]);
-        let reviewed = review_diff(CLAIMS);
 
         assert_eq!(
             planned["properties"]["tasks"]["items"]["properties"]["text"]["maxLength"],
             80
         );
-        assert_eq!(
-            reviewed["properties"]["findings"]["items"]["properties"]["text"]["maxLength"],
-            80
-        );
-    }
-
-    #[test]
-    fn review_diff_settles_only_live_claims_or_nothing() {
-        let live = review_diff(CLAIMS);
-        let none = review_diff("");
-
-        let items =
-            |s: &Value| s["properties"]["findings"]["items"]["properties"]["settles"].clone();
-        assert_eq!(items(&live)["items"]["enum"], json!(["AC-1"]));
-        assert_eq!(items(&none)["maxItems"], 0);
     }
 
     #[test]

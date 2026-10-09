@@ -1,11 +1,9 @@
 use crate::annotate::annotate;
 use crate::claims::review_lines;
 use crate::payload::{Doc, CLAIMS_PART, DESIGN_PART, INDEX_PART, TASKS_PART};
-use crate::plan;
 use crate::reviews;
 use crate::runner;
 use crate::schema;
-use crate::tasks;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -134,68 +132,4 @@ pub fn review_draft(
     }
     reviews::record(root, &delta.id, &findings);
     Ok(Outcome::Written(added))
-}
-
-#[derive(Deserialize)]
-struct DiffReply {
-    findings: Vec<DiffFinding>,
-}
-
-#[derive(Deserialize)]
-struct DiffFinding {
-    text: String,
-    #[serde(default)]
-    settles: Vec<String>,
-}
-
-fn unique(settles: Vec<String>) -> Vec<String> {
-    let mut seen = Vec::new();
-    for id in settles {
-        if !seen.contains(&id) {
-            seen.push(id);
-        }
-    }
-    seen
-}
-
-pub fn review_diff(
-    root: &Path,
-    delta: &Doc,
-    prompt: &str,
-    config: &runner::Config,
-) -> Result<usize, String> {
-    let env = [("LEMMA_DELTA", delta.id.as_str())];
-    let schema = schema::review_diff(&plan::read(root, delta, CLAIMS_PART));
-    let reply = runner::tracked(
-        "review",
-        &config.reviewer,
-        prompt,
-        root,
-        &env,
-        config.timeout,
-        Some(&schema),
-    )?;
-    let reply: DiffReply =
-        serde_json::from_value(reply.json()?).map_err(|e| format!("reviewer reply: {e}"))?;
-    let tasks_text = plan::read(root, delta, TASKS_PART);
-    let parsed = tasks::parse(&tasks_text);
-    let mut known: Vec<String> = parsed.tasks.iter().map(|t| t.text.clone()).collect();
-    let mut number = plan::next_number(parsed.tasks.iter().map(|t| t.number));
-    let mut lines = Vec::new();
-    for finding in reply.findings {
-        let text = plan::collapsed(&finding.text);
-        if known.contains(&text) {
-            continue;
-        }
-        lines.push(plan::task_entry(number, &text, &unique(finding.settles)));
-        known.push(text);
-        number += 1;
-    }
-    if lines.is_empty() {
-        return Ok(0);
-    }
-    let path = root.join(part_file(delta, TASKS_PART));
-    std::fs::write(&path, plan::append_follow_ups(&tasks_text, &lines))
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    Ok(lines.len())
 }
