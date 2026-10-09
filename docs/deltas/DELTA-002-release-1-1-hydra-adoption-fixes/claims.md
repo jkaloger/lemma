@@ -1,0 +1,16 @@
+- [AC-1] [intent] A finding reports the line in the file, not in the body: claim and receipt lines are offset by the frontmatter line count.
+- [AC-2] [intent] `validate` emits one info-level finding per doc with `[intent]` claims, `<n> of <m> claims are [intent]`, as a `warning` until lazyspec has an `info` severity.
+- [AC-3] [intent] A doc with no `[intent]` claims gets no intent count; struck claims are excluded and archived deltas skipped.
+- [AC-4] [intent] `lazyspec hook run pre-transition` (`from == to`) evaluates the gate on the edge leaving `from` and reports findings only, never updates.
+- [AC-5] [intent] A clean by-hand run emits the warning `checked <from> → <to>: ready`, so it is distinguishable from no dispatch.
+- [AC-6] [intent] By hand on `complete`, lemma reports archive gate findings plus one `would fold <n> claims into <spec>` warning per target and writes nothing.
+- [AC-7] [intent] README states that lazyspec writes `reviewed: <sha>` on status change, that it records the commit the doc was last moved at and is not approval, and agents leave it alone.
+- [AC-8] [intent] `lemma receipt <delta> <claim-id> <path#symbol>` resolves the symbol in the working tree, pins short HEAD and inserts the receipt line as the claim's first indented line.
+- [AC-9] [intent] `lemma receipt` rewrites an existing receipt for the same `path#symbol` in place.
+- [AC-10] [intent] `lemma receipt` refuses with exit 2 and writes nothing when the claim id is missing, the symbol does not resolve, or the file has uncommitted changes.
+- [AC-11] [intent] `re-pin` and `receipt` check `lazyspec --version` is at least 0.15 and exit 2 with the install hint otherwise.
+- [AC-12] `stop` with a lazyspec older than 0.15 prints the install hint to stderr and exits 0.
+  @ref crates/lemma/tests/version.rs#stop_warns_about_an_old_lazyspec_without_blocking
+- [AC-13] [intent] The entry skill setup runs the version check first and ends with a restart note when the plugin was just installed.
+- [AC-14] [intent] The delta skill tells the agent to use `lemma receipt` over hand edits, including for a test already at HEAD with no commit.
+- [AC-15] [intent] README documents install (`claude plugin install lemma@lemma`, restart before delta work), the intent count move from release 2 to 1.1, `receipt` and the by-hand dry-run.

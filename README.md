@@ -2,7 +2,7 @@
 
 A lazyspec workflow pack, a Claude Code plugin and a hooks binary for LLM-driven development. A human writes a delta: intent, design and behaviour. lemma reviews it with an agent, plans it into tasks, runs each task in a fresh agent, has a reviewer judge the task's diff and commits it once its claims are proved by tests and the review is clean. Specs hold intent only. Nothing folds: a completed delta is the record of why its tests say what they say.
 
-Design rationale is recorded in [DECISION-001](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), [DECISION-003](docs/decisions/DECISION-003-nothing-folds-deltas-are-the-record-specs-hold-intent.md) and [RFC-001](docs/RFC-001-lemma.md). This document states behaviour. [docs/examples/tally](docs/examples/tally/README.md) shows the workflow on a small project.
+Design rationale is recorded in [docs/decisions](docs/decisions), chiefly [DECISION-001](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), [DECISION-003](docs/decisions/DECISION-003-nothing-folds-deltas-are-the-record-specs-hold-intent.md) and [DECISION-005](docs/decisions/DECISION-005-lemma-is-a-pack-a-rust-binary-and-a-plugin-under-one-version.md). lemma's own intent is in [docs/specs](docs/specs) and each release is a delta in [docs/deltas](docs/deltas). This document states behaviour. [docs/examples/tally](docs/examples/tally/README.md) shows the workflow on a small project.
 
 ## Synopsis
 

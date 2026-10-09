@@ -1,0 +1,7 @@
+- [x] T1 W49 skills and dictum prose: build, adopt, delta skill, CHG-9, TEST-1 (settles AC-21, AC-22, AC-23)
+- [x] T2 W50 pack types, seed documents, templates with headings and guidance (settles AC-24, AC-25, AC-26, AC-27, AC-28, AC-29)
+- [x] T3 W48 acceptance run recorded in `lemma-adoption-w48.md` (chore)
+- [x] T4 W51 claims: marker and citation parsing (settles AC-7, AC-8, AC-9, AC-10)
+- [x] T5 W52 check and fold: assumption rules, `--require intent`, intent count removed (settles AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-17, AC-18, AC-19, AC-20)
+- [x] T6 W53 apply preview and gate output: provenance, grouped surface (settles AC-11, AC-12, AC-13, AC-14, AC-15, AC-16)
+- [x] T7 W54 world and dictums as claim sites (settles AC-30, AC-31, AC-32, AC-33, AC-34, AC-35, AC-36, AC-37, AC-38, AC-39, AC-40)

@@ -1,11 +1,14 @@
 ---
-title: "Lemma is a signal source, not a verifier"
+title: Lemma is a signal source, not a verifier
 type: decision
 status: accepted
-author: "Jack Kaloger"
+author: Jack Kaloger
 date: 2026-10-05
 tags: []
-related: []
+related:
+- supersedes: DECISION-008
+- constrains: SPEC-001
+- constrains: SPEC-003
 reviewed: 72c6b23963e8783bcd274cacf6b4b0d8218a11d0
 ---
 

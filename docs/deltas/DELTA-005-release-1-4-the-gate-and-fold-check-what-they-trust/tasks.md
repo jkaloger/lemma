@@ -1,0 +1,6 @@
+- [x] T1 W24 clean tree at `complete`: dirty governed or receipt file blocks (settles AC-1)
+- [x] T2 W25 `@base` parsing, fold base check, `lemma base` (settles AC-2, AC-3, AC-4, AC-5, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23)
+- [x] T3 W26 validate error and warning severities, CI template (settles AC-6, AC-7, AC-8, AC-9)
+- [x] T4 W27 per-claim `re-pin`, refusal, `--force` (settles AC-10, AC-11, AC-12, AC-13)
+- [x] T5 W28 receipts name tests; README ordering and trust model (settles AC-14, AC-15, AC-16)
+- [x] T6 review fixes: invalid globs are error findings (settles AC-24)

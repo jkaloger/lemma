@@ -7,6 +7,12 @@ date: 2026-10-07
 tags: []
 related:
 - supersedes: DECISION-002
+- supersedes: DECISION-007
+- supersedes: DECISION-011
+- constrains: SPEC-001
+- constrains: SPEC-002
+- constrains: SPEC-003
+- constrains: SPEC-004
 supersedes:
 - DECISION-002
 reviewed: c7d86bf644690595c6470975c162eaded4a9548a

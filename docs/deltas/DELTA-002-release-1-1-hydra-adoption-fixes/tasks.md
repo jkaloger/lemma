@@ -1,0 +1,7 @@
+- [x] T1 W6 file-relative finding lines (settles AC-1)
+- [x] T2 W7 validate intent count (settles AC-2, AC-3)
+- [x] T3 W8 by-hand pre-transition dispatch (settles AC-4, AC-5, AC-6)
+- [x] T4 W9 receipt subcommand (settles AC-8, AC-9, AC-10)
+- [x] T5 W10 version check before store load (settles AC-11, AC-12)
+- [x] T6 W11 docs: README install, reviewed stamp, intent count, receipt, dry-run (settles AC-7, AC-15)
+- [x] T7 W12 skills: receipt over hand edits, setup version check (settles AC-13, AC-14)

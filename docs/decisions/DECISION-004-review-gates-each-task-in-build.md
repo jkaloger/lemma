@@ -1,11 +1,12 @@
 ---
-title: "Review gates each task in build"
+title: Review gates each task in build
 type: decision
 status: accepted
-author: "Jack Kaloger"
+author: Jack Kaloger
 date: 2026-10-09
 tags: []
-related: []
+related:
+- constrains: SPEC-002
 reviewed: 159b9633f0e830653b007fb2553124a9a4352018
 ---
 

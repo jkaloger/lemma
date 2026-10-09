@@ -1,0 +1,7 @@
+- [x] T1 W29 symbol-granular re-pin drift; `receipt` delta-only (settles AC-1, AC-2, AC-3, AC-8, AC-9)
+- [x] T2 W30 `[forced]` marker on forced re-pins (settles AC-4, AC-5, AC-6, AC-7)
+- [x] T3 W31 `wrote` list in `receipt`, `re-pin`, `base` output (settles AC-10)
+- [x] T4 W32 missing receipt warns on in-progress; overlap counts drafts (settles AC-11, AC-12)
+- [x] T5 W33 dry-run names uncommitted delta files; draft spec warning (settles AC-13, AC-14)
+- [x] T6 W34 `session-start`, `stop` against session base, hooks.json (settles AC-15, AC-16, AC-17, AC-18, AC-19, AC-20)
+- [x] T7 W35 pack adopt reference, skills, README, CI template, versions `1.5.0` (settles AC-21, AC-22)

@@ -1,0 +1,4 @@
+- [x] T1 W20 delta lifecycle without `archived`; `complete` returns fold updates (settles AC-9, AC-10, AC-11, AC-12)
+- [x] T2 W21 `@checked` receipt; no waivers (settles AC-6, AC-7, AC-8)
+- [x] T3 W22 stop: working-tree `complete` over HEAD (settles AC-1, AC-2, AC-3, AC-4, AC-5)
+- [x] T4 W23 README, delta skill: approval, receipts, statuses, types (chore)

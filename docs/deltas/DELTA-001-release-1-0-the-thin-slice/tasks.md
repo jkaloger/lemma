@@ -1,0 +1,5 @@
+- [x] T1 W1 binary: claims, receipts, fold, validate, transition, stop, re-pin, linking (settles AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-13, AC-14, AC-15, AC-16, AC-17, AC-18, AC-19, AC-20)
+- [x] T2 W2 pack: toml, templates, dictums (settles AC-21)
+- [x] T3 W3 plugin: marketplace, plugin.json, hooks, entry and delta skills (settles AC-22)
+- [x] T4 W4 CI workflow and adopter template (settles AC-23)
+- [x] T5 W5 acceptance: RFC-001 §13 five steps against scratch cargo repo (settles AC-24)

@@ -1,0 +1,14 @@
+- [AC-1] [intent] The spec template is a directory: `index.md` (frontmatter, `## Intent`) and an empty `behaviour.md`, shipped empty because lazyspec refuses hook updates to a part a document lacks.
+- [AC-2] [intent] Spec claims live only in part `behaviour`, with no `## Behaviour` heading inside it; a claim-shaped item in a spec's `index.md` is a warning.
+- [AC-3] [intent] The delta template is a directory with `index.md` (frontmatter, `## Intent`); claims go in one part per fold target named `behaviour.<target-id>`; `tasks` stays an optional unread part; `### <spec-id>` partitions are gone.
+- [AC-4] [intent] The `draft` to `in-progress` gate requires every fold target to have its part, every `behaviour.*` part to name a fold target, and at least one claim across them.
+- [AC-5] [intent] Validate reports a missing target part as a warning at `draft` and an error from `in-progress` on, and an orphan part as an error.
+- [AC-6] [intent] The fold writes one update per target, `{id, part: "behaviour", hash, body}`, with the merged claim list as body.
+- [AC-7] [intent] A fold target with no `behaviour` part is an error finding and nothing is written.
+- [AC-8] [intent] A finding on a claim carries its `part` and the line in the part file, with no frontmatter offset; findings on `index.md` keep the frontmatter offset.
+- [AC-9] [intent] The governing spec of a delta claim is the target named by its part; of a spec claim, the spec.
+- [AC-10] [intent] `lemma receipt` finds the claim id across the delta's `behaviour.*` parts and edits that file, and refuses when the claim is in no part.
+- [AC-11] [intent] `re-pin` rewrites receipts in every `behaviour*` part, and its flag compares each part's claim lines at the old sha.
+- [AC-12] [intent] `lemma receipt` matches only live claims and refuses an ambiguous claim id.
+- [AC-13] [intent] Fold targets loaded from the store produce an error instead of a write.
+- [AC-14] [intent] README and the entry and delta skills say where claims go.

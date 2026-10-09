@@ -1,0 +1,7 @@
+- [x] T1 W14 payload: `Doc.parts`, `Finding.part`, `Update.part` (chore)
+- [x] T2 W15 part-scoped parsing, gates and finding locations (settles AC-2, AC-4, AC-5, AC-8, AC-9)
+- [x] T3 W16 fold writes the `behaviour` part (settles AC-6, AC-7)
+- [x] T4 W17 receipt and re-pin edit part files (settles AC-10, AC-11)
+- [x] T5 W18 pack: directory templates, drop flat templates (settles AC-1, AC-3)
+- [x] T6 W19 README and skills say where claims go (settles AC-14)
+- [x] T7 review fixes: live-claim receipts, store-loaded targets error, index warnings (settles AC-12, AC-13)

@@ -1,0 +1,5 @@
+- [x] T1 session placeholder, spinner, watch line, colour (settles AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-8, AC-9, AC-10)
+- [x] T2 advance draft delta at build; real next: commands (settles AC-11, AC-12, AC-13, AC-14, AC-15)
+- [x] T3 short task titles in plan and review-diff prompts (settles AC-16, AC-17, AC-18, AC-19)
+- [x] T4 advance amended; lint first, scoped commit; watch line fixed (settles AC-7, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25)
+- [x] T5 review fixes, README, tally, version 3.1.0 (chore)

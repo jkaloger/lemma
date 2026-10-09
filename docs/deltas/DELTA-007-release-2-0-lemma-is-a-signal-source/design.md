@@ -1,15 +1,6 @@
-# Plan: release 2.0
+In: unpinned refs, immutable claims, checks 1–4, `check`, `apply`, `refs`, `stop`, `signal` (PostToolUse), context pointers, once-per-session dedupe, `migrate`, base resolution for branches and trunk-only repos, pack hooks as composition, skills, README, CI template. Lemma uses the lazyspec 0.15 extractors as they are.
 
-Implements DECISION-001: lemma is one signal source in a stack. It checks that implementation changes and spec changes stay mechanically connected, and nothing else. Starts from 1.5 (`6a43299`).
-
-## Scope
-
-In: unpinned refs, immutable claims, checks 1–4, `check`, `apply`, `refs`, `stop`, `signal` (PostToolUse), context pointers, once-per-session dedupe, `migrate`, base resolution for branches and trunk-only repos, pack hooks as composition, skills, README, CI template.
-Out: extractor fixes (upstream to lazyspec, `.scratch/lazyspec-contract.md`; lemma uses the 0.15 extractors as they are). jev and test-report ingestion (future signal sources). Pending-test detection (moves to repo conventions).
-
-## Decisions
-
-48. **Refs are unpinned.** A receipt is `@ref <path>#<symbol>`. A pinned form (`@<sha>`, `@{blob:…}`) or ` [forced]` is an error: `pinned ref; run lemma migrate`. `@base` lines are an error with the same hint.
+48. **Refs are unpinned.** A receipt is an `@ref` line naming `<path>#<symbol>`. A pinned form (`@<sha>`, `@{blob:…}`) or ` [forced]` is an error: `pinned ref; run lemma migrate`. `@base` lines are an error with the same hint.
 49. **`@checked` goes.** A claim no test settles is `[intent]`. Human judgement of adequacy happens at `complete`, not in a line. `migrate` turns a claim whose only receipts are `@checked` into `[intent]`.
 50. **Claims are immutable.** A delta claim whose id exists in the target spec is an error unless struck: `claims are immutable; strike <id> and add a new id`. Fold appends new ids and deletes struck ids. A struck id the spec lacks is an error at `apply` and in `check` (check 4). Two in-flight deltas striking one id is a warning.
 51. **The four checks.**
@@ -28,38 +19,29 @@ Out: extractor fixes (upstream to lazyspec, `.scratch/lazyspec-contract.md`; lem
 60. **Removed.** `re-pin`, `receipt`, `base`, `validate`, `pre-transition`; receipt freshness, symbol drift, `[forced]`, `@checked`, `@base`, pending-test detection. `session-start` stays.
 61. **Version 2.0.0** in crate, plugin and README.
 
-## Work
+**Review fixes (after W46).** `lemma stop` scopes check 3 to session-touched documents and to specs governing touched files, so a pre-existing unresolved ref no longer blocks every session. README and DECISION-001 were synced to the implementation: intent count output modes, signal pointers and failure exit, the intersection rule for check 1, Stop as error.
 
-- [x] W38 `claims`/`fold`: decisions 48–50. Parser keeps `@ref path#symbol`; pinned refs, `[forced]`, `@base`, `@checked` parse as findings. Fold: append new, delete struck, error on unstruck existing id and on struck absent id. Tests: each.
-- [x] W39 `evidence` (from `receipt`): resolve a ref against `tests` globs; extract the normalised region at a rev (`git show <rev>:<path>`) and in the working tree; whole-file fallback; `changed(base)`. Tests: sibling test added is unchanged; body edit is changed; absent at base is changed; non-extractor file compares whole.
-- [x] W40 `range`: decision 52, including the trunk-only paths. Tests: branch uses merge-base; on trunk with a session base uses it; gate on trunk uses the delta's first commit parent; uncommitted delta uses HEAD; `--base` wins.
-- [x] W41 `check`: decisions 51, 53. Output modes, `--require`. Tests: one per check and per requirement; silent when clean; exit codes.
-- [x] W42 `apply` and `refs`: decisions 55, 56. Tests: hook updates echo the content hash; preview writes nothing; refs statuses.
-- [x] W43 `stop` and `signal`: decisions 57, 58. Tests: Stop on a branch and on trunk; signal context once per session; signal silent on a clean edit; evidence signal names the claim.
-- [x] W44 `migrate`: decision 59. Tests: pinned, forced, base, checked-only fixtures; idempotent.
-- [x] W45 removals and `main.rs`: decision 60. Delete `repin.rs`, `attach.rs`, `transition.rs`, `validate.rs`, the old `base` command and their tests; keep shared helpers.
-- [x] W46 pack and plugin: `.lazyspec.toml` hooks (decision 54), templates, dictums, `plugin/hooks/hooks.json` (PostToolUse), delta and entry skills and every reference (write `@ref`, run `lemma check`, strike to change a claim, no re-pin), CI template with `--base`, README rewrite, version 2.0.0.
-- [x] Review fixes: `lemma stop` scopes check 3 to session-touched documents and to specs governing touched files (a pre-existing unresolved ref no longer blocks every session); README and DECISION-001 synced to the implementation (intent count output modes, signal pointers and failure exit, intersection rule for check 1, Stop as error).
-- [x] Review fixes (W47):
-  - Check 1 counts a delta that became `complete` in the range as covering, not only in-flight ones.
-  - Hook base: the delta-origin rule applies only to a payload with a transition, with the moved delta. The `validate` event skips checks 1 and 2 and the spec-edit rule.
-  - `evidence::changed`: a region absent at base is not a change (decision 51.2).
-  - Check 4: a spec's `behaviour` part must equal base folded with deltas completed in the range, else `spec behaviour edited outside a fold; change it through a delta`; a `governs`/`tests` change in the range is a warning. Signal reports both for the edited spec.
-  - Strikes silence check 2 only from a delta folding into the claim's spec, in that spec's part, that is in-progress or completed in the range.
-  - Stop completion rule compares against the session base and is said once per session; the dedupe helper (`say_once`) lives in `session.rs`.
-  - Performance: check 2 skips refs outside the changed files and caches regions per path and symbol; Stop resolves the range once; signal drops the `lazyspec --version` spawn and resolves the base only when the file is governed, referenced or a spec or delta file.
-  - Signal dedupes on stable keys, not rendered text.
-  - Pre-transition gates limit checks 1 and 2 to the moved delta's target specs.
-  - `.js`, `.jsx`, `.mjs` and `.cjs` route through the TypeScript extractor and grammar. `.tsx` keeps the TypeScript grammar for both extraction and normalisation: the lazyspec 0.15 extractor parses only with `LANGUAGE_TYPESCRIPT`.
-  - `migrate` rewrites a replacement (`@base` on an id the target spec holds) as a strike plus `<id>-R`, printing a line per rewrite.
-  - Trunk defaults to `main`, else `master`, else `origin/HEAD`; the CI template handles new-branch pushes and force-pushes.
-  - README and skills: legacy `migrate` messages, chore and refactor wording, intent count as a warning in `--json` and `--hook`.
-  - Re-review fixes:
-    - Default trunk prefers `origin/main`, `origin/master`, then the `origin/HEAD` target, alongside local `main`/`master`; when both exist the merge-base nearer to HEAD wins (stale local trunk, merged `origin/main`).
-    - CI template: push to the default branch uses `--base "$before"` only when it is an ancestor of HEAD, else `HEAD^`, else no check; other branches use `--trunk origin/<default>`.
-    - The moved delta's strikes count in a pre-transition payload (draft to in-progress gate) for check 2.
-    - Check 4 keeps folding only deltas completed in the range. Folding every `complete` delta re-added claims an earlier replacement had struck (a replacement whose new id already exists at base fails to re-fold and is dropped). The transition writes status and fold together; a fold committed apart from its completion is reported.
-    - Check 4 claim identity is the whole block minus `@ref`/`@base`/`@checked` lines, pins and `[intent]`; a ref held at the base (or by the fold) that is gone is an error, added refs are allowed.
-    - `migrate` rewrites `@base` replacements only in `draft`/`in-progress` deltas, and `-R` ids assigned earlier in the run are taken.
-- [ ] W47 review: whole-diff review against DECISION-001 and this plan.
-- [ ] W48 acceptance (human): hydra on 2.0 after `lemma migrate`; compare refusals and token cost against the 1.5 W37 baseline.
+**Review fixes (W47).**
+- Check 1 counts a delta that became `complete` in the range as covering, not only in-flight ones.
+- Hook base: the delta-origin rule applies only to a payload with a transition, with the moved delta. The `validate` event skips checks 1 and 2 and the spec-edit rule.
+- `evidence::changed`: a region absent at base is not a change (decision 51.2).
+- Check 4: a spec's `behaviour` part must equal base folded with deltas completed in the range, else `spec behaviour edited outside a fold; change it through a delta`; a `governs`/`tests` change in the range is a warning. Signal reports both for the edited spec.
+- Strikes silence check 2 only from a delta folding into the claim's spec, in that spec's part, that is in-progress or completed in the range.
+- Stop completion rule compares against the session base and is said once per session; the dedupe helper (`say_once`) lives in `session.rs`.
+- Performance: check 2 skips refs outside the changed files and caches regions per path and symbol; Stop resolves the range once; signal drops the `lazyspec --version` spawn and resolves the base only when the file is governed, referenced or a spec or delta file.
+- Signal dedupes on stable keys, not rendered text.
+- Pre-transition gates limit checks 1 and 2 to the moved delta's target specs.
+- `.js`, `.jsx`, `.mjs` and `.cjs` route through the TypeScript extractor and grammar. `.tsx` keeps the TypeScript grammar for both extraction and normalisation: the lazyspec 0.15 extractor parses only with `LANGUAGE_TYPESCRIPT`.
+- `migrate` rewrites a replacement (`@base` on an id the target spec holds) as a strike plus `<id>-R`, printing a line per rewrite.
+- Trunk defaults to `main`, else `master`, else `origin/HEAD`; the CI template handles new-branch pushes and force-pushes.
+- README and skills: legacy `migrate` messages, chore and refactor wording, intent count as a warning in `--json` and `--hook`.
+
+**Re-review fixes.**
+- Default trunk prefers `origin/main`, `origin/master`, then the `origin/HEAD` target, alongside local `main`/`master`; when both exist the merge-base nearer to HEAD wins (stale local trunk, merged `origin/main`).
+- CI template: push to the default branch uses `--base "$before"` only when it is an ancestor of HEAD, else `HEAD^`, else no check; other branches use `--trunk origin/<default>`.
+- The moved delta's strikes count in a pre-transition payload (draft to in-progress gate) for check 2.
+- Check 4 keeps folding only deltas completed in the range. Folding every `complete` delta re-added claims an earlier replacement had struck (a replacement whose new id already exists at base fails to re-fold and is dropped). The transition writes status and fold together; a fold committed apart from its completion is reported.
+- Check 4 claim identity is the whole block minus `@ref`/`@base`/`@checked` lines, pins and `[intent]`; a ref held at the base (or by the fold) that is gone is an error, added refs are allowed.
+- `migrate` rewrites `@base` replacements only in `draft`/`in-progress` deltas, and `-R` ids assigned earlier in the run are taken.
+
+Later: DELTA-008 (2.1) added markers, provenance and dictums as claim sites on top of this. DELTA-009 (3.0, DECISION-003) deleted fold: decisions 50 and 55 (immutable claims, strikes, `apply`), the `behaviour` parts and the check 4 fold and spec-edit rules went, and claims live in deltas while specs hold intent. It renamed `check` to `lint` with `--gate` in place of `--require`, replaced the pack hooks with `lint --hook` and `--gate` (decision 81), and made the history check (check 2) a warning with no strike exit. Refs stay unpinned, base resolution, coverage via in-flight or completed deltas, `signal` dedupe, `session-start` and `refs` carry on.

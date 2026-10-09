@@ -1,0 +1,6 @@
+- [x] T1 W80 record DECISION-004 (chore)
+- [x] T2 W81 review gate, basis enum, trailer, review summary (settles AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-26, AC-27, AC-28, AC-30)
+- [x] T3 W82 bounded fix round, resume, stops, record file (settles AC-13, AC-14, AC-15, AC-16, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25, AC-29, AC-31)
+- [x] T4 W83 drop in-progress review and review-diff (settles AC-32, AC-33, AC-34, AC-35)
+- [x] T5 W84 README, tally transcripts, version 3.2.0 (chore)
+- [x] T6 W85 whole-diff review against DECISION-004 (chore)
