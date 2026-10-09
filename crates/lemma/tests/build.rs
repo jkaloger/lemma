@@ -690,7 +690,7 @@ fn findings_go_back_to_the_builder_and_a_clean_second_review_commits() {
     assert!(run.stdout.contains("   review: clean\n"), "{}", run.stdout);
     assert_eq!(
         repo.git(&["log", "-1", "--format=%B"]).trim_end(),
-        "DELTA-001 T1: reopen\n\nLemma-Review: 2 findings fixed in 1 rounds"
+        "DELTA-001 T1: reopen\n\nLemma-Review: 2 findings fixed in 1 round"
     );
     assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
     assert_eq!(repo.git(&["status", "--porcelain"]), "");
@@ -745,7 +745,7 @@ fn findings_left_after_the_last_round_stop_with_a_list_and_a_record_file() {
     );
     assert!(
         run.stdout
-            .ends_with("   stopped. T1 left unticked after 1 fix rounds; working tree kept.\n"),
+            .ends_with("   stopped. T1 left unticked after 1 fix round; working tree kept.\n"),
         "{}",
         run.stdout
     );
@@ -855,6 +855,12 @@ fn a_fix_that_breaks_lint_stops_before_the_second_review() {
     assert_eq!(repo.read(".fixture/T1.rcalls").trim(), "1");
     assert_eq!(tasks(&repo), single_task());
     assert_eq!(repo.head(), before);
+    let record: Value =
+        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001-T1.json")).unwrap();
+    assert_eq!(
+        record["findings"],
+        json!([{"text": "back out the helper", "basis": "task"}])
+    );
 }
 
 #[test]
@@ -872,7 +878,7 @@ fn review_rounds_two_allows_two_fix_rounds() {
 
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout.contains("   review: 1 findings, fix round 2\n"),
+        run.stdout.contains("   review: 1 finding, fix round 2\n"),
         "{}",
         run.stdout
     );

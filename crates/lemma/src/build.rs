@@ -432,10 +432,21 @@ fn check_work(root: &Path, delta: &Doc, task: &Task) -> Result<(), Failure> {
     check_settled(root, &delta.id, task)
 }
 
+fn counted(n: usize, noun: &str) -> String {
+    match n {
+        1 => format!("1 {noun}"),
+        _ => format!("{n} {noun}s"),
+    }
+}
+
 fn trailer(findings: usize, rounds: u32) -> String {
     match rounds {
         0 => REVIEW_CLEAN.to_string(),
-        _ => format!("Lemma-Review: {findings} findings fixed in {rounds} rounds"),
+        _ => format!(
+            "Lemma-Review: {} fixed in {}",
+            counted(findings, "finding"),
+            counted(rounds as usize, "round")
+        ),
     }
 }
 
@@ -468,20 +479,29 @@ fn review_gate(
             return Ok(trailer(fixed, rounds));
         }
         if rounds == config.review_rounds {
-            println!("   review: {count} findings");
+            println!("   review: {}", counted(count, "finding"));
             let detail = verdict
                 .findings
                 .iter()
                 .map(|f| format!("   {}: {}", f.basis, f.text))
                 .collect();
-            let ending = format!("left unticked after {rounds} fix rounds");
+            let ending = format!(
+                "left unticked after {}",
+                counted(rounds as usize, "fix round")
+            );
             return Err(reviewed_stop(root, delta, task, &verdict, detail, ending));
         }
         rounds += 1;
         fixed += count;
-        println!("   review: {count} findings, fix round {rounds}");
-        run_fix(root, delta, task, built, &verdict.findings, config)?;
-        check_work(root, delta, task)?;
+        println!(
+            "   review: {}, fix round {rounds}",
+            counted(count, "finding")
+        );
+        run_fix(root, delta, task, built, &verdict.findings, config)
+            .and_then(|()| check_work(root, delta, task))
+            .inspect_err(|_| {
+                record_review(root, delta, task, &verdict);
+            })?;
     }
 }
 

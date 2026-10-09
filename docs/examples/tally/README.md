@@ -112,6 +112,8 @@ T1 add Entry and Balance types (settles AC-1)
    runner: 2m04s, 6 files
    lint: clean
    AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/8d2b6f40-51c3-4e7a-a0b9-6c3e1d7f2a58.jsonl" | jq -r '<filter>'
+   review: clean
    commit 3f1c9a2 DELTA-004 T1: add Entry and Balance types
 T2 balance endpoint (settles AC-2, AC-3)
    watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
@@ -120,44 +122,46 @@ T2 balance endpoint (settles AC-2, AC-3)
    stopped. T2 left unticked; working tree kept.
 ```
 
-Each task gets a fresh runner with the task line, `design.md`, the claims it settles, the dictums whose `governs` match, and the spec's intent. After the runner returns, lemma writes the refs it reports under their claims (a runner that edits a delta file or reports `blocked` stops the loop), `lint` runs, the settled claims' refs must resolve, the box is ticked and the task is committed. A failure stops the loop with the tree intact. Fix by hand or re-run; `build` resumes from the first unticked task.
+Each task gets a fresh runner with the task line, `design.md`, the claims it settles, the dictums whose `governs` match, and the spec's intent. After the runner returns, lemma writes the refs it reports under their claims (a runner that edits a delta file or reports `blocked` stops the loop), `lint` runs, the settled claims' refs must resolve, a reviewer judges the task's staged diff, the box is ticked and the task is committed. A failure stops the loop with the tree intact. Fix by hand or re-run; `build` resumes from the first unticked task.
+
+The reviewer reads the task, the claims it settles, the design, the convention, the dictums, the related documents and the delta's diff so far as read-only context. Each finding it reports cites a written basis: `task`, `design`, `convention`, a claim id, a dictum rule id or a related document id. Findings go back to the builder in a fix round, which resumes the build session when the runner command has `{session}`. `review_rounds` in `lemma.toml` bounds the rounds, default 1. Findings left after the last round stop the build:
+
+```
+   review: 1 finding
+   DICTUM-003 [DATA-4]: balance() loads every entry; aggregate in SQL
+   stopped. T2 left unticked after 1 fix round; working tree kept.
+```
+
+The findings are also written to `.git/lemma/reviews/DELTA-004-T2.json`. A reply with `stop` set ends the build at once with `stopped. T2 review: <reason>; working tree kept.`
 
 ```
 $ lemma build DELTA-004
-T2 balance endpoint (settles AC-2, AC-3)   resuming
+T2 balance endpoint (settles AC-2, AC-3)
    ...
+   lint: clean
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/c41e0a97-2b6d-4d38-8f15-a7b9e0d63c12.jsonl" | jq -r '<filter>'
+   review: 1 finding, fix round 1
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/5f0a93de-7c12-4b8e-9a64-d2e81b407c35.jsonl" | jq -r '<filter>'
+   fix: 41s, 2 files
+   lint: clean
+   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/e7390b1c-0d4a-4f52-b6e8-91a3c5d20f74.jsonl" | jq -r '<filter>'
+   review: clean
    commit 8ab0e11 DELTA-004 T2: balance endpoint
 T3 wire into router (chore)
+   ...
+   review: clean
    commit c42d7f0 DELTA-004 T3: wire into router
 all tasks complete
-next: lemma review DELTA-004 to review the diff, or lazyspec update DELTA-004 --status complete
+next: lazyspec update DELTA-004 --status complete
 ```
 
-### 5. Review the change
+Commit 8ab0e11 carries the trailer `Lemma-Review: 1 finding fixed in 1 round`. A commit with a clean first review carries `Lemma-Review: clean`.
 
-```
-$ lemma review DELTA-004
-DELTA-004 is in-progress: reviewing the diff against main
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
-2 follow-up tasks written
-next: delete the follow-ups you reject, then lemma build DELTA-004
-```
-
-A diff review writes tasks, not comments, because the fix is work:
-
-```
-## Follow-ups
-- [ ] T4 `balance()` loads every entry; DICTUM-003 [DATA-4] caps unbounded reads. Page or aggregate in SQL. (settles AC-2)
-- [ ] T5 `balance_sums_entries` asserts on a float; DICTUM-001 [TEST-5]. Use integer cents. (settles AC-1)
-```
-
-Delete the ones you disagree with. `lemma build DELTA-004` runs the rest.
-
-### 6. Complete
+### 5. Complete
 
 ```
 $ lazyspec update DELTA-004 --status complete
-lemma lint --gate complete: 5 tasks ticked, 4 claims, 3 refs resolve, 1 [intent], no review lines
+lemma lint --gate complete: 3 tasks ticked, 4 claims, 3 refs resolve, 1 [intent], no review lines
 DELTA-004 in-progress → complete
 ```
 
@@ -185,8 +189,8 @@ lemma never runs tests. CI does.
 
 ```
 lemma lint [<delta>] [--gate <status>] [--json]
-lemma review <delta>              draft: annotate the document; in-progress: review the diff
+lemma review <delta>              annotate a draft delta
 lemma plan <delta>                plan a reviewed draft into claims and tasks
-lemma build <delta> [--task T2]   run unticked tasks in order; stop on first failure
+lemma build <delta> [--task T2]   run unticked tasks in order, reviewing each; stop on first failure
 lemma signal | lemma stop | lemma session-start     hooks, not typed
 ```

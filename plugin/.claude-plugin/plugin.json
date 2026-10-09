@@ -1,6 +1,6 @@
 {
   "name": "lemma",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Claude Code hooks for lemma: per-edit context and lint signals, session bounds. Prerequisites: the `lemma` binary on PATH (`cargo install lemma`) and lazyspec.",
   "author": {
     "name": "Jack Kaloger"
