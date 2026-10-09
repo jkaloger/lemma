@@ -1,17 +1,16 @@
-# lemma
+<h1 align="center">
+  🤖
+  <br>λῆμμα
+</h1>
 
-lemma is a lazyspec workflow pack, a Claude Code plugin and a hooks binary for LLM-driven development. A human writes a delta describing intent, design and behaviour. lemma reviews it with an agent, plans it into tasks, runs each task in a fresh agent, has a reviewer judge each task's diff and commits it after its claims are supported by tests and the review is clean. Specs hold intent. Completed deltas retain the record of why their tests say what they say.
+Stepping stones for LLM assisted development.
 
-Design rationale is recorded in [docs/decisions](docs/decisions), chiefly [DECISION-001](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), [DECISION-003](docs/decisions/DECISION-003-nothing-folds-deltas-are-the-record-specs-hold-intent.md) and [DECISION-005](docs/decisions/DECISION-005-lemma-is-a-pack-a-rust-binary-and-a-plugin-under-one-version.md). lemma's intent is in [docs/specs](docs/specs); each release is a delta in [docs/deltas](docs/deltas). [docs/examples/tally](docs/examples/tally/README.md) demonstrates the workflow on a small project.
-
-## Synopsis
+Lemma is my opinionated approach to using LLMs in software engineering. It prioritises small, verifiable changes over larger orchestration/software factory patterns.
 
 ```sh
-lazyspec init --template https://github.com/jkaloger/lemma   # or a directory: /path/to/lemma
-lazyspec hook trust
-claude plugin install lemma@lemma
-cargo install lemma
+lemma [command] [options]
 
+# usage
 lemma lint [<delta>] [--gate in-progress|complete] [--base <rev>] [--trunk <name>] [--json|--hook]
 lemma review <delta> [--dry-run]
 lemma plan <delta> [--dry-run]
@@ -22,25 +21,25 @@ lemma session-start | lemma signal | lemma stop
 
 ## Description
 
-lemma has three parts, released together under one version number. This document describes version 3.2.0.
+lemma has three parts
 
-The **pack** contains `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies the pack into a project.
+- The **pack** contains `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies the pack into a project.
 
-The **plugin** is a Claude Code plugin containing hook entries.
+- The **plugin** is a Claude Code plugin containing hook entries.
 
-The **binary** is a Rust executable named `lemma`. It links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; lemma does not define lifecycle rules. Orchestration runs agents as child processes and reads their JSON output without a shell layer.
+- The **binary** is a Rust executable named `lemma`. It links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; lemma does not define lifecycle rules. Orchestration runs agents as child processes and reads their JSON output without a shell layer.
 
 lemma checks change coverage, document shape and the connection between claims and tests. The test runner and CI own test results. Human review determines whether a test proves its claim. lemma does not run tests.
 
 ## Document types
 
-| Type | Statuses | Written by |
-| --- | --- | --- |
-| `spec` | `draft` → `active` | humans |
-| `delta` | `draft` → `in-progress` → `complete` | humans; agents annotate, plan and build |
-| `decision` | `proposed` → `accepted` → `superseded` | humans and agents; accepted decisions are immutable |
-| `convention` | `draft` → `accepted` | humans |
-| `dictum` | `draft` → `accepted` | humans |
+| Type         | Statuses                               | Written by                                          |
+| ------------ | -------------------------------------- | --------------------------------------------------- |
+| `spec`       | `draft` → `active`                     | humans                                              |
+| `delta`      | `draft` → `in-progress` → `complete`   | humans; agents annotate, plan and build             |
+| `decision`   | `proposed` → `accepted` → `superseded` | humans and agents; accepted decisions are immutable |
+| `convention` | `draft` → `accepted`                   | humans                                              |
+| `dictum`     | `draft` → `accepted`                   | humans                                              |
 
 A **spec** is an `index.md` with `## Intent`, `## Constraints`, `## Non-goals` and `## Open questions`, a `governs` list of globs and an optional `tests` list of globs. Specs hold no claims. A change under a spec's `governs` globs makes the spec drift-stale. When `tests` is absent, it defaults to `**/tests/**`, `**/*_test.*`, `**/*.test.*` and `**/*.spec.*`.
 
@@ -54,12 +53,12 @@ A **convention** and **dictum** state rules applied to every change. Dictum rule
 
 A delta contains four parts:
 
-| Part | Contents |
-| --- | --- |
-| `index.md` | Frontmatter (`changes`, `related`), `## Intent` and `## Out of scope` |
-| `design.md` | Prose; an `@ref` line is a shape error |
-| `claims.md` | Claims; the file has no heading |
-| `tasks.md` | Ordered checklist, followed optionally by `## Follow-ups` with the same grammar |
+| Part        | Contents                                                                        |
+| ----------- | ------------------------------------------------------------------------------- |
+| `index.md`  | Frontmatter (`changes`, `related`), `## Intent` and `## Out of scope`           |
+| `design.md` | Prose; an `@ref` line is a shape error                                          |
+| `claims.md` | Claims; the file has no heading                                                 |
+| `tasks.md`  | Ordered checklist, followed optionally by `## Follow-ups` with the same grammar |
 
 A **claim** is a list item with an id unique within the delta:
 
@@ -80,6 +79,7 @@ A **task** settles claims or records a chore:
 - [ ] T3 wire route into the router (chore)
 
 ## Follow-ups
+
 - [ ] T4 page the read in `balance()` (settles AC-2)
 ```
 
@@ -147,11 +147,11 @@ After the runner, lint and settled-claim checks pass, lemma runs `git add -A` an
 
 The reviewer reply is `{"stop":"<reason or empty>","findings":[{"text","basis"}]}`. `basis` must be `task`, `design`, a live claim id, a live dictum rule id or a related document id other than `changes`. A reply with another basis fails with `review: reviewer reply: unknown basis` and the invalid basis.
 
-| Reply | Effect |
-| --- | --- |
+| Reply                     | Effect                                                   |
+| ------------------------- | -------------------------------------------------------- |
 | Empty `stop`, no findings | Prints `review: clean`; the task is ticked and committed |
-| Empty `stop`, findings | Runs a fix round, up to `review_rounds` times |
-| Non-empty `stop` | Stops the build without a fix round |
+| Empty `stop`, findings    | Runs a fix round, up to `review_rounds` times            |
+| Non-empty `stop`          | Stops the build without a fix round                      |
 
 The prompt directs the reviewer to report work outside the task as a finding with basis `task`, and to set `stop` when the task conflicts with `design.md`.
 
@@ -159,18 +159,18 @@ The prompt directs the reviewer to report work outside the task as a finding wit
 
 A fix round prints `review: <n> findings, fix round <k>`, then runs the builder with the `fix` prompt. The prompt lists findings as `- [<basis>] <text>`. Its reply uses the build schema. The fix reply replaces the task's refs; refs are written onto claim lines as they stood before the task ran. The build reply checks apply again, followed by lint, settled-claim checks and another review gate.
 
-| Runner configuration | Fix round command |
-| --- | --- |
+| Runner configuration                           | Fix round command                                                                                    |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `runner` and `resume` both contain `{session}` | The `resume` command, with `{session}` set to the build call's session id and the `fix` prompt alone |
-| Either command lacks `{session}` | The `runner` command in a fresh run, with the `build` prompt followed by the `fix` prompt |
+| Either command lacks `{session}`               | The `runner` command in a fresh run, with the `build` prompt followed by the `fix` prompt            |
 
 `review_rounds` is the maximum number of fix rounds per task and defaults to 1. If findings remain after the final round, build stops without committing.
 
-| Stop cause | Output |
-| --- | --- |
+| Stop cause                            | Output                                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | Findings remain after `review_rounds` | Finding count and basis lines, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
-| Reviewer returns `stop` | `stopped. T<n> review: <reason>; working tree kept.` |
-| A fix round fails a check | Check failure lines, then `stopped. T<n> left unticked; working tree kept.` |
+| Reviewer returns `stop`               | `stopped. T<n> review: <reason>; working tree kept.`                                                       |
+| A fix round fails a check             | Check failure lines, then `stopped. T<n> left unticked; working tree kept.`                                |
 
 Each stop exits 2 and preserves the working tree, including staged work. A rerun resumes at the first unticked task. When a stop leaves findings open, they are written to `<git-dir>/lemma/reviews/<delta>-T<n>.json` as `{"stop","findings":[{"text","basis"}]}`. This includes reviewer stops and fix-round failures caused by a blocked reply, part edit, bad ref, lint or settled-claim check. The file is not committed and is overwritten by the next stop for that task. `tasks.md` and `claims.md` are not modified by the stop record.
 
@@ -190,12 +190,12 @@ These commands are Claude Code hooks; they are not typed as part of the workflow
 
 `lemma signal` reads the `PostToolUse` payload for `Edit`, `Write` and `MultiEdit`, then returns `additionalContext` scoped to the touched file:
 
-| Condition | Output |
-| --- | --- |
-| First touch of a governed area in a session | Pointers to governing specs, affecting or constraining decisions, dictums, in-flight deltas that change a governing spec (including bundle directory and parts), and those deltas' related documents |
-| File referenced by a landed delta or dictum | History or dictum finding |
-| File adds an uncovered area | Coverage finding |
-| File is a spec, dictum or in-flight delta part | Findings for that document |
+| Condition                                      | Output                                                                                                                                                                                               |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First touch of a governed area in a session    | Pointers to governing specs, affecting or constraining decisions, dictums, in-flight deltas that change a governing spec (including bundle directory and parts), and those deltas' related documents |
+| File referenced by a landed delta or dictum    | History or dictum finding                                                                                                                                                                            |
+| File adds an uncovered area                    | Coverage finding                                                                                                                                                                                     |
+| File is a spec, dictum or in-flight delta part | Findings for that document                                                                                                                                                                           |
 
 Each message is emitted once per session using a stable identity and recorded in `<git-dir>/lemma/sessions/<session_id>.said`. `lemma signal` exits 0 on failure.
 
@@ -203,23 +203,23 @@ Each message is emitted once per session using a stable identity and recorded in
 
 ## Checks
 
-| Check | Rule | Severity |
-| --- | --- | --- |
-| coverage | Changed governed files are not all within one spec's `governs`; a touched spec has no in-flight delta changing it and no delta changing it completed within the range | error |
-| history | A test changed whose region is claimed by a landed delta: `test <path>::<symbol> changed; DELTA-004/AC-2 claims it; confirm intended` | warning |
-| dictum | A test changed that a dictum rule references, and the range does not strike the rule and add a new id | error |
-| evidence | A ref does not resolve or is not a test. At `--gate complete`, a non-`[intent]` claim has no ref | error |
-| shape | Document and transition rules below are violated | error |
+| Check    | Rule                                                                                                                                                                  | Severity |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| coverage | Changed governed files are not all within one spec's `governs`; a touched spec has no in-flight delta changing it and no delta changing it completed within the range | error    |
+| history  | A test changed whose region is claimed by a landed delta: `test <path>::<symbol> changed; DELTA-004/AC-2 claims it; confirm intended`                                 | warning  |
+| dictum   | A test changed that a dictum rule references, and the range does not strike the rule and add a new id                                                                 | error    |
+| evidence | A ref does not resolve or is not a test. At `--gate complete`, a non-`[intent]` claim has no ref                                                                      | error    |
+| shape    | Document and transition rules below are violated                                                                                                                      | error    |
 
 A **landed** delta is `complete` and was not completed within the checked range. A test region is the referenced symbol, including attributes. Rust files use the Rust extractor. TypeScript and JavaScript files with extensions `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` use the TypeScript extractor. Other files are compared as a whole. Formatting and comments are normalised away. A region absent at the base is not considered changed.
 
 Shape rules for a named delta:
 
-| When | Rules |
-| --- | --- |
-| Always | Claim ids use `AC-<n>` and are unique; task ids are unique; task lines match the grammar; tasks settle only existing claims; `design.md` has no `@ref`; `[proposed]` and `[intent]` are not combined |
-| `--gate in-progress` | Always rules; non-empty `Intent`; at least one claim; every claim has an id; each claim is settled by exactly one main task; no review lines in any part; no `[proposed]` claims |
-| `--gate complete` | In-progress rules; every task, including follow-ups, is ticked; every claim has a resolving ref or is `[intent]` |
+| When                 | Rules                                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Always               | Claim ids use `AC-<n>` and are unique; task ids are unique; task lines match the grammar; tasks settle only existing claims; `design.md` has no `@ref`; `[proposed]` and `[intent]` are not combined |
+| `--gate in-progress` | Always rules; non-empty `Intent`; at least one claim; every claim has an id; each claim is settled by exactly one main task; no review lines in any part; no `[proposed]` claims                     |
+| `--gate complete`    | In-progress rules; every task, including follow-ups, is ticked; every claim has a resolving ref or is `[intent]`                                                                                     |
 
 Invalid `governs` or `tests` globs are errors. An unknown `{{key}}` in a pack prompt is an error.
 
@@ -244,13 +244,13 @@ review_rounds = 1
 timeout  = 1800
 ```
 
-| Key | Default | Effect |
-| --- | --- | --- |
-| `runner` | `claude -p --session-id {session} --output-format json --json-schema {schema}` | Command run for each build task |
-| `reviewer` | Value of `runner` | Command run by `lemma review`, `lemma plan` and the build review gate |
-| `resume` | `claude -p --resume {session} --output-format json --json-schema {schema}` | Command for a fix round when both `runner` and `resume` contain `{session}` |
-| `review_rounds` | `1` | Maximum fix rounds per task |
-| `timeout` | `1800` | Run timeout in seconds |
+| Key             | Default                                                                        | Effect                                                                      |
+| --------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `runner`        | `claude -p --session-id {session} --output-format json --json-schema {schema}` | Command run for each build task                                             |
+| `reviewer`      | Value of `runner`                                                              | Command run by `lemma review`, `lemma plan` and the build review gate       |
+| `resume`        | `claude -p --resume {session} --output-format json --json-schema {schema}`     | Command for a fix round when both `runner` and `resume` contain `{session}` |
+| `review_rounds` | `1`                                                                            | Maximum fix rounds per task                                                 |
+| `timeout`       | `1800`                                                                         | Run timeout in seconds                                                      |
 
 Unknown keys are errors. Commands are split into words on whitespace; single and double quotes group words. No shell is involved. Prompts are written to stdin, and the working directory is the repository root. Each run receives a JSON Schema for its reply. The schema uses draft-07, `additionalProperties: false` and requires all fields.
 
@@ -264,18 +264,18 @@ Before each agent call, lemma prints a watch command for the transcript. Run it 
 
 `.lazyspec/prompts/review-doc.md`, `plan.md`, `build.md`, `review-task.md` and `fix.md` are rendered for each run. The binary includes the same defaults and uses pack prompts when present.
 
-| Key | Value |
-| --- | --- |
-| `convention` | Convention body |
-| `dictums` | Dictums without `governs`, and dictums whose `governs` overlap a changed spec's `governs`; all dictums when none qualify |
-| `spec_intent` | Each changed spec's `index.md` body |
-| `related` | Body of each related document except those linked by `changes` |
-| `delta`, `design`, `claims`, `tasks` | Delta parts |
-| `task` | Task line and claims it settles (`build`, `review-task`) |
-| `resolved` | Deleted findings as `- [<part> / <anchor>] <text>`, or `(none)` (`review-doc`) |
-| `task_diff` | `git diff --cached HEAD` after `git add -A` (`review-task`) |
-| `delta_diff` | `git diff <base> HEAD` (`review-task`) |
-| `findings` | Review findings as `- [<basis>] <text>` (`fix`) |
+| Key                                  | Value                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `convention`                         | Convention body                                                                                                          |
+| `dictums`                            | Dictums without `governs`, and dictums whose `governs` overlap a changed spec's `governs`; all dictums when none qualify |
+| `spec_intent`                        | Each changed spec's `index.md` body                                                                                      |
+| `related`                            | Body of each related document except those linked by `changes`                                                           |
+| `delta`, `design`, `claims`, `tasks` | Delta parts                                                                                                              |
+| `task`                               | Task line and claims it settles (`build`, `review-task`)                                                                 |
+| `resolved`                           | Deleted findings as `- [<part> / <anchor>] <text>`, or `(none)` (`review-doc`)                                           |
+| `task_diff`                          | `git diff --cached HEAD` after `git add -A` (`review-task`)                                                              |
+| `delta_diff`                         | `git diff <base> HEAD` (`review-task`)                                                                                   |
+| `findings`                           | Review findings as `- [<basis>] <text>` (`fix`)                                                                          |
 
 The `plan` prompt includes claim ids assigned by lemma. The `build` prompt directs the runner not to edit delta parts; lemma writes refs from the reply. Unknown prompt keys prevent `review`, `plan` and `build` at startup. A pack prompt without `{{resolved}}` remains valid; exact-match finding suppression still applies.
 
@@ -283,11 +283,11 @@ Two glob lists overlap when they share a glob, when one glob matches the other's
 
 ### Pack hooks
 
-| Event | Transition | Runs |
-| --- | --- | --- |
-| `validate` | — | `lemma lint --hook` |
-| `pre-transition` | `draft` → `in-progress` | `lemma lint --hook --gate in-progress` |
-| `pre-transition` | `in-progress` → `complete` | `lemma lint --hook --gate complete` |
+| Event            | Transition                 | Runs                                   |
+| ---------------- | -------------------------- | -------------------------------------- |
+| `validate`       | —                          | `lemma lint --hook`                    |
+| `pre-transition` | `draft` → `in-progress`    | `lemma lint --hook --gate in-progress` |
+| `pre-transition` | `in-progress` → `complete` | `lemma lint --hook --gate complete`    |
 
 The plugin's `hooks.json` registers `SessionStart` → `lemma session-start`, `PostToolUse` (`Edit|Write|MultiEdit`) → `lemma signal`, and `Stop` → `lemma stop`. Each hook is a no-op when `lemma` is not on `PATH`.
 
