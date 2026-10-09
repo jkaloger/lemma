@@ -1,12 +1,12 @@
 # lemma
 
-A lazyspec workflow pack, a Claude Code plugin and a hooks binary for LLM-driven development. A human writes a delta: intent, design and behaviour. lemma reviews it with an agent, plans it into tasks, runs each task in a fresh agent, has a reviewer judge the task's diff and commits it once its claims are proved by tests and the review is clean. Specs hold intent only. Nothing folds: a completed delta is the record of why its tests say what they say.
+lemma is a lazyspec workflow pack, a Claude Code plugin and a hooks binary for LLM-driven development. A human writes a delta describing intent, design and behaviour. lemma reviews it with an agent, plans it into tasks, runs each task in a fresh agent, has a reviewer judge each task's diff and commits it after its claims are supported by tests and the review is clean. Specs hold intent. Completed deltas retain the record of why their tests say what they say.
 
-Design rationale is recorded in [docs/decisions](docs/decisions), chiefly [DECISION-001](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), [DECISION-003](docs/decisions/DECISION-003-nothing-folds-deltas-are-the-record-specs-hold-intent.md) and [DECISION-005](docs/decisions/DECISION-005-lemma-is-a-pack-a-rust-binary-and-a-plugin-under-one-version.md). lemma's own intent is in [docs/specs](docs/specs) and each release is a delta in [docs/deltas](docs/deltas). This document states behaviour. [docs/examples/tally](docs/examples/tally/README.md) shows the workflow on a small project.
+Design rationale is recorded in [docs/decisions](docs/decisions), chiefly [DECISION-001](docs/decisions/DECISION-001-lemma-is-a-signal-source-not-a-verifier.md), [DECISION-003](docs/decisions/DECISION-003-nothing-folds-deltas-are-the-record-specs-hold-intent.md) and [DECISION-005](docs/decisions/DECISION-005-lemma-is-a-pack-a-rust-binary-and-a-plugin-under-one-version.md). lemma's intent is in [docs/specs](docs/specs); each release is a delta in [docs/deltas](docs/deltas). [docs/examples/tally](docs/examples/tally/README.md) demonstrates the workflow on a small project.
 
 ## Synopsis
 
-```
+```sh
 lazyspec init --template https://github.com/jkaloger/lemma   # or a directory: /path/to/lemma
 lazyspec hook trust
 claude plugin install lemma@lemma
@@ -22,58 +22,60 @@ lemma session-start | lemma signal | lemma stop
 
 ## Description
 
-lemma has three parts, released together under one version number. This document describes 3.2.0.
+lemma has three parts, released together under one version number. This document describes version 3.2.0.
 
-The **pack** is a `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies it into a project.
+The **pack** contains `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies the pack into a project.
 
-The **plugin** is a Claude Code plugin carrying hook entries only.
+The **plugin** is a Claude Code plugin containing hook entries.
 
-The **binary** is a single Rust executable, `lemma`. It links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; lemma holds no lifecycle knowledge. Orchestration runs agents as child processes and reads their JSON output; there is no shell layer.
+The **binary** is a Rust executable named `lemma`. It links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; lemma does not define lifecycle rules. Orchestration runs agents as child processes and reads their JSON output without a shell layer.
 
-lemma is one signal source in a stack. It owns change coverage, document shape and the connection between claims and tests. The test runner and CI own test results. Human review owns whether a test proves its claim. lemma never runs tests.
+lemma checks change coverage, document shape and the connection between claims and tests. The test runner and CI own test results. Human review determines whether a test proves its claim. lemma does not run tests.
 
 ## Document types
 
-| Type         | Statuses                               | Written by                                 |
-| ------------ | -------------------------------------- | ------------------------------------------ |
-| `spec`       | `draft` → `active`                     | humans                                     |
-| `delta`      | `draft` → `in-progress` → `complete`   | humans; agents annotate, plan and build    |
-| `decision`   | `proposed` → `accepted` → `superseded` | humans and agents; not edited once accepted |
-| `convention` | `draft` → `accepted`                   | humans                                     |
-| `dictum`     | `draft` → `accepted`                   | humans                                     |
+| Type | Statuses | Written by |
+| --- | --- | --- |
+| `spec` | `draft` → `active` | humans |
+| `delta` | `draft` → `in-progress` → `complete` | humans; agents annotate, plan and build |
+| `decision` | `proposed` → `accepted` → `superseded` | humans and agents; accepted decisions are immutable |
+| `convention` | `draft` → `accepted` | humans |
+| `dictum` | `draft` → `accepted` | humans |
 
-A **spec** is an `index.md` with `## Intent`, `## Constraints`, `## Non-goals` and `## Open questions`, a `governs` list of globs and an optional `tests` list of globs. It holds no claims. A change under its `governs` makes it drift-stale. When `tests` is absent it defaults to `**/tests/**`, `**/*_test.*`, `**/*.test.*` and `**/*.spec.*`.
+A **spec** is an `index.md` with `## Intent`, `## Constraints`, `## Non-goals` and `## Open questions`, a `governs` list of globs and an optional `tests` list of globs. Specs hold no claims. A change under a spec's `governs` globs makes the spec drift-stale. When `tests` is absent, it defaults to `**/tests/**`, `**/*_test.*`, `**/*.test.*` and `**/*.spec.*`.
 
-A **delta** is the unit of work. It links each spec it changes with the relationship `changes` (`related: [- changes: SPEC-002]`); the edge `delta-changes-spec` is required. A delta is **in flight** while `draft` or `in-progress`. A `complete` delta is immutable.
+A **delta** is the unit of work. It links each changed spec using the `changes` relationship, for example `related: [- changes: SPEC-002]`. The `delta-changes-spec` edge is required. A delta is in flight while `draft` or `in-progress`. A `complete` delta is immutable.
 
-A **decision** records one choice and links what it affects or constrains. A superseding decision links the one it replaces.
+A **decision** records one choice and links the documents it affects or constrains. A superseding decision links the decision it replaces.
 
-The **convention** and **dictums** state the rules a project holds every change to. A dictum's rules are claims, edited by hand. When a test a rule refs must change, the rule is struck (`- ~~[ID]~~`) and a new id added in the same change.
+A **convention** and **dictum** state rules applied to every change. Dictum rules are claims edited by hand. When a referenced test must change, the rule is struck (`- ~~[ID]~~`) and a new id is added in the same change.
 
 ## Delta parts
 
-A delta is a bundle of four parts.
+A delta contains four parts:
 
-| Part        | Contents                                                                                        |
-| ----------- | ----------------------------------------------------------------------------------------------- |
-| `index.md`  | Frontmatter (`changes`, `related`), `## Intent`, `## Out of scope`                              |
-| `design.md` | Prose. An `@ref` line here is a shape error                                                     |
-| `claims.md` | Claims. The part is the section; it has no heading                                              |
-| `tasks.md`  | An ordered checklist, then an optional `## Follow-ups` section with the same grammar             |
+| Part | Contents |
+| --- | --- |
+| `index.md` | Frontmatter (`changes`, `related`), `## Intent` and `## Out of scope` |
+| `design.md` | Prose; an `@ref` line is a shape error |
+| `claims.md` | Claims; the file has no heading |
+| `tasks.md` | Ordered checklist, followed optionally by `## Follow-ups` with the same grammar |
 
-A **claim** is a list item with an id `AC-<n>`, unique within the delta:
+A **claim** is a list item with an id unique within the delta:
 
-```
+```md
 - [AC-1] The balance of an account is the sum of its entries in minor units.
   @ref tests/ledger.rs#balance_sums_entries
 - [AC-4] [intent] A balance read of one account costs one query regardless of entry count.
 ```
 
-A claim is written first as a plain bullet without an id; `lemma plan` assigns ids. The markers `[intent]` (no test can settle the claim) and `[proposed]` (added by the planner, awaiting the human) follow the id and are mutually exclusive. A **ref** is an `@ref <path>#<symbol>` line indented under a claim, naming a test file that matches a changed spec's `tests` globs and a symbol in it. An `@per <citation>` line is read as a citation and otherwise ignored. A claim is cited outside its delta as `DELTA-004/AC-2`; a dictum rule by its id.
+A claim starts as a plain bullet without an id. `lemma plan` assigns ids. The `[intent]` marker means no test can settle the claim. `[proposed]` marks behaviour added by the planner for human review. The markers are mutually exclusive.
 
-A **task** settles claims or is a chore:
+A **ref** is an indented `@ref <path>#<symbol>` line under a claim. It names a test file matching a changed spec's `tests` globs and a symbol in that file. An `@per <citation>` line is treated as a citation and otherwise ignored. A claim is cited outside its delta as `DELTA-004/AC-2`; a dictum rule is cited by its id.
 
-```
+A **task** settles claims or records a chore:
+
+```md
 - [ ] T1 add `Balance` type and the `SUM` query (settles AC-1)
 - [ ] T3 wire route into the router (chore)
 
@@ -81,198 +83,154 @@ A **task** settles claims or is a chore:
 - [ ] T4 page the read in `balance()` (settles AC-2)
 ```
 
-Ids `T<n>` are unique within the delta. A checkbox line that does not match this grammar is a shape error.
+Task ids (`T<n>`) are unique within a delta. A checkbox line that does not match this grammar is a shape error.
 
-A **review line** is an annotation an agent writes and a human deletes to resolve: `@review <text>` indented under a claim or task, or `> review: <text>` as a blockquote at the end of a section.
+A **review line** is an agent annotation for a human to resolve and delete. It is written as `@review <text>` under a claim or task, or as `> review: <text>` at the end of a section.
 
 ## Workflow
 
-1. A human creates the delta, writes `Intent`, `Out of scope`, design prose and claims as plain bullets, and links the specs it changes.
-2. `lemma review <delta>` on a `draft` delta runs the reviewer. Findings are written as review lines. The human edits the delta, deletes each review line it resolves and runs `lemma review` again. Review never plans; the human decides when review is done.
-3. `lemma plan <delta>` plans a `draft` delta with no review lines left: bullets receive ids, missing behaviour is appended as `[proposed]` claims and tasks are appended to `tasks.md`. The human reads the diff, deletes or accepts each `[proposed]` tag, and runs `lemma build`, which offers the move to `in-progress`.
-4. `lemma build <delta>` runs each unticked task in a fresh runner, reviews the task's diff and commits it.
+1. A human creates a delta, writes its intent, scope, design and claims as plain bullets, and links the specs it changes.
+2. `lemma review <delta>` reviews a `draft` delta. Findings are written as review lines. The human edits the delta, deletes each resolved review line and runs review again. Review does not plan.
+3. `lemma plan <delta>` plans a `draft` delta with no review lines. It assigns claim ids, appends missing behaviour as `[proposed]` claims and adds tasks. The human reviews the diff, accepts or removes each `[proposed]` tag, then runs `lemma build` to offer the move to `in-progress`.
+4. `lemma build <delta>` runs each unticked task in a fresh runner, reviews the task diff and commits it.
 5. `lazyspec update <id> --status complete` moves the delta to `complete`.
 
-```
-$ lemma review DELTA-004
-DELTA-004 is draft: reviewing the document
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
-3 review lines written
-next: resolve each review line (edit, then delete the line) and run lemma review DELTA-004 again, or lemma plan DELTA-004 once none remain
-
-$ lemma review DELTA-004
-DELTA-004 is draft: reviewing the document
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
-review clean
-next: lemma plan DELTA-004
-
-$ lemma plan DELTA-004
-review clean, planning
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
-claims.md: 4 claims tagged AC-1..AC-4, 1 [proposed]
-tasks.md: 3 tasks written
-index.md: frontmatter and headings tidied
-next: read the diff, accept or reject each [proposed] claim, then lemma build DELTA-004
-```
-
-The human types four commands: `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`, the last only for `complete`. `lemma review` applies to `draft` deltas; `lemma build` reviews each task of an `in-progress` one. Every lemma command that does work ends with a `next:` line naming the next step; errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none.
+The human runs `lemma review`, `lemma plan`, `lemma build` and `lazyspec update`; the last command applies only to completion. `lemma review` applies to `draft` deltas. `lemma build` reviews each task in an `in-progress` delta. Every work-performing lemma command ends with a `next:` line naming the next step. Errors, `--dry-run` prompts, `lint`, `refs` and hooks print no `next:` line.
 
 ## Commands
 
 ### lint
 
-`lemma lint` runs the coverage, history and dictum checks on the working tree against the base, and check 3 on dictums. Given a delta, it also runs the evidence and shape checks for that delta. `--gate <status>` adds the rules of the transition into `in-progress` or `complete`, and requires a delta outside hook mode. Output is `path:line: severity: message`, one line per finding, empty when clean. `--json` prints `{"findings": [...]}`. Exit status is 2 on an error finding, else 0. An unknown delta or gate exits 2.
+`lemma lint` runs coverage, history and dictum checks on the working tree against the base, and dictum check 3. With a delta argument, it also runs that delta's evidence and shape checks. `--gate <status>` applies the rules for transition to `in-progress` or `complete` and requires a delta outside hook mode. Output uses `path:line: severity: message`, one finding per line; clean output is empty. `--json` prints `{"findings": [...]}`. Exit status is 2 when an error finding exists and 0 otherwise. An unknown delta or gate exits 2.
 
-`--hook` reads a lazyspec payload on stdin, prints findings JSON, exits 0 and is scoped to the payload's documents. The `validate` event has no range, so coverage, history and dictum checks are skipped. A pre-transition payload ranges from the moved delta's base; coverage and dictum findings are limited to the specs the moved delta changes, and history findings pass through. A finding about a document outside the payload carries its path in the message instead of an id.
+`--hook` reads a lazyspec payload from stdin, prints findings as JSON and exits 0. Checks are scoped to payload documents. The `validate` event has no range, so coverage, history and dictum checks are skipped. For a pre-transition payload, the range starts at the moved delta's base. Coverage and dictum findings are limited to specs changed by that delta; history findings pass through. A finding about a document outside the payload includes its path in the message instead of an id.
 
 ### review
 
-`lemma review <delta>` on a `draft` delta renders the `review-doc` prompt and runs the reviewer. The reply is `{"findings":[{"part","anchor","text"}]}`, and its schema is built from the delta: `part` is `index`, `design`, `claims` or `tasks`, and `anchor` is limited to what that part accepts, a claim id, the exact text of a claim with no id, a task id, a heading's text, or the part name for the whole part. Every anchor is resolved before anything is written; an unknown anchor is an error naming it and nothing is written. An identical line under the same anchor is not written twice. Review never plans. With no findings it prints `review clean`, or `review clean; <n> review lines remain` when review lines are left.
+`lemma review <delta>` reviews a `draft` delta using the rendered `review-doc` prompt. The reply has the form `{"findings":[{"part","anchor","text"}]}`. The schema is built from the delta. `part` is `index`, `design`, `claims` or `tasks`. `anchor` must be accepted for that part: a claim id, the exact text of an unnumbered claim, a task id, a heading's text, or the part name for the whole part. All anchors are resolved before writing; an unknown anchor is an error and writes nothing. An identical review line under the same anchor is not written twice. Review does not plan. With no new findings, it prints `review clean`, or `review clean; <n> review lines remain` when review lines remain.
 
-When a draft review writes review lines, each written finding `{part, anchor, text}` is appended to `<git-dir>/lemma/reviews/<delta-id>.json`, without duplicates; the file is not committed. At the start of each draft review, a recorded finding whose text no longer appears in its part is resolved: the human deleted it. Resolved findings fill the `{{resolved}}` prompt value, and a reviewer finding with the same part, anchor and normalised text as a resolved one is dropped.
+Draft findings are appended without duplicates to `<git-dir>/lemma/reviews/<delta-id>.json`; the file is not committed. At the start of each draft review, a recorded finding whose text no longer appears in its part is treated as resolved. Resolved findings populate `{{resolved}}`, and an identical finding from the reviewer is dropped.
 
-On an `in-progress` delta, `lemma review` is an error: `review needs a draft delta; <id> is in-progress, and lemma build reviews each task`. Any other status is also an error.
+Reviewing an `in-progress` delta fails with `review needs a draft delta; <id> is in-progress, and lemma build reviews each task`. Other statuses also fail.
 
 ### plan
 
-`lemma plan <delta>` requires a `draft` delta, else it is an error (`plan needs a draft delta; <id> is <status>`). It refuses while any part has review lines (`<n> review lines remain; resolve them before planning`) and does not run the reviewer. `--dry-run` prints the assembled `plan` prompt and exits.
+`lemma plan <delta>` requires a `draft` delta. Otherwise it reports `plan needs a draft delta; <id> is <status>`. It refuses while review lines remain and does not run the reviewer. `--dry-run` prints the assembled `plan` prompt.
 
-Planning first assigns `AC-<n>` to every bullet without an id, in document order, its text unchanged, in memory, and renders the `plan` prompt from that, so the planner sees the ids and does not echo claims. The reply is `{"claims":[{"text"}],"tasks":[{"text","settles":[..]}]}`. `claims` holds only new behaviour, each appended as `- [AC-<n>] [proposed] <text>`; one whose text equals an existing claim maps to that claim's id instead. A task's `settles` entries are an existing claim id or the position, from 1, of a claim in the reply's `claims`; an unresolvable entry is an error. Nothing is written, including the new ids, unless the reply is accepted. Tasks are numbered after the highest existing `T<n>` and appended after the main tasks, before `## Follow-ups`. Frontmatter keys are reordered to `title, type, status, author, date, tags, related`, then the rest; `Intent` and `Out of scope` headings are normalised to `##`. Planning refuses when any task is ticked. A delta whose bullets all have ids and whose claims are all settled is only tidied and prints `already planned`.
+Planning assigns `AC-<n>` to each unnumbered claim in document order, without changing its text, in memory before rendering the prompt. The planner reply has the form `{"claims":[{"text"}],"tasks":[{"text","settles":[..]}]}`. New behaviour is appended as `- [AC-<n>] [proposed] <text>`. A reply claim matching existing claim text maps to that claim's id. A task's `settles` entries name an existing claim id or a one-based position in the reply's `claims`; an unresolved entry is an error. Nothing is written unless the reply is accepted. Tasks are numbered after the highest existing `T<n>` and inserted after main tasks, before `## Follow-ups`.
 
-`--dry-run` prints the assembled prompt and exits; on `plan` it prints the `plan` prompt.
-
-Every command that does work ends with a final stdout line `next: <step>`, using the delta id: after `review`, `plan` and `build`. Errors, `--dry-run` prompts, `lint`, `refs` and the hooks print none. `build` prints it when it ends complete, and `build --dry-run` when every task is ticked.
+Planning reorders frontmatter keys to `title, type, status, author, date, tags, related`, followed by other keys, and normalises `Intent` and `Out of scope` headings to `##`. It refuses if any task is ticked. If every claim has an id and is settled, planning only tidies the delta and prints `already planned`.
 
 ### build
 
-`lemma build <delta>` refuses a delta that is not `in-progress` or `draft`, and `--dry-run` refuses a `draft` one; each refusal names `lazyspec update <id> --status in-progress`. A `draft` delta is offered the move first: on a terminal, build asks `<id> is draft; move it to in-progress? [y/N]`. Off a terminal, or on no, build refuses without moving it.
+`lemma build <delta>` requires an `in-progress` or `draft` delta. `--dry-run` refuses a `draft` delta. Each refusal names `lazyspec update <id> --status in-progress`. For a draft delta, build offers the transition in a terminal with `<id> is draft; move it to in-progress? [y/N]`. Off a terminal, or after a negative answer, build refuses without moving it.
 
-Before asking, build refuses any uncommitted or untracked path outside the delta's own directory, which holds the plan output and the human's `[proposed]` edits, with `build needs a clean working tree; commit or stash first`. On yes, build lints the delta with `--gate in-progress`. Error findings print as `path:line: severity: message`, and build stops with `<id> stayed draft; fix the findings above and run lemma build <id> again`; `lazyspec` is not run, so this holds when it skips untrusted hooks. Otherwise build runs `lazyspec update <id> --status in-progress` with inherited stdio. A non-zero exit, or a status that is not `in-progress` afterwards, stops with the same `stayed draft` message. Build then commits the delta directory, and only it, as `<id>: in-progress`; a failed commit stops with `<id> moved to in-progress but not committed; commit it and run lemma build <id>`. An `in-progress` delta needs a clean working tree. For each unticked task in order, main tasks before follow-ups:
+Before the prompt, build requires a clean working tree outside the delta directory. Uncommitted or untracked paths elsewhere produce `build needs a clean working tree; commit or stash first`. After confirmation, build lints with `--gate in-progress`. Error findings stop the command; lazyspec is not run. Otherwise build runs `lazyspec update <id> --status in-progress` with inherited stdio and verifies the resulting status. A failed update or wrong status leaves the delta draft. Build then commits only the delta directory as `<id>: in-progress`. A failed commit leaves the delta in progress and reports that it must be committed before build can continue.
 
-1. The `build` prompt is rendered with the task and the claims it settles, and the runner runs with `LEMMA_DELTA` and `LEMMA_TASK` set. The reply is `{"outcome":"done"|"blocked","reason","refs":[{"claim","path","symbol"}]}`; `claim` is limited to the claims the task settles and a chore has no refs.
-2. If the runner changed `index.md`, `design.md`, `claims.md` or `tasks.md`, the task fails with `runner edited <path>; lemma writes delta parts`. If `outcome` is `blocked`, it fails with `runner blocked: <reason>`. A reply with no JSON is a failure.
-3. Each ref is written as an `@ref <path>#<symbol>` line under its claim, after the claim's existing lines; a ref already there is skipped. A ref to a claim the task does not settle is a failure.
-4. `lemma lint <delta>` runs; any error stops the loop.
-5. Unless the task is a chore, each claim it settles is `[intent]`, or has at least one ref and every ref resolves.
+An `in-progress` delta requires a clean working tree. Build processes unticked main tasks in order, then follow-ups. For each task:
+
+1. The `build` prompt includes the task and its claims. The runner receives `LEMMA_DELTA` and `LEMMA_TASK`. Its reply is `{"outcome":"done"|"blocked","reason","refs":[{"claim","path","symbol"}]}`. `claim` must be one of the claims settled by the task. A chore has no refs.
+2. A runner that changes `index.md`, `design.md`, `claims.md` or `tasks.md` fails with `runner edited <path>; lemma writes delta parts`. A blocked outcome fails with its reason. A reply without JSON fails.
+3. Refs are written under their claims after existing lines. Existing refs are skipped. A ref for a claim the task does not settle fails.
+4. `lemma lint <delta>` runs. Any error stops the task.
+5. Unless the task is a chore, every settled claim must be `[intent]`, or have at least one ref and all refs must resolve.
 6. The review gate runs.
-7. The task is ticked, then `git add -A` and `git commit -m "<delta> T<n>: <text>" -m "<trailer>"`.
+7. The task is ticked, then `git add -A` and `git commit` record it with message `<delta> T<n>: <text>` and a review trailer.
 
-Any failure before the gate prints the reason and `stopped. T<n> left unticked; working tree kept.`, and exits 2. A failed commit leaves the task ticked and prints `stopped. T<n> ticked but not committed; working tree kept.` The tree is never reset. A re-run resumes at the first unticked task. `--task T<n>` runs one task. When no task is left the output is `all tasks complete`.
+A failure before the review gate leaves the task unticked and preserves the working tree. A failed commit leaves the task ticked and preserves the working tree. Build never resets the tree. A rerun resumes at the first unticked task. `--task T<n>` runs one task. When no tasks remain, output is `all tasks complete`.
 
 #### Review gate
 
-After steps 1 to 5 pass and before the tick, lemma runs `git add -A` and the `reviewer` command with the `review-task` prompt. The prompt carries the task and the claims it settles, `convention`, `dictums`, `spec_intent`, `related`, `design`, `claims`, `task_diff` and `delta_diff`.
+After the runner, lint and settled-claim checks pass, lemma runs `git add -A` and invokes the `reviewer` command with the `review-task` prompt. The prompt includes the task, its claims, conventions, dictums, spec intent, related documents, design, claims, `task_diff` and `delta_diff`.
 
-`task_diff` is `git diff --cached HEAD`, the staged work of this task, untracked files included. `delta_diff` is `git diff <base> HEAD`, the committed work of the delta so far, labelled read-only context. The prompt directs the reviewer to judge only the task diff; the delta diff is there to catch a task undoing earlier work.
+`task_diff` is `git diff --cached HEAD`, containing the staged work of this task, including untracked files. `delta_diff` is `git diff <base> HEAD`, containing committed work for the delta so far as read-only context. The prompt directs the reviewer to judge only the task diff and use the delta diff to detect a task undoing earlier work.
 
-The reply is `{"stop":"<reason or empty>","findings":[{"text","basis"}]}`. `basis` is limited by the schema to `task`, `design`, `convention`, each live claim id of the delta, each live rule id in `{{dictums}}` and each document id in the delta's `related` other than `changes`. A finding with no written basis cannot be expressed. A reply naming any other basis is a failure: `review: reviewer reply: unknown basis` followed by the basis in backticks.
+The reviewer reply is `{"stop":"<reason or empty>","findings":[{"text","basis"}]}`. `basis` must be `task`, `design`, a live claim id, a live dictum rule id or a related document id other than `changes`. A reply with another basis fails with `review: reviewer reply: unknown basis` and the invalid basis.
 
-| Reply                              | Effect                                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------------------- |
-| empty `stop`, no findings          | prints `review: clean`; the task is ticked and committed                                 |
-| empty `stop`, findings             | a fix round runs, up to `review_rounds` times                                            |
-| non-empty `stop`                   | the build stops without a fix round                                                      |
+| Reply | Effect |
+| --- | --- |
+| Empty `stop`, no findings | Prints `review: clean`; the task is ticked and committed |
+| Empty `stop`, findings | Runs a fix round, up to `review_rounds` times |
+| Non-empty `stop` | Stops the build without a fix round |
 
-The `review-task` prompt directs the reviewer to report work the task did not ask for as a finding with basis `task`, and to set `stop` when the task pursues a different design from `design.md`.
+The prompt directs the reviewer to report work outside the task as a finding with basis `task`, and to set `stop` when the task conflicts with `design.md`.
 
 #### Fix rounds
 
-A fix round prints `review: <n> findings, fix round <k>` (`1 finding` when there is one), then runs the builder with the `fix` prompt, which lists each finding as `- [<basis>] <text>`. The reply has the build shape. Its `refs` replace the task's refs: they are written onto the claim lines as they stood before the task ran. The fix reply is subject to the same checks as a build reply: a part edit, `blocked` or a bad ref fails the task. Lint and the settled-claim check then run again, followed by the review gate on the new staged diff.
+A fix round prints `review: <n> findings, fix round <k>`, then runs the builder with the `fix` prompt. The prompt lists findings as `- [<basis>] <text>`. Its reply uses the build schema. The fix reply replaces the task's refs; refs are written onto claim lines as they stood before the task ran. The build reply checks apply again, followed by lint, settled-claim checks and another review gate.
 
-| Runner command           | Fix round runs                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| contains `{session}` and `resume` does | the `resume` command with `{session}` set to the session id of the build call; the prompt is the `fix` prompt alone |
-| has no `{session}`, or `resume` has none | the `runner` command in a fresh run; the prompt is the `build` prompt followed by the `fix` prompt |
+| Runner configuration | Fix round command |
+| --- | --- |
+| `runner` and `resume` both contain `{session}` | The `resume` command, with `{session}` set to the build call's session id and the `fix` prompt alone |
+| Either command lacks `{session}` | The `runner` command in a fresh run, with the `build` prompt followed by the `fix` prompt |
 
-`review_rounds` is the most fix rounds per task, default 1. With findings remaining after the last round, the build stops. Nothing commits around a finding.
+`review_rounds` is the maximum number of fix rounds per task and defaults to 1. If findings remain after the final round, build stops without committing.
 
-#### Stops
+| Stop cause | Output |
+| --- | --- |
+| Findings remain after `review_rounds` | Finding count and basis lines, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
+| Reviewer returns `stop` | `stopped. T<n> review: <reason>; working tree kept.` |
+| A fix round fails a check | Check failure lines, then `stopped. T<n> left unticked; working tree kept.` |
 
-| Cause                                    | Output                                                                              |
-| ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| findings remain after `review_rounds`    | `review: <n> findings`, one `   <basis>: <text>` line per finding, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
-| reviewer replies with `stop`             | `stopped. T<n> review: <reason>; working tree kept.`                                |
-| a fix round fails a check                | the check's failure lines, then `stopped. T<n> left unticked; working tree kept.`   |
+Each stop exits 2 and preserves the working tree, including staged work. A rerun resumes at the first unticked task. When a stop leaves findings open, they are written to `<git-dir>/lemma/reviews/<delta>-T<n>.json` as `{"stop","findings":[{"text","basis"}]}`. This includes reviewer stops and fix-round failures caused by a blocked reply, part edit, bad ref, lint or settled-claim check. The file is not committed and is overwritten by the next stop for that task. `tasks.md` and `claims.md` are not modified by the stop record.
 
-Each stop exits 2 and leaves the working tree as it is, staged work included. The `runner:` and `fix:` lines count the files that call changed, not the files changed so far in the task. Counts read `1 finding`, `n findings`, `1 fix round` and `n fix rounds`. A re-run resumes at the first unticked task.
+Each task commit has a `Lemma-Review` trailer. It is `Lemma-Review: clean` when the first review has no findings. Otherwise it is `Lemma-Review: <n> findings fixed in <k> rounds`, with singular forms `1 finding` and `1 round`. Delta parts do not record that the gate ran.
 
-When a stop leaves findings open, they are written to `<git-dir>/lemma/reviews/<delta>-T<n>.json` as `{"stop","findings":[{"text","basis"}]}`. This covers the two review stops above and a fix round that ends in a failure (a `blocked` reply, a part edit, a bad ref, lint or the settled-claim check). The file is not committed and is overwritten by the next stop of the same task. Nothing is written to `tasks.md` or `claims.md`.
-
-Each commit carries a trailer line: `Lemma-Review: clean` when the first review had no findings, else `Lemma-Review: <n> findings fixed in <k> rounds`, with `<n>` the findings summed over the rounds and `1 finding` and `1 round` singular. No delta part records that the gate ran.
-
-```
-$ lemma build DELTA-004
-T1 add `Balance` type and the `SUM` query (settles AC-1)
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
-   runner: 2m04s, 6 files
-   lint: clean
-   AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/8d2b6f40-51c3-4e7a-a0b9-6c3e1d7f2a58.jsonl" | jq -r '<filter>'
-   review: 1 finding, fix round 1
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/3c9e5a1e-7b0d-4f6a-9d52-1f0c8a7e44b2.jsonl" | jq -r '<filter>'
-   fix: 48s, 2 files
-   lint: clean
-   AC-1 @ref tests/ledger.rs#balance_sums_entries resolves
-   watch: tail -n +1 -F "$HOME/.claude/projects/-Users-me-tally/c41e0a97-2b6d-4d38-8f15-a7b9e0d63c12.jsonl" | jq -r '<filter>'
-   review: clean
-   commit 3f1c9a2 DELTA-004 T1: add `Balance` type and the `SUM` query
-```
-
-`--dry-run` prints the prompt for the first unticked task, or the named one, and exits.
+`lemma build --dry-run` prints the prompt for the first unticked task, or the task named with `--task`. If every task is ticked, it prints the completion prompt and exits.
 
 ### refs
 
-`lemma refs <claim>` prints `<citation> <path>#<symbol> ok|unresolved|not-a-test` for each ref of the claim. `DELTA-004/AC-2` names one delta's claim; a bare id matches it in every delta, complete ones included, and every dictum. Exit status is 2 when a ref does not resolve or the claim is unknown.
+`lemma refs <claim>` prints `<citation> <path>#<symbol> ok|unresolved|not-a-test` for each claim ref. `DELTA-004/AC-2` selects a claim in one delta. A bare id searches every delta, including complete deltas, and every dictum. An unresolved or non-test ref, or an unknown claim, exits 2.
 
-### session-start, signal, stop
+### session-start, signal and stop
 
-These are Claude Code hooks and are not typed.
+These commands are Claude Code hooks; they are not typed as part of the workflow.
 
-`lemma session-start` writes HEAD's sha to `<git-dir>/lemma/sessions/<session_id>`. An existing file is kept, so a resumed session keeps its base. It prints nothing and exits 0.
+`lemma session-start` writes HEAD's SHA to `<git-dir>/lemma/sessions/<session_id>`. An existing file is preserved so resumed sessions keep their base. The command prints nothing and exits 0.
 
-`lemma signal` reads the `PostToolUse` payload for Edit, Write and MultiEdit and returns `additionalContext` scoped to the touched file:
+`lemma signal` reads the `PostToolUse` payload for `Edit`, `Write` and `MultiEdit`, then returns `additionalContext` scoped to the touched file:
 
-| Condition                                           | Output                                                                                                    |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| First touch of a governed area in the session       | One line of pointers: governing specs, decisions that affect or constrain them, dictums, each in-flight delta that changes a governing spec with its bundle directory and parts, and that delta's `related` documents |
-| The file is referenced by a landed delta or dictum  | History or dictum finding                                                                                 |
-| The file adds an uncovered area                     | Coverage finding                                                                                          |
-| The file is a spec, dictum or in-flight delta part  | Findings for that document                                                                                |
+| Condition | Output |
+| --- | --- |
+| First touch of a governed area in a session | Pointers to governing specs, affecting or constraining decisions, dictums, in-flight deltas that change a governing spec (including bundle directory and parts), and those deltas' related documents |
+| File referenced by a landed delta or dictum | History or dictum finding |
+| File adds an uncovered area | Coverage finding |
+| File is a spec, dictum or in-flight delta part | Findings for that document |
 
-Each message is said once per session, keyed on a stable identity and recorded in `<git-dir>/lemma/sessions/<session_id>.said`. `lemma signal` exits 0 on any failure.
+Each message is emitted once per session using a stable identity and recorded in `<git-dir>/lemma/sessions/<session_id>.said`. `lemma signal` exits 0 on failure.
 
-`lemma stop` reports error findings only, on stderr, and exits 2 when there are any. It runs coverage and dictum checks against the session base, and the evidence check on the documents touched in the session: specs, dictums and in-flight deltas whose files changed or whose specs govern a changed file. It also reports a delta that is `complete` and was not at the session base, once per session: completing a delta is the human's step. When `stop_hook_active` is set it exits 0.
+`lemma stop` reports error findings on stderr and exits 2 when any exist. It checks coverage and dictums against the session base, and evidence on documents touched in the session: changed specs and dictums, plus in-flight deltas whose files changed or whose specs govern a changed file. It also reports a delta moved to `complete` after the session base, once per session. When `stop_hook_active` is set, it exits 0.
 
 ## Checks
 
-| Check    | Rule                                                                                                          | Severity |
-| -------- | ------------------------------------------------------------------------------------------------------------- | -------- |
-| coverage | The changed governed files are not all within one spec's `governs`, and a touched spec has no in-flight delta that `changes` it and no delta that `changes` it completed within the range | error    |
-| history  | A test changed whose region a landed delta's claim refs: `test <path>::<symbol> changed; DELTA-004/AC-2 claims it; confirm intended` | warning  |
-| dictum   | A test changed that a dictum rule refs, and the dictum did not strike the rule and add a new id in the range   | error    |
-| evidence | A written ref that does not resolve or is not a test. At `--gate complete`, a claim with no ref that is not `[intent]` | error    |
-| shape    | Below                                                                                                         | error    |
+| Check | Rule | Severity |
+| --- | --- | --- |
+| coverage | Changed governed files are not all within one spec's `governs`; a touched spec has no in-flight delta changing it and no delta changing it completed within the range | error |
+| history | A test changed whose region is claimed by a landed delta: `test <path>::<symbol> changed; DELTA-004/AC-2 claims it; confirm intended` | warning |
+| dictum | A test changed that a dictum rule references, and the range does not strike the rule and add a new id | error |
+| evidence | A ref does not resolve or is not a test. At `--gate complete`, a non-`[intent]` claim has no ref | error |
+| shape | Document and transition rules below are violated | error |
 
-A **landed** delta is `complete` and was not completed within the range. A test region is the referenced symbol, attributes included; `.rs` files use the Rust extractor, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` the TypeScript extractor, and other files compare whole. Formatting and comments are normalised away. A region absent at the base is not a change.
+A **landed** delta is `complete` and was not completed within the checked range. A test region is the referenced symbol, including attributes. Rust files use the Rust extractor. TypeScript and JavaScript files with extensions `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs` use the TypeScript extractor. Other files are compared as a whole. Formatting and comments are normalised away. A region absent at the base is not considered changed.
 
-Shape rules applied to a named delta:
+Shape rules for a named delta:
 
-| When                   | Rule                                                                                                                        |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| always                 | claim ids are `AC-<n>` and unique; task ids unique; task lines match the grammar; a task settles only claims that exist; no `@ref` in `design.md`; `[proposed]` and `[intent]` not together |
-| `--gate in-progress`   | the always rules; `Intent` present and non-empty; at least one claim; every bullet has an id; every claim settled by exactly one main task; no review lines in any part; no `[proposed]` claims |
-| `--gate complete`      | the in-progress rules; every task ticked, follow-ups included; every claim has a ref that resolves, or is `[intent]`        |
+| When | Rules |
+| --- | --- |
+| Always | Claim ids use `AC-<n>` and are unique; task ids are unique; task lines match the grammar; tasks settle only existing claims; `design.md` has no `@ref`; `[proposed]` and `[intent]` are not combined |
+| `--gate in-progress` | Always rules; non-empty `Intent`; at least one claim; every claim has an id; each claim is settled by exactly one main task; no review lines in any part; no `[proposed]` claims |
+| `--gate complete` | In-progress rules; every task, including follow-ups, is ticked; every claim has a resolving ref or is `[intent]` |
 
-An invalid `governs` or `tests` glob is an error. An unknown `{{key}}` in a pack prompt file is an error.
+Invalid `governs` or `tests` globs are errors. An unknown `{{key}}` in a pack prompt is an error.
 
-### Base resolution
+## Base resolution
 
-The base is the revision the history and dictum checks diff against and that bounds the range for coverage.
+The base is the revision used by history and dictum checks and the start of the coverage range.
 
-1. `--base <rev>` is used when given.
-2. Otherwise, with the trunk (`--trunk <name>`; by default the remote-tracking `origin/main`, else `origin/master`, else the target of `origin/HEAD`, together with local `main`, else `master`), if `git merge-base HEAD <trunk>` is not HEAD, the merge-base is used. When both a remote-tracking and a local trunk exist, the merge-base nearer to HEAD is used.
-3. Otherwise HEAD is on trunk. `lemma stop` and `lemma signal` use the session base recorded by `lemma session-start`. A transition gate and the build review gate's `delta_diff` use the parent of the commit that first added the delta's `index.md`, or HEAD when the delta is uncommitted. The `validate` event uses no base.
-4. Otherwise HEAD.
+1. `--base <rev>` takes precedence when specified.
+2. Otherwise, lemma resolves a trunk using `--trunk <name>` or, by default, `origin/main`, `origin/master`, the target of `origin/HEAD`, local `main`, then local `master`. If `git merge-base HEAD <trunk>` is not `HEAD`, lemma uses the merge base. When both remote-tracking and local trunks exist, lemma uses the merge base nearer to `HEAD`.
+3. Otherwise, when `HEAD` is on trunk, `lemma stop` and `lemma signal` use the session base. A transition gate and the build review gate's `delta_diff` use the parent of the commit that first added the delta's `index.md`, or `HEAD` if the delta is uncommitted. The `validate` event has no base.
+4. In other cases, lemma uses `HEAD`.
 
 ## Files
 
@@ -286,51 +244,53 @@ review_rounds = 1
 timeout  = 1800
 ```
 
-| Key        | Default                          | Effect                                    |
-| ---------- | -------------------------------- | ----------------------------------------- |
-| `runner`   | `claude -p --session-id {session} --output-format json --json-schema {schema}` | Command `lemma build` runs per task |
-| `reviewer` | the `runner` value               | Command `lemma review`, `lemma plan` and the `lemma build` review gate run |
-| `resume`   | `claude -p --resume {session} --output-format json --json-schema {schema}` | Command a fix round runs when `runner` and `resume` both contain `{session}` |
-| `review_rounds` | `1`                         | Most fix rounds per task before the build stops |
-| `timeout`  | `1800`                           | Seconds before a run is killed             |
+| Key | Default | Effect |
+| --- | --- | --- |
+| `runner` | `claude -p --session-id {session} --output-format json --json-schema {schema}` | Command run for each build task |
+| `reviewer` | Value of `runner` | Command run by `lemma review`, `lemma plan` and the build review gate |
+| `resume` | `claude -p --resume {session} --output-format json --json-schema {schema}` | Command for a fix round when both `runner` and `resume` contain `{session}` |
+| `review_rounds` | `1` | Maximum fix rounds per task |
+| `timeout` | `1800` | Run timeout in seconds |
 
-An unknown key is an error. A command is split into words on whitespace, with single and double quotes grouping; no shell is involved. The prompt is written to stdin and the working directory is the repository root. Every run passes a JSON Schema for its reply (draft-07, `additionalProperties: false`, all fields required), generated from the delta. In each word of the command, `{schema}` is replaced by the schema as compact JSON and `{schema_file}` by the path of a temporary file holding it, which exists for the run; a command naming either is an error when no schema is given. Stdout is parsed as JSON. A non-null `structured_output` is the reply, and `result` is then optional. Otherwise the reply is the first JSON object found in `result`, so a runner that does not validate against a schema still works. `"is_error": true`, a `subtype` other than `success`, or a non-zero exit is a failure; the message is `result`, else the `subtype`. Other fields are ignored.
+Unknown keys are errors. Commands are split into words on whitespace; single and double quotes group words. No shell is involved. Prompts are written to stdin, and the working directory is the repository root. Each run receives a JSON Schema for its reply. The schema uses draft-07, `additionalProperties: false` and requires all fields.
 
-`{session}` in a runner or reviewer command is replaced, per call, by a fresh v4 UUID; in a `resume` command it is replaced by the UUID of the build call; a command without it runs as before, with no session and no watch line. The default passes it as `--session-id`, so Claude Code writes the run's transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` as it goes. Before each runner call (review, plan, every build task, every review gate and every fix round) lemma prints one stdout line, `   watch: tail -n +1 -F "$HOME/.claude/projects/<encoded root>/<uuid>.jsonl" | jq -r '<filter>'`, where the encoded root is the canonical repository root with every non-alphanumeric character replaced by `-`, and the filter prints one line per tool call: the tool name and the first 100 characters of its input. Run it in a second terminal. lemma does not read the transcript.
+In each command word, `{schema}` is replaced with compact JSON and `{schema_file}` with the path to a temporary schema file that exists for the run. A command containing either placeholder fails when no schema is available. Stdout is parsed as JSON. A non-null `structured_output` is the reply; `result` is optional in that case. Otherwise, the first JSON object in `result` is used. `is_error: true`, a `subtype` other than `success` or a non-zero exit is a failure. The message is `result`, or `subtype` if `result` is absent. Other fields are ignored.
 
-While a runner call waits, a spinner with the label and elapsed time draws on stderr, only when stderr is a terminal; it clears when the call ends. Output is coloured only on a terminal: task headings are bold, `commit` and `lint: clean` green, `stopped` and errors red, and the `next:` label dim. `NO_COLOR` or output that is not a terminal turns colour off.
+`{session}` in a runner or reviewer command is replaced with a fresh v4 UUID for each call. In a resume command it is replaced with the build call's UUID. Commands without the placeholder run without a session or watch line. The default command passes it as `--session-id`; Claude Code writes the transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` while it runs. lemma does not read the transcript.
+
+Before each agent call, lemma prints a watch command for the transcript. Run it in a second terminal to view tool calls. While a call waits, a spinner with its label and elapsed time appears on stderr when stderr is a terminal. Terminal output uses colour unless `NO_COLOR` is set: task headings are bold, `commit` and `lint: clean` are green, `stopped` and errors are red, and the `next:` label is dim.
 
 ### Prompts
 
-`.lazyspec/prompts/review-doc.md`, `plan.md`, `build.md`, `review-task.md` and `fix.md` are rendered for each run. The binary carries the same defaults and uses a pack file when present. `{{key}}` is replaced by:
+`.lazyspec/prompts/review-doc.md`, `plan.md`, `build.md`, `review-task.md` and `fix.md` are rendered for each run. The binary includes the same defaults and uses pack prompts when present.
 
-| Key           | Value                                                                                                     |
-| ------------- | --------------------------------------------------------------------------------------------------------- |
-| `convention`  | The convention's body                                                                                     |
-| `dictums`     | Dictums with no `governs`, and dictums whose `governs` overlap a changed spec's `governs`; all dictums if none qualify |
-| `spec_intent` | Each changed spec's `index.md` body                                                                       |
-| `related`     | The body of each document in the delta's `related` other than `changes`                                   |
-| `delta`, `design`, `claims`, `tasks` | The delta's parts                                                                  |
-| `task`        | The task line and the claims it settles (build, review-task)                                              |
-| `resolved`    | Findings the human deleted, one `- [<part> / <anchor>] <text>` bullet each, or `(none)` (review-doc)       |
-| `task_diff`   | `git diff --cached HEAD` after `git add -A`: the task's staged work (review-task)                         |
-| `delta_diff`  | `git diff <base> HEAD`: the delta's committed work so far (review-task)                                    |
-| `findings`    | The findings of a review, one `- [<basis>] <text>` bullet each (fix)                                      |
+| Key | Value |
+| --- | --- |
+| `convention` | Convention body |
+| `dictums` | Dictums without `governs`, and dictums whose `governs` overlap a changed spec's `governs`; all dictums when none qualify |
+| `spec_intent` | Each changed spec's `index.md` body |
+| `related` | Body of each related document except those linked by `changes` |
+| `delta`, `design`, `claims`, `tasks` | Delta parts |
+| `task` | Task line and claims it settles (`build`, `review-task`) |
+| `resolved` | Deleted findings as `- [<part> / <anchor>] <text>`, or `(none)` (`review-doc`) |
+| `task_diff` | `git diff --cached HEAD` after `git add -A` (`review-task`) |
+| `delta_diff` | `git diff <base> HEAD` (`review-task`) |
+| `findings` | Review findings as `- [<basis>] <text>` (`fix`) |
 
-In the `plan` prompt `claims` already carries the ids lemma assigned. The `build` prompt tells the runner not to edit any delta part; lemma writes the refs from its reply.
+The `plan` prompt includes claim ids assigned by lemma. The `build` prompt directs the runner not to edit delta parts; lemma writes refs from the reply. Unknown prompt keys prevent `review`, `plan` and `build` at startup. A pack prompt without `{{resolved}}` remains valid; exact-match finding suppression still applies.
 
-Two glob lists overlap when they share a glob, when one glob matches the other's text, or when some repository file matches a glob from each. An unknown key refuses `review`, `plan` and `build` at startup. A pack prompt without `{{resolved}}` still works; the reviewer is not told the resolved findings, but the exact-match drop still applies.
+Two glob lists overlap when they share a glob, when one glob matches the other's text, or when a repository file matches a glob from each.
 
 ### Pack hooks
 
-| Event            | Transition                 | Runs                                     |
-| ---------------- | -------------------------- | ---------------------------------------- |
-| `validate`       |                            | `lemma lint --hook`                      |
-| `pre-transition` | `draft` → `in-progress`    | `lemma lint --hook --gate in-progress`   |
-| `pre-transition` | `in-progress` → `complete` | `lemma lint --hook --gate complete`      |
+| Event | Transition | Runs |
+| --- | --- | --- |
+| `validate` | — | `lemma lint --hook` |
+| `pre-transition` | `draft` → `in-progress` | `lemma lint --hook --gate in-progress` |
+| `pre-transition` | `in-progress` → `complete` | `lemma lint --hook --gate complete` |
 
-The plugin's `hooks.json` registers `SessionStart` → `lemma session-start`, `PostToolUse` (`Edit|Write|MultiEdit`) → `lemma signal` and `Stop` → `lemma stop`, each a no-op when `lemma` is not on `PATH`.
+The plugin's `hooks.json` registers `SessionStart` → `lemma session-start`, `PostToolUse` (`Edit|Write|MultiEdit`) → `lemma signal`, and `Stop` → `lemma stop`. Each hook is a no-op when `lemma` is not on `PATH`.
 
 ### CI
 
-`docs/ci/lemma-validate.yml` runs `lemma lint` with `--base` set to the pull request base ref, or on a push to the default branch to the push's `before` sha when it is an ancestor of HEAD, else the parent of HEAD. A push to another branch passes `--trunk origin/<default-branch>`. The job fetches full history, then runs `lazyspec validate`.
+`docs/ci/lemma-validate.yml` runs `lemma lint` with `--base` set to the pull request base ref. On a push to the default branch, it uses the push's `before` SHA when that commit is an ancestor of `HEAD`, or the parent of `HEAD` otherwise. A push to another branch passes `--trunk origin/<default-branch>`. The job fetches full history, then runs `lazyspec validate`.
