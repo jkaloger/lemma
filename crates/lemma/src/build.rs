@@ -6,10 +6,12 @@ use crate::lint::{self, ref_name};
 use crate::payload::{Doc, CLAIMS_PART, TASKS_PART};
 use crate::prompts::{self, Prompt};
 use crate::review::{part_file, PARTS};
+use crate::session::lemma_dir;
 use crate::tasks::{self, Task};
 use crate::world::World;
 use crate::{context, plan, project, runner, schema};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -145,10 +147,15 @@ fn with_refs(text: &str, task: &Task, refs: &[RefEntry]) -> Result<String, Strin
     Ok(text)
 }
 
-fn write_refs(root: &Path, delta: &Doc, task: &Task, refs: &[RefEntry]) -> Result<(), Failure> {
-    let before = plan::read(root, delta, CLAIMS_PART);
-    let after = with_refs(&before, task, refs).map_err(|line| unticked(vec![line]))?;
-    if after == before {
+fn write_refs(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    base: &str,
+    refs: &[RefEntry],
+) -> Result<(), Failure> {
+    let after = with_refs(base, task, refs).map_err(|line| unticked(vec![line]))?;
+    if after == plan::read(root, delta, CLAIMS_PART) {
         return Ok(());
     }
     let path = root.join(delta.part_path(CLAIMS_PART));
@@ -156,33 +163,75 @@ fn write_refs(root: &Path, delta: &Doc, task: &Task, refs: &[RefEntry]) -> Resul
         .map_err(|e| unticked(vec![format!("   cannot write {}: {e}", path.display())]))
 }
 
+struct Built {
+    prompt: String,
+    session: Option<String>,
+    claims: String,
+}
+
 fn runner_reply(
     root: &Path,
     delta: &Doc,
     task: &Task,
+    name: &str,
     prompt: &str,
+    resume: Option<&str>,
     config: &runner::Config,
-) -> Result<Reply, Failure> {
-    let failed = |message: String| unticked(vec![format!("   runner: {message}")]);
+) -> Result<(Reply, Option<String>), Failure> {
+    let failed = |message: String| unticked(vec![format!("   {name}: {message}")]);
     let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
     let schema = schema::build(task);
+    let label = format!("{} {name}", task.id);
     let started = std::time::Instant::now();
-    let reply = runner::tracked(
-        &format!("{} runner", task.id),
-        &config.runner,
-        prompt,
-        root,
-        &env,
-        config.timeout,
-        Some(&schema),
-    )
+    let reply = match resume {
+        Some(session) => runner::resumed(
+            &label,
+            &config.resume,
+            session,
+            prompt,
+            root,
+            &env,
+            config.timeout,
+            Some(&schema),
+        ),
+        None => runner::tracked(
+            &label,
+            &config.runner,
+            prompt,
+            root,
+            &env,
+            config.timeout,
+            Some(&schema),
+        ),
+    }
     .map_err(failed)?;
     println!(
-        "   runner: {}, {} files",
+        "   {name}: {}, {} files",
         elapsed_text(started.elapsed()),
         changed_paths(root)
     );
-    serde_json::from_value(reply.json().map_err(failed)?).map_err(|e| failed(format!("reply: {e}")))
+    let parsed = serde_json::from_value(reply.json().map_err(failed)?)
+        .map_err(|e| failed(format!("reply: {e}")))?;
+    Ok((parsed, reply.session))
+}
+
+fn accept(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    name: &str,
+    parts: &[(String, String)],
+    claims: &str,
+    reply: &Reply,
+) -> Result<(), Failure> {
+    reject_part_edits(root, delta, parts)?;
+    if let Verdict::Blocked = reply.outcome {
+        return Err(unticked(vec![format!(
+            "   {name} blocked: {}",
+            reply.reason
+        )]));
+    }
+    write_refs(root, delta, task, claims, &reply.refs)
 }
 
 fn run_runner(
@@ -191,21 +240,56 @@ fn run_runner(
     delta: &Doc,
     task: &Task,
     config: &runner::Config,
-) -> Result<(), Failure> {
+) -> Result<Built, Failure> {
     let mut values = context::assemble(store, root, delta);
     values.insert("task", context::task_text(delta, task));
     let prompt = prompts::rendered(Prompt::Build, root, &values)
         .map_err(|message| unticked(vec![format!("   runner: {message}")]))?;
+    let claims = plan::read(root, delta, CLAIMS_PART);
     let parts = delta_parts(root, delta);
-    let reply = runner_reply(root, delta, task, &prompt, config)?;
-    reject_part_edits(root, delta, &parts)?;
-    if let Verdict::Blocked = reply.outcome {
-        return Err(unticked(vec![format!(
-            "   runner blocked: {}",
-            reply.reason
-        )]));
-    }
-    write_refs(root, delta, task, &reply.refs)
+    let (reply, session) = runner_reply(root, delta, task, "runner", &prompt, None, config)?;
+    accept(root, delta, task, "runner", &parts, &claims, &reply)?;
+    Ok(Built {
+        prompt,
+        session,
+        claims,
+    })
+}
+
+fn findings_list(findings: &[gate::Finding]) -> String {
+    findings
+        .iter()
+        .map(|f| format!("- [{}] {}", f.basis, f.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn run_fix(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    built: &Built,
+    findings: &[gate::Finding],
+    config: &runner::Config,
+) -> Result<(), Failure> {
+    let values = BTreeMap::from([("findings", findings_list(findings))]);
+    let fix = prompts::rendered(Prompt::Fix, root, &values)
+        .map_err(|message| unticked(vec![format!("   fix: {message}")]))?;
+    let prompt = match built.session {
+        Some(_) => fix,
+        None => format!("{}\n\n{fix}", built.prompt),
+    };
+    let parts = delta_parts(root, delta);
+    let (reply, _) = runner_reply(
+        root,
+        delta,
+        task,
+        "fix",
+        &prompt,
+        built.session.as_deref(),
+        config,
+    )?;
+    accept(root, delta, task, "fix", &parts, &built.claims, &reply)
 }
 
 fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {
@@ -321,33 +405,84 @@ fn commit(root: &Path, delta: &Doc, task: &Task, trailer: &str) -> Result<(), Fa
     Ok(())
 }
 
+fn record_review(root: &Path, delta: &Doc, task: &Task, verdict: &gate::Verdict) -> Option<()> {
+    let dir = lemma_dir(root)?.join("reviews");
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = dir.join(format!("{}-{}.json", delta.id, task.id));
+    std::fs::write(file, serde_json::to_string_pretty(verdict).ok()?).ok()
+}
+
+fn reviewed_stop(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    verdict: &gate::Verdict,
+    detail: Vec<String>,
+    ending: String,
+) -> Failure {
+    record_review(root, delta, task, verdict);
+    Failure {
+        detail,
+        ending: Ending::Reviewed(ending),
+    }
+}
+
+fn check_work(root: &Path, delta: &Doc, task: &Task) -> Result<(), Failure> {
+    check_lint(root, &delta.id)?;
+    check_settled(root, &delta.id, task)
+}
+
+fn trailer(findings: usize, rounds: u32) -> String {
+    match rounds {
+        0 => REVIEW_CLEAN.to_string(),
+        _ => format!("Lemma-Review: {findings} findings fixed in {rounds} rounds"),
+    }
+}
+
 fn review_gate(
     root: &Path,
     store: &lazyspec::engine::store::Store,
     delta: &Doc,
     task: &Task,
+    built: &Built,
     config: &runner::Config,
-) -> Result<(), Failure> {
-    let verdict = gate::review(root, store, delta, task, config)
-        .map_err(|message| unticked(vec![format!("   review: {message}")]))?;
-    if !verdict.stop.trim().is_empty() {
-        return Err(Failure {
-            detail: Vec::new(),
-            ending: Ending::Reviewed(format!("review: {}", verdict.stop.trim())),
-        });
-    }
-    if !verdict.findings.is_empty() {
-        return Err(Failure {
-            detail: verdict
+) -> Result<String, Failure> {
+    let (mut fixed, mut rounds) = (0, 0);
+    loop {
+        let verdict = gate::review(root, store, delta, task, config)
+            .map_err(|message| unticked(vec![format!("   review: {message}")]))?;
+        if !verdict.stop.trim().is_empty() {
+            let ending = format!("review: {}", verdict.stop.trim());
+            return Err(reviewed_stop(
+                root,
+                delta,
+                task,
+                &verdict,
+                Vec::new(),
+                ending,
+            ));
+        }
+        let count = verdict.findings.len();
+        if count == 0 {
+            println!("{}", console::style("   review: clean").green());
+            return Ok(trailer(fixed, rounds));
+        }
+        if rounds == config.review_rounds {
+            println!("   review: {count} findings");
+            let detail = verdict
                 .findings
                 .iter()
                 .map(|f| format!("   {}: {}", f.basis, f.text))
-                .collect(),
-            ending: Ending::Reviewed("left unticked after 0 fix rounds".to_string()),
-        });
+                .collect();
+            let ending = format!("left unticked after {rounds} fix rounds");
+            return Err(reviewed_stop(root, delta, task, &verdict, detail, ending));
+        }
+        rounds += 1;
+        fixed += count;
+        println!("   review: {count} findings, fix round {rounds}");
+        run_fix(root, delta, task, built, &verdict.findings, config)?;
+        check_work(root, delta, task)?;
     }
-    println!("{}", console::style("   review: clean").green());
-    Ok(())
 }
 
 fn build_task(
@@ -358,12 +493,11 @@ fn build_task(
     config: &runner::Config,
 ) -> Result<(), Failure> {
     println!("{}", console::style(heading(task)).bold());
-    run_runner(root, store, delta, task, config)?;
-    check_lint(root, &delta.id)?;
-    check_settled(root, &delta.id, task)?;
-    review_gate(root, store, delta, task, config)?;
+    let built = run_runner(root, store, delta, task, config)?;
+    check_work(root, delta, task)?;
+    let trailer = review_gate(root, store, delta, task, &built, config)?;
     tick(root, delta, task)?;
-    commit(root, delta, task, REVIEW_CLEAN)
+    commit(root, delta, task, &trailer)
 }
 
 fn report(failure: &Failure, task: &Task) {

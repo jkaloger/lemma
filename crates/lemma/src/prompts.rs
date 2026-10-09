@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const KEYS: [&str; 13] = [
+pub const KEYS: [&str; 14] = [
     "convention",
     "dictums",
     "spec_intent",
@@ -17,6 +17,7 @@ pub const KEYS: [&str; 13] = [
     "task_diff",
     "delta_diff",
     "resolved",
+    "findings",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,15 +27,17 @@ pub enum Prompt {
     ReviewDiff,
     Build,
     ReviewTask,
+    Fix,
 }
 
 impl Prompt {
-    pub const ALL: [Prompt; 5] = [
+    pub const ALL: [Prompt; 6] = [
         Prompt::ReviewDoc,
         Prompt::Plan,
         Prompt::ReviewDiff,
         Prompt::Build,
         Prompt::ReviewTask,
+        Prompt::Fix,
     ];
 
     pub fn file_name(self) -> &'static str {
@@ -44,6 +47,7 @@ impl Prompt {
             Prompt::ReviewDiff => "review-diff.md",
             Prompt::Build => "build.md",
             Prompt::ReviewTask => "review-task.md",
+            Prompt::Fix => "fix.md",
         }
     }
 
@@ -58,6 +62,7 @@ impl Prompt {
             Prompt::ReviewDiff => include_str!("../../../.lazyspec/prompts/review-diff.md"),
             Prompt::Build => include_str!("../../../.lazyspec/prompts/build.md"),
             Prompt::ReviewTask => include_str!("../../../.lazyspec/prompts/review-task.md"),
+            Prompt::Fix => include_str!("../../../.lazyspec/prompts/fix.md"),
         }
     }
 }

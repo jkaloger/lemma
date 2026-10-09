@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_RUNNER: &str =
     "claude -p --session-id {session} --output-format json --json-schema {schema}";
+const DEFAULT_RESUME: &str =
+    "claude -p --resume {session} --output-format json --json-schema {schema}";
+const DEFAULT_REVIEW_ROUNDS: u32 = 1;
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;
 const SCHEMA: &str = "{schema}";
 const SCHEMA_FILE: &str = "{schema_file}";
@@ -20,6 +23,8 @@ const POLL: Duration = Duration::from_millis(20);
 pub struct Config {
     pub runner: String,
     pub reviewer: String,
+    pub resume: String,
+    pub review_rounds: u32,
     pub timeout: Duration,
 }
 
@@ -28,6 +33,8 @@ pub struct Config {
 struct Raw {
     runner: Option<String>,
     reviewer: Option<String>,
+    resume: Option<String>,
+    review_rounds: Option<u32>,
     timeout: Option<u64>,
 }
 
@@ -37,6 +44,8 @@ pub fn load(root: &Path) -> Result<Config, String> {
         Err(_) => Raw {
             runner: None,
             reviewer: None,
+            resume: None,
+            review_rounds: None,
             timeout: None,
         },
         Ok(text) => toml::from_str(&text).map_err(|e| format!("lemma.toml: {e}"))?,
@@ -45,6 +54,8 @@ pub fn load(root: &Path) -> Result<Config, String> {
     Ok(Config {
         reviewer: raw.reviewer.unwrap_or_else(|| runner.clone()),
         runner,
+        resume: raw.resume.unwrap_or_else(|| DEFAULT_RESUME.to_string()),
+        review_rounds: raw.review_rounds.unwrap_or(DEFAULT_REVIEW_ROUNDS),
         timeout: Duration::from_secs(raw.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
     })
 }
@@ -102,6 +113,7 @@ fn tail(text: &str) -> String {
 #[derive(Debug)]
 pub struct Reply {
     pub text: String,
+    pub session: Option<String>,
     structured: Option<Value>,
 }
 
@@ -200,10 +212,37 @@ pub fn tracked(
     timeout: Duration,
     schema: Option<&Value>,
 ) -> Result<Reply, String> {
-    tracked_to(
+    let (command, session) = with_session(command);
+    announced(
         &mut std::io::stdout(),
         label,
-        command,
+        &command,
+        session,
+        prompt,
+        root,
+        env,
+        timeout,
+        schema,
+    )
+}
+
+/// Runs `command` in the session an earlier `tracked` call announced.
+#[allow(clippy::too_many_arguments)]
+pub fn resumed(
+    label: &str,
+    command: &str,
+    session: &str,
+    prompt: &str,
+    root: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    schema: Option<&Value>,
+) -> Result<Reply, String> {
+    announced(
+        &mut std::io::stdout(),
+        label,
+        &command.replace(SESSION, session),
+        Some(session.to_string()),
         prompt,
         root,
         env,
@@ -213,24 +252,24 @@ pub fn tracked(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn tracked_to(
+fn announced(
     out: &mut impl Write,
     label: &str,
     command: &str,
+    session: Option<String>,
     prompt: &str,
     root: &Path,
     env: &[(&str, &str)],
     timeout: Duration,
     schema: Option<&Value>,
 ) -> Result<Reply, String> {
-    let (command, session) = with_session(command);
-    if let Some(session) = session {
-        let _ = writeln!(out, "{}", watch_line(root, &session));
+    if let Some(session) = &session {
+        let _ = writeln!(out, "{}", watch_line(root, session));
     }
     let bar = spinner(label);
-    let reply = run(&command, prompt, root, env, timeout, schema);
+    let reply = run(command, prompt, root, env, timeout, schema);
     bar.finish_and_clear();
-    reply
+    reply.map(|reply| Reply { session, ..reply })
 }
 
 pub fn run(
@@ -325,6 +364,7 @@ fn result_text(stdout: &str) -> Result<Reply, String> {
         (None, None) => Err("runner output has no `result` text".to_string()),
         (text, structured) => Ok(Reply {
             text: text.unwrap_or_default().to_string(),
+            session: None,
             structured,
         }),
     }
@@ -605,10 +645,12 @@ printf '{"result": "ok", "usage": {}}'"#,
         let (root, command) = root_with_script(r#"cat >/dev/null; printf '{"result": "%s"}' "$1""#);
         let mut out = Vec::new();
 
-        let reply = tracked_to(
+        let (command, session) = with_session(&format!("{command} {{session}}"));
+        let reply = announced(
             &mut out,
             "label",
-            &format!("{command} {{session}}"),
+            &command,
+            session,
             "",
             root.path(),
             &[],
@@ -666,6 +708,11 @@ printf '{"result": "ok", "usage": {}}'"#,
             "claude -p --session-id {session} --output-format json --json-schema {schema}"
         );
         assert_eq!(config.reviewer, config.runner);
+        assert_eq!(
+            config.resume,
+            "claude -p --resume {session} --output-format json --json-schema {schema}"
+        );
+        assert_eq!(config.review_rounds, 1);
         assert_eq!(config.timeout, Duration::from_secs(1800));
     }
 

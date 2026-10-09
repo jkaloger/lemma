@@ -11,8 +11,8 @@ const BARE: &str = "- [AC-1] Reopen keeps the prior answer.\n- [AC-2] Writes are
 const REF_1: &str = "  @ref tests/store_test.rs#reopen_keeps_prior\n";
 const REF_2: &str = "  @ref tests/store_test.rs#other_test\n";
 const TWO_TASKS: &str = "- [ ] T1 reopen (settles AC-1)\n- [ ] T2 atomic (settles AC-2)\n";
-const RUNNER: &str = "#!/bin/sh\ncat > /dev/null\n[ -d \".fixture/$LEMMA_TASK\" ] && cp -R \".fixture/$LEMMA_TASK/.\" .\ncat \".fixture/$LEMMA_TASK.json\"\n";
-const REVIEWER: &str = "#!/bin/sh\nmkdir -p .fixture\ncat > \".fixture/$LEMMA_TASK.review-prompt\"\ncp \"$1\" \".fixture/$LEMMA_TASK.schema\"\nif [ -f \".fixture/$LEMMA_TASK.review.json\" ]; then cat \".fixture/$LEMMA_TASK.review.json\"; else echo '{\"structured_output\":{\"stop\":\"\",\"findings\":[]}}'; fi\n";
+const RUNNER: &str = "#!/bin/sh\nmkdir -p .fixture\ncat > \".fixture/$LEMMA_TASK.prompt.cur\"\nif grep -q 'A reviewer read your work' \".fixture/$LEMMA_TASK.prompt.cur\"; then\n  n=$(cat \".fixture/$LEMMA_TASK.fixes\" 2>/dev/null || echo 0)\n  n=$((n+1))\n  echo $n > \".fixture/$LEMMA_TASK.fixes\"\n  key=\"$LEMMA_TASK.fix$n\"\nelse\n  n=0\n  key=\"$LEMMA_TASK\"\nfi\nmv \".fixture/$LEMMA_TASK.prompt.cur\" \".fixture/$LEMMA_TASK.prompt.$n\"\nprintf '%s' \"$*\" > \".fixture/$LEMMA_TASK.args.$n\"\n[ -d \".fixture/$key\" ] && cp -R \".fixture/$key/.\" .\ncat \".fixture/$key.json\"\n";
+const REVIEWER: &str = "#!/bin/sh\nmkdir -p .fixture\nn=$(cat \".fixture/$LEMMA_TASK.rcalls\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \".fixture/$LEMMA_TASK.rcalls\"\ncat > \".fixture/$LEMMA_TASK.review-prompt\"\ncp \".fixture/$LEMMA_TASK.review-prompt\" \".fixture/$LEMMA_TASK.review-prompt.$n\"\ncp \"$1\" \".fixture/$LEMMA_TASK.schema\"\nif [ \"$n\" = 1 ]; then f=\".fixture/$LEMMA_TASK.review.json\"; else f=\".fixture/$LEMMA_TASK.review$n.json\"; fi\nif [ -f \"$f\" ]; then cat \"$f\"; else echo '{\"structured_output\":{\"stop\":\"\",\"findings\":[]}}'; fi\n";
 const REOPEN: (&str, &str, &str) = ("AC-1", "tests/store_test.rs", "reopen_keeps_prior");
 const OTHER: (&str, &str, &str) = ("AC-2", "tests/store_test.rs", "other_test");
 
@@ -43,6 +43,10 @@ fn project(status: &str, tasks: &str) -> Repo {
 }
 
 fn install_fakes(repo: &Repo, runner_args: &str) {
+    install_fakes_with(repo, runner_args, "");
+}
+
+fn install_fakes_with(repo: &Repo, runner_args: &str, extra: &str) {
     for (name, body) in [("fake-runner.sh", RUNNER), ("fake-reviewer.sh", REVIEWER)] {
         repo.write(name, body);
         std::fs::set_permissions(repo.path(name), std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -50,7 +54,7 @@ fn install_fakes(repo: &Repo, runner_args: &str) {
     repo.write(
         "lemma.toml",
         &format!(
-            "runner = \"{}{runner_args}\"\nreviewer = \"{} {{schema_file}}\"\n",
+            "runner = \"{}{runner_args}\"\nreviewer = \"{} {{schema_file}}\"\n{extra}",
             repo.path("fake-runner.sh").display(),
             repo.path("fake-reviewer.sh").display()
         ),
@@ -570,6 +574,8 @@ fn a_stop_ends_the_build_with_the_tree_kept_and_the_task_unticked() {
 #[test]
 fn findings_with_an_empty_stop_list_each_finding_and_stop() {
     let repo = project("in-progress", TWO_TASKS);
+    install_fakes_with(&repo, "", "review_rounds = 0\n");
+    repo.commit("no fix rounds");
     one_task_fixtures(&repo);
     review_reply(
         &repo,
@@ -633,4 +639,266 @@ fn the_reviewer_sees_earlier_work_as_read_only_context() {
     assert!(!context.contains("pub fn two()"), "{context}");
     assert!(task_diff.contains("+pub fn two() {}"), "{task_diff}");
     assert!(!task_diff.contains("pub fn one()"), "{task_diff}");
+}
+
+fn fix_reply(repo: &Repo, task: &str, round: u32, refs: &[(&str, &str, &str)]) {
+    done(repo, &format!("{task}.fix{round}"), refs);
+}
+
+fn review_round(repo: &Repo, task: &str, round: u32, findings: &[(&str, &str)]) {
+    let name = match round {
+        1 => format!("{task}.review"),
+        n => format!("{task}.review{n}"),
+    };
+    let findings: Vec<Value> = findings
+        .iter()
+        .map(|(basis, text)| json!({"basis": basis, "text": text}))
+        .collect();
+    let output = json!({"structured_output": {"stop": "", "findings": findings}});
+    repo.write(&format!(".fixture/{name}.json"), &output.to_string());
+}
+
+const HELPER: (&str, &str) = ("task", "back out the helper");
+const ATOMIC: (&str, &str) = ("AC-2", "atomic is not proven");
+const OTHER_REF: (&str, &str, &str) = ("AC-1", "tests/store_test.rs", "other_test");
+
+fn single_task() -> &'static str {
+    "- [ ] T1 reopen (settles AC-1)\n"
+}
+
+#[test]
+fn findings_go_back_to_the_builder_and_a_clean_second_review_commits() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER, ATOMIC]);
+    fixture(
+        &repo,
+        "T1.fix1",
+        "src/one.rs",
+        "pub fn one() { /* fixed */ }\n",
+    );
+    fix_reply(&repo, "T1", 1, &[OTHER_REF]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("   review: 2 findings, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("   fix: "), "{}", run.stdout);
+    assert!(run.stdout.contains("   review: clean\n"), "{}", run.stdout);
+    assert_eq!(
+        repo.git(&["log", "-1", "--format=%B"]).trim_end(),
+        "DELTA-001 T1: reopen\n\nLemma-Review: 2 findings fixed in 1 rounds"
+    );
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+    let second = repo.read(".fixture/T1.review-prompt.2");
+    let task_diff = second.split("# Task diff").nth(1).unwrap();
+    assert!(task_diff.contains("/* fixed */"), "{task_diff}");
+}
+
+#[test]
+fn the_fix_reply_refs_replace_the_refs_the_build_reply_wrote() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    fix_reply(&repo, "T1", 1, &[OTHER_REF]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        repo.read(CLAIMS_PATH),
+        format!(
+            "- [AC-1] Reopen keeps the prior answer.\n{REF_OTHER}- [AC-2] Writes are atomic.\n"
+        )
+    );
+}
+
+const REF_OTHER: &str = "  @ref tests/store_test.rs#other_test\n";
+
+#[test]
+fn findings_left_after_the_last_round_stop_with_a_list_and_a_record_file() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    review_round(&repo, "T1", 2, &[ATOMIC, HELPER]);
+    fixture(
+        &repo,
+        "T1.fix1",
+        "src/one.rs",
+        "pub fn one() { /* fixed */ }\n",
+    );
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("   AC-2: atomic is not proven\n   task: back out the helper\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .ends_with("   stopped. T1 left unticked after 1 fix rounds; working tree kept.\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(tasks(&repo), single_task());
+    assert_eq!(repo.head(), before);
+    assert_eq!(repo.read("src/one.rs"), "pub fn one() { /* fixed */ }\n");
+    let record: Value =
+        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001-T1.json")).unwrap();
+    assert_eq!(record["stop"], "");
+    assert_eq!(
+        record["findings"],
+        json!([
+            {"text": "atomic is not proven", "basis": "AC-2"},
+            {"text": "back out the helper", "basis": "task"},
+        ])
+    );
+    assert_eq!(repo.git(&["ls-files", ".git"]), "");
+}
+
+#[test]
+fn a_stop_verdict_writes_the_record_file_too() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_reply(&repo, "T1", "this is a different design", &[]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    let record: Value =
+        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001-T1.json")).unwrap();
+    assert_eq!(record["stop"], "this is a different design");
+}
+
+#[test]
+fn the_resume_command_gets_the_session_the_build_call_ran_in() {
+    let repo = project("in-progress", single_task());
+    let resume = format!(
+        "resume = \"{} resumed {{session}}\"\n",
+        repo.path("fake-runner.sh").display()
+    );
+    install_fakes_with(&repo, " {session}", &resume);
+    repo.commit("session runner");
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let session = repo.read(".fixture/T1.args.0");
+    assert!(uuid_like(&session), "{session}");
+    assert_eq!(
+        repo.read(".fixture/T1.args.1"),
+        format!("resumed {session}")
+    );
+    let fix = repo.read(".fixture/T1.prompt.1");
+    assert!(fix.contains("- [task] back out the helper"), "{fix}");
+    assert!(!fix.contains("# Convention"), "{fix}");
+    assert_eq!(run.stdout.matches("watch: ").count(), 2, "{}", run.stdout);
+}
+
+fn uuid_like(text: &str) -> bool {
+    text.len() == 36 && text.matches('-').count() == 4
+}
+
+#[test]
+fn without_a_session_the_fix_is_a_fresh_runner_with_the_build_prompt_and_the_fix_section() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(repo.read(".fixture/T1.args.1"), "");
+    let build_prompt = repo.read(".fixture/T1.prompt.0");
+    let fix = repo.read(".fixture/T1.prompt.1");
+    assert!(fix.starts_with(&build_prompt), "{fix}");
+    assert!(fix.contains("- [task] back out the helper"), "{fix}");
+}
+
+#[test]
+fn a_fix_that_breaks_lint_stops_before_the_second_review() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    fix_reply(
+        &repo,
+        "T1",
+        1,
+        &[("AC-1", "tests/store_test.rs", "missing_fn")],
+    );
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.stdout.contains("   lint: "), "{}", run.stdout);
+    assert!(run.stdout.contains("missing_fn"), "{}", run.stdout);
+    assert!(
+        run.stdout
+            .ends_with("   stopped. T1 left unticked; working tree kept.\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(repo.read(".fixture/T1.rcalls").trim(), "1");
+    assert_eq!(tasks(&repo), single_task());
+    assert_eq!(repo.head(), before);
+}
+
+#[test]
+fn review_rounds_two_allows_two_fix_rounds() {
+    let repo = project("in-progress", single_task());
+    install_fakes_with(&repo, "", "review_rounds = 2\n");
+    repo.commit("two rounds");
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER, ATOMIC]);
+    review_round(&repo, "T1", 2, &[HELPER]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    fix_reply(&repo, "T1", 2, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("   review: 1 findings, fix round 2\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        repo.git(&["log", "-1", "--format=%B"]).trim_end(),
+        "DELTA-001 T1: reopen\n\nLemma-Review: 3 findings fixed in 2 rounds"
+    );
+}
+
+#[test]
+fn a_struck_dictum_rule_is_not_a_basis() {
+    let repo = project("in-progress", single_task());
+    repo.dictum_file(
+        &["src/**"],
+        "- [TEST-1] [intent] Tests are real.\n- ~~[TEST-2]~~ [intent] Gone.\n",
+    );
+    repo.commit("dictum");
+    one_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let schema: Value = serde_json::from_str(&repo.read(".fixture/T1.schema")).unwrap();
+    assert_eq!(
+        schema["properties"]["findings"]["items"]["properties"]["basis"]["enum"],
+        json!(["task", "design", "convention", "AC-1", "AC-2", "TEST-1"])
+    );
 }

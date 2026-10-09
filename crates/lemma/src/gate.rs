@@ -1,45 +1,43 @@
 use crate::build::git_run;
 use crate::claims;
 use crate::git::git_output;
-use crate::payload::{Doc, CHANGES, CLAIMS_PART};
+use crate::payload::{Doc, CLAIMS_PART};
 use crate::prompts::{self, Prompt};
 use crate::tasks::Task;
 use crate::{context, runner, schema};
 use lazyspec::engine::store::Store;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const FIXED_BASES: [&str; 3] = ["task", "design", "convention"];
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Finding {
     pub text: String,
     pub basis: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Verdict {
     pub stop: String,
     pub findings: Vec<Finding>,
 }
 
-fn related_ids(delta: &Doc) -> impl Iterator<Item = String> + '_ {
-    delta
-        .related
-        .iter()
-        .filter(|r| r.rel_type != CHANGES)
-        .map(|r| r.target.clone())
-}
-
-fn bases(delta: &Doc, dictums: &str) -> Vec<String> {
-    let claim_ids = claims::parse(delta.part_body(CLAIMS_PART))
-        .claims
-        .into_iter()
-        .filter(|c| !c.struck)
-        .map(|c| c.id);
-    let rule_ids = claims::parse(dictums).claims.into_iter().map(|c| c.id);
+fn bases(delta: &Doc, dictums: &str, related: Vec<String>) -> Vec<String> {
+    let live_ids = |text: &str| -> Vec<String> {
+        claims::parse(text)
+            .claims
+            .into_iter()
+            .filter(|c| !c.struck)
+            .map(|c| c.id)
+            .collect()
+    };
     let mut found: Vec<String> = FIXED_BASES.iter().map(|b| b.to_string()).collect();
-    for id in claim_ids.chain(rule_ids).chain(related_ids(delta)) {
+    let ids = live_ids(delta.part_body(CLAIMS_PART))
+        .into_iter()
+        .chain(live_ids(dictums))
+        .chain(related);
+    for id in ids {
         if !found.contains(&id) {
             found.push(id);
         }
@@ -69,7 +67,11 @@ pub fn review(
     config: &runner::Config,
 ) -> Result<Verdict, String> {
     let mut values = context::assemble(store, root, delta);
-    let bases = bases(delta, &values["dictums"]);
+    let bases = bases(
+        delta,
+        &values["dictums"],
+        context::related_ids(store, delta),
+    );
     values.insert("task", context::task_text(delta, task));
     values.insert("task_diff", staged_task_diff(root)?);
     let base = context::diff_base(root, delta);
@@ -114,7 +116,11 @@ mod tests {
     fn bases_are_the_fixed_three_then_claims_dictum_rules_and_related_docs() {
         let delta = delta("- [AC-1] one\n- ~~[AC-2]~~ struck\n");
 
-        let found = bases(&delta, "## DICTUM-001 T\n\n- [TEST-1] [intent] x\n");
+        let found = bases(
+            &delta,
+            "## DICTUM-001 T\n\n- [TEST-1] [intent] x\n- ~~[TEST-2]~~ [intent] gone\n",
+            vec!["DECISION-002".to_string()],
+        );
 
         assert_eq!(
             found,

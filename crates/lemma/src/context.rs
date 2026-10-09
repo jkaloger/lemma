@@ -83,7 +83,7 @@ fn dictums_for(root: &Path, world: &World, specs: &[&Doc]) -> String {
     }
 }
 
-fn related_bodies(store: &Store, delta: &Doc) -> String {
+fn related_sections(store: &Store, delta: &Doc) -> Vec<(String, String)> {
     let targets = delta
         .related
         .iter()
@@ -92,8 +92,22 @@ fn related_bodies(store: &Store, delta: &Doc) -> String {
         .filter_map(|r| {
             let meta = store.all_docs().into_iter().find(|m| m.id == r.target)?;
             let body = store.get_body_raw(&meta.path, &RealFileSystem).ok()?;
-            Some(section(&meta.id, &meta.title, &body))
+            Some((meta.id.clone(), section(&meta.id, &meta.title, &body)))
         })
+        .collect()
+}
+
+pub fn related_ids(store: &Store, delta: &Doc) -> Vec<String> {
+    related_sections(store, delta)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect()
+}
+
+fn related_bodies(store: &Store, delta: &Doc) -> String {
+    related_sections(store, delta)
+        .into_iter()
+        .map(|(_, text)| text)
         .collect::<Vec<_>>()
         .join("\n\n")
 }
