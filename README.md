@@ -181,8 +181,8 @@ A fix round prints `review: <n> findings, fix round <k>` (`1 finding` when there
 
 | Runner command           | Fix round runs                                                                                          |
 | ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| contains `{session}`     | the `resume` command with `{session}` set to the session id of the build call; the prompt is the `fix` prompt alone |
-| has no `{session}`       | the `runner` command in a fresh run; the prompt is the `build` prompt followed by the `fix` prompt      |
+| contains `{session}` and `resume` does | the `resume` command with `{session}` set to the session id of the build call; the prompt is the `fix` prompt alone |
+| has no `{session}`, or `resume` has none | the `runner` command in a fresh run; the prompt is the `build` prompt followed by the `fix` prompt |
 
 `review_rounds` is the most fix rounds per task, default 1. With findings remaining after the last round, the build stops. Nothing commits around a finding.
 
@@ -190,11 +190,11 @@ A fix round prints `review: <n> findings, fix round <k>` (`1 finding` when there
 
 | Cause                                    | Output                                                                              |
 | ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| findings remain after `review_rounds`    | `review: <n> findings`, one `  <basis>: <text>` line per finding, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
+| findings remain after `review_rounds`    | `review: <n> findings`, one `   <basis>: <text>` line per finding, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
 | reviewer replies with `stop`             | `stopped. T<n> review: <reason>; working tree kept.`                                |
 | a fix round fails a check                | the check's failure lines, then `stopped. T<n> left unticked; working tree kept.`   |
 
-Each stop exits 2 and leaves the working tree as it is, staged work included. Counts read `1 finding`, `n findings`, `1 fix round` and `n fix rounds`. A re-run resumes at the first unticked task.
+Each stop exits 2 and leaves the working tree as it is, staged work included. The `runner:` and `fix:` lines count the files that call changed, not the files changed so far in the task. Counts read `1 finding`, `n findings`, `1 fix round` and `n fix rounds`. A re-run resumes at the first unticked task.
 
 When a stop leaves findings open, they are written to `<git-dir>/lemma/reviews/<delta>-T<n>.json` as `{"stop","findings":[{"text","basis"}]}`. This covers the two review stops above and a fix round that ends in a failure (a `blocked` reply, a part edit, a bad ref, lint or the settled-claim check). The file is not committed and is overwritten by the next stop of the same task. Nothing is written to `tasks.md` or `claims.md`.
 
@@ -290,7 +290,7 @@ timeout  = 1800
 | ---------- | -------------------------------- | ----------------------------------------- |
 | `runner`   | `claude -p --session-id {session} --output-format json --json-schema {schema}` | Command `lemma build` runs per task |
 | `reviewer` | the `runner` value               | Command `lemma review`, `lemma plan` and the `lemma build` review gate run |
-| `resume`   | `claude -p --resume {session} --output-format json --json-schema {schema}` | Command a fix round runs when `runner` contains `{session}` |
+| `resume`   | `claude -p --resume {session} --output-format json --json-schema {schema}` | Command a fix round runs when `runner` and `resume` both contain `{session}` |
 | `review_rounds` | `1`                         | Most fix rounds per task before the build stops |
 | `timeout`  | `1800`                           | Seconds before a run is killed             |
 

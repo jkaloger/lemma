@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 const NONE: &str = "(none)";
 
-fn file(root: &Path, delta_id: &str) -> Option<PathBuf> {
+pub fn file(root: &Path, delta_id: &str) -> Option<PathBuf> {
     if !is_safe_file_name(delta_id) {
         return None;
     }

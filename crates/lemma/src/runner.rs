@@ -226,6 +226,10 @@ pub fn tracked(
     )
 }
 
+pub fn resumable(command: &str) -> bool {
+    command.contains(SESSION)
+}
+
 /// Runs `command` in the session an earlier `tracked` call announced.
 #[allow(clippy::too_many_arguments)]
 pub fn resumed(

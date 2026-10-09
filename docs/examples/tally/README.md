@@ -124,11 +124,11 @@ T2 balance endpoint (settles AC-2, AC-3)
 
 Each task gets a fresh runner with the task line, `design.md`, the claims it settles, the dictums whose `governs` match, and the spec's intent. After the runner returns, lemma writes the refs it reports under their claims (a runner that edits a delta file or reports `blocked` stops the loop), `lint` runs, the settled claims' refs must resolve, a reviewer judges the task's staged diff, the box is ticked and the task is committed. A failure stops the loop with the tree intact. Fix by hand or re-run; `build` resumes from the first unticked task.
 
-The reviewer reads the task, the claims it settles, the design, the convention, the dictums, the related documents and the delta's diff so far as read-only context. Each finding it reports cites a written basis: `task`, `design`, `convention`, a claim id, a dictum rule id or a related document id. Findings go back to the builder in a fix round, which resumes the build session when the runner command has `{session}`. `review_rounds` in `lemma.toml` bounds the rounds, default 1. Findings left after the last round stop the build:
+The reviewer reads the task, the claims it settles, the design, the convention, the dictums, the related documents and the delta's diff so far as read-only context. Each finding it reports cites a written basis: `task`, `design`, `convention`, a claim id, a dictum rule id or a related document id. Findings go back to the builder in a fix round, which resumes the build session when the runner and resume commands have `{session}`. The `runner:` and `fix:` lines count the files that call changed. `review_rounds` in `lemma.toml` bounds the rounds, default 1. Findings left after the last round stop the build:
 
 ```
    review: 1 finding
-   DICTUM-003 [DATA-4]: balance() loads every entry; aggregate in SQL
+   DATA-4: balance() loads every entry; aggregate in SQL
    stopped. T2 left unticked after 1 fix round; working tree kept.
 ```
 

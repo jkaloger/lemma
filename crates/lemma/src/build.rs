@@ -1,17 +1,16 @@
 use crate::claims::{self, Claim};
 use crate::evidence::{self, RefStatus};
 use crate::gate;
-use crate::git::git_output;
+use crate::git::{changed_since, git_output};
 use crate::lint::{self, ref_name};
 use crate::payload::{Doc, CLAIMS_PART, TASKS_PART};
 use crate::prompts::{self, Prompt};
 use crate::review::{part_file, PARTS};
-use crate::session::lemma_dir;
 use crate::tasks::{self, Task};
 use crate::world::World;
-use crate::{context, plan, project, runner, schema};
+use crate::{context, plan, project, reviews, runner, schema};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -53,10 +52,25 @@ fn load_delta(root: &Path, id: &str) -> Result<(lazyspec::engine::store::Store, 
     Ok((store, delta))
 }
 
-fn changed_paths(root: &Path) -> usize {
-    git_output(root, &["status", "--porcelain", "--untracked-files=all"])
-        .unwrap_or_default()
-        .lines()
+type TreeState = BTreeMap<String, Option<Vec<u8>>>;
+
+fn tree_state(root: &Path) -> TreeState {
+    changed_since(root, "HEAD")
+        .into_iter()
+        .map(|path| {
+            let content = std::fs::read(root.join(&path)).ok();
+            (path, content)
+        })
+        .collect()
+}
+
+fn changed_between(before: &TreeState, after: &TreeState) -> usize {
+    before
+        .keys()
+        .chain(after.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|path| before.get(*path) != after.get(*path))
         .count()
 }
 
@@ -183,6 +197,7 @@ fn runner_reply(
     let schema = schema::build(task);
     let label = format!("{} {name}", task.id);
     let started = std::time::Instant::now();
+    let before = tree_state(root);
     let reply = match resume {
         Some(session) => runner::resumed(
             &label,
@@ -208,7 +223,7 @@ fn runner_reply(
     println!(
         "   {name}: {}, {} files",
         elapsed_text(started.elapsed()),
-        changed_paths(root)
+        changed_between(&before, &tree_state(root))
     );
     let parsed = serde_json::from_value(reply.json().map_err(failed)?)
         .map_err(|e| failed(format!("reply: {e}")))?;
@@ -275,20 +290,16 @@ fn run_fix(
     let values = BTreeMap::from([("findings", findings_list(findings))]);
     let fix = prompts::rendered(Prompt::Fix, root, &values)
         .map_err(|message| unticked(vec![format!("   fix: {message}")]))?;
-    let prompt = match built.session {
+    let session = built
+        .session
+        .as_deref()
+        .filter(|_| runner::resumable(&config.resume));
+    let prompt = match session {
         Some(_) => fix,
         None => format!("{}\n\n{fix}", built.prompt),
     };
     let parts = delta_parts(root, delta);
-    let (reply, _) = runner_reply(
-        root,
-        delta,
-        task,
-        "fix",
-        &prompt,
-        built.session.as_deref(),
-        config,
-    )?;
+    let (reply, _) = runner_reply(root, delta, task, "fix", &prompt, session, config)?;
     accept(root, delta, task, "fix", &parts, &built.claims, &reply)
 }
 
@@ -406,9 +417,8 @@ fn commit(root: &Path, delta: &Doc, task: &Task, trailer: &str) -> Result<(), Fa
 }
 
 fn record_review(root: &Path, delta: &Doc, task: &Task, verdict: &gate::Verdict) -> Option<()> {
-    let dir = lemma_dir(root)?.join("reviews");
-    std::fs::create_dir_all(&dir).ok()?;
-    let file = dir.join(format!("{}-{}.json", delta.id, task.id));
+    let file = reviews::file(root, &format!("{}-{}", delta.id, task.id))?;
+    std::fs::create_dir_all(file.parent()?).ok()?;
     std::fs::write(file, serde_json::to_string_pretty(verdict).ok()?).ok()
 }
 

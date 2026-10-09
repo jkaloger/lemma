@@ -109,13 +109,13 @@ pub fn read(root: &Path, delta: &Doc, part: &str) -> String {
     std::fs::read_to_string(root.join(part_file(delta, part))).unwrap_or_default()
 }
 
-pub fn ensure_newline(text: &mut String) {
+fn ensure_newline(text: &mut String) {
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
 }
 
-pub fn collapsed(text: &str) -> String {
+fn collapsed(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -123,7 +123,7 @@ fn id_number(id: &str) -> Option<u32> {
     id.strip_prefix(ID_PREFIX)?.parse().ok()
 }
 
-pub fn next_number(ids: impl Iterator<Item = u32>) -> u32 {
+fn next_number(ids: impl Iterator<Item = u32>) -> u32 {
     ids.max().unwrap_or(0) + 1
 }
 
@@ -247,7 +247,7 @@ fn task_line(
     Ok(task_entry(number, &task.text, &settles))
 }
 
-pub fn task_entry(number: u32, text: &str, settles: &[String]) -> String {
+fn task_entry(number: u32, text: &str, settles: &[String]) -> String {
     let tail = match settles.is_empty() {
         true => "chore".to_string(),
         false => format!("settles {}", settles.join(", ")),

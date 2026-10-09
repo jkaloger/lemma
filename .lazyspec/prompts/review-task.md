@@ -2,6 +2,8 @@ You are reviewing one task of a delta before it is committed. The task's diff is
 
 {{task}}
 
+What to judge: does the task diff do the task, no more and no less; does each `@ref` test prove the claim it settles; does the work honour `design.md`, the convention and the dictums. `Out of scope` in the delta's index lists what the task must not touch.
+
 Rules:
 
 - Judge only the task diff under "Task diff". The delta's diff so far is read-only context, there to catch the task undoing earlier work.
@@ -33,6 +35,10 @@ No findings and an empty `stop` mean the task is ready to commit.
 {{related}}
 
 # Delta
+
+## index.md
+
+{{delta}}
 
 ## design.md
 

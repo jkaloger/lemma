@@ -807,6 +807,56 @@ fn the_resume_command_gets_the_session_the_build_call_ran_in() {
     assert_eq!(run.stdout.matches("watch: ").count(), 2, "{}", run.stdout);
 }
 
+#[test]
+fn a_resume_command_without_session_makes_the_fix_a_fresh_runner_with_the_build_prompt() {
+    let repo = project("in-progress", single_task());
+    let resume = format!(
+        "resume = \"{} resumed\"\n",
+        repo.path("fake-runner.sh").display()
+    );
+    install_fakes_with(&repo, " {session}", &resume);
+    repo.commit("session runner");
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let build_prompt = repo.read(".fixture/T1.prompt.0");
+    let fix = repo.read(".fixture/T1.prompt.1");
+    assert!(fix.starts_with(&build_prompt), "{fix}");
+    assert!(uuid_like(&repo.read(".fixture/T1.args.1")));
+}
+
+#[test]
+fn the_fix_line_counts_only_the_files_the_fix_changed() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    fixture(&repo, "T1", "src/extra.rs", "pub fn extra() {}\n");
+    review_round(&repo, "T1", 1, &[HELPER]);
+    fixture(
+        &repo,
+        "T1.fix1",
+        "src/one.rs",
+        "pub fn one() { /* fixed */ }\n",
+    );
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let line = |prefix: &str| {
+        run.stdout
+            .lines()
+            .find(|l| l.starts_with(prefix))
+            .unwrap()
+            .to_string()
+    };
+    assert!(line("   runner: ").ends_with(", 2 files"), "{}", run.stdout);
+    assert!(line("   fix: ").ends_with(", 1 files"), "{}", run.stdout);
+}
+
 fn uuid_like(text: &str) -> bool {
     text.len() == 36 && text.matches('-').count() == 4
 }
