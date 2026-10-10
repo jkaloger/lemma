@@ -38,5 +38,3 @@ Collapse needs lemma to own every line in the block. The runner's stderr is alre
 **Seams.** Two pure pieces carry the logic so tests need no terminal: `activity(line: &str, root) -> Option<String>` maps one transcript line to the `<tool> <target>` text, and a block renderer maps a task's step events to lines, and to the collapsed summary. The runner and build loops feed them. Mode is passed in, not read from the environment inside them.
 
 **Docs.** README's "lemma does not read the transcript" becomes: lemma reads the transcript on a terminal to show activity, and for nothing else. README build sample gains a live-mode example beside the plain one.
-
-> review: Reading the transcript reverses a stated choice (README, DELTA-010 decision 84). Consider a DECISION recording that it is display-only, so a later change cannot start trusting it.

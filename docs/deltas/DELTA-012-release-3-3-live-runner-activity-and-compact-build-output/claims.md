@@ -1,13 +1,15 @@
-- When stdout or stderr is not a terminal, `review`, `plan` and `build` print exactly what they print today, watch lines included.
-- In live mode, while a runner call with `{session}` waits, the spinner shows the latest tool call in its transcript as `<tool> <target>`.
-- A file tool's target is its path relative to the repo root; `Bash` shows the first line of its command; `Grep` and `Glob` show the pattern; other tools show the name only.
-- The activity line is cut to terminal width.
-- A missing transcript, or a transcript line that is not JSON, leaves the spinner showing label and elapsed only, and the run's outcome is unchanged.
-- A runner command without `{session}` shows no activity.
-- Live mode prints no `watch:` line.
-- A stopped task in live mode ends its block with `transcript: <path>` for the call that failed.
-- In live mode each build step line carries `✓` on pass, `✗` on failure, `·` for information.
-- When a task commits in live mode, its block is replaced by one line: `✓`, task id and title, elapsed, review outcome and short sha.
-- A stopped task's block is not collapsed.
-- `NO_COLOR` removes colour and keeps glyphs.
-- [intent] lemma reads the transcript for display only; no reply, check, decision or exit status depends on it.
+- [AC-1] When stdout or stderr is not a terminal, `review`, `plan` and `build` print exactly what they print today, watch lines included.
+- [AC-2] In live mode, while a runner call with `{session}` waits, the spinner shows the latest tool call in its transcript as `<tool> <target>`.
+- [AC-3] A file tool's target is its path relative to the repo root; `Bash` shows the first line of its command; `Grep` and `Glob` show the pattern; other tools show the name only.
+- [AC-4] The activity line is cut to terminal width.
+- [AC-5] A missing transcript, or a transcript line that is not JSON, leaves the spinner showing label and elapsed only, and the run's outcome is unchanged.
+- [AC-6] A runner command without `{session}` shows no activity.
+- [AC-7] Live mode prints no `watch:` line.
+- [AC-8] A stopped task in live mode ends its block with `transcript: <path>` for the call that failed.
+- [AC-9] In live mode each build step line carries `✓` on pass, `✗` on failure, `·` for information.
+- [AC-10] When a task commits in live mode, its block is replaced by one line: `✓`, task id and title, elapsed, review outcome and short sha.
+- [AC-11] A stopped task's block is not collapsed.
+- [AC-12] `NO_COLOR` removes colour and keeps glyphs.
+- [AC-13] [intent] lemma reads the transcript for display only; no reply, check, decision or exit status depends on it.
+- [AC-14] A transcript line split across two polls produces its activity once, after the rest of the line arrives.
+- [AC-15] The collapsed task line's review outcome reads `review clean` or `<n> finding(s) fixed`, matching the commit trailer counts.
