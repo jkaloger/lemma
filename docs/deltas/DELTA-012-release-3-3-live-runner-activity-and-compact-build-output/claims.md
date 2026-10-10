@@ -1,4 +1,5 @@
 - [AC-1] When stdout or stderr is not a terminal, `review`, `plan` and `build` print exactly what they print today, watch lines included.
+  @ref crates/lemma/tests/plain.rs#piped_review_plan_and_build_print_the_plain_report_with_watch_lines
 - [AC-2] In live mode, while a runner call with `{session}` waits, the spinner shows the latest tool call in its transcript as `<tool> <target>`.
 - [AC-3] A file tool's target is its path relative to the repo root; `Bash` shows the first line of its command; `Grep` and `Glob` show the pattern; other tools show the name only.
 - [AC-4] The activity line is cut to terminal width.

@@ -7,6 +7,7 @@ mod evidence;
 mod gate;
 mod git;
 mod lint;
+mod output;
 mod payload;
 mod plan;
 mod project;
@@ -237,7 +238,10 @@ fn startup(id: &str) -> Result<Startup, String> {
     prompts::Prompt::ALL
         .into_iter()
         .try_for_each(|prompt| prompts::load(&root, prompt).map(drop))?;
-    let config = runner::load(&root)?;
+    let config = runner::Config {
+        mode: output::Mode::pick(),
+        ..runner::load(&root)?
+    };
     Ok(Startup {
         root,
         store,

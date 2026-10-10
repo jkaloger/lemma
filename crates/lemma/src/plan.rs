@@ -406,6 +406,7 @@ fn ask_planner(
         &env,
         config.timeout,
         Some(&schema),
+        config.mode,
     )?;
     let reply = serde_json::from_value(reply.json()?).map_err(|e| format!("planner reply: {e}"))?;
     draft(files, parsed, tagged, reply)

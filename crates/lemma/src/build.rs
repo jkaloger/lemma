@@ -208,6 +208,7 @@ fn runner_reply(
             &env,
             config.timeout,
             Some(&schema),
+            config.mode,
         ),
         None => runner::tracked(
             &label,
@@ -217,6 +218,7 @@ fn runner_reply(
             &env,
             config.timeout,
             Some(&schema),
+            config.mode,
         ),
     }
     .map_err(failed)?;

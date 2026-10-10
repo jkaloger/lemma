@@ -90,6 +90,7 @@ pub fn review(
         &env,
         config.timeout,
         Some(&schema),
+        config.mode,
     )?;
     parse(reply.json()?, &bases)
 }

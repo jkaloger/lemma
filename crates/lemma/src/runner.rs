@@ -1,3 +1,4 @@
+use crate::output::Mode;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -26,6 +27,7 @@ pub struct Config {
     pub resume: String,
     pub review_rounds: u32,
     pub timeout: Duration,
+    pub mode: Mode,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +59,7 @@ pub fn load(root: &Path) -> Result<Config, String> {
         resume: raw.resume.unwrap_or_else(|| DEFAULT_RESUME.to_string()),
         review_rounds: raw.review_rounds.unwrap_or(DEFAULT_REVIEW_ROUNDS),
         timeout: Duration::from_secs(raw.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
+        mode: Mode::Plain,
     })
 }
 
@@ -203,6 +206,7 @@ fn spinner(label: &str) -> indicatif::ProgressBar {
     bar
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn tracked(
     label: &str,
     command: &str,
@@ -211,6 +215,7 @@ pub fn tracked(
     env: &[(&str, &str)],
     timeout: Duration,
     schema: Option<&Value>,
+    mode: Mode,
 ) -> Result<Reply, String> {
     let (command, session) = with_session(command);
     announced(
@@ -223,6 +228,7 @@ pub fn tracked(
         env,
         timeout,
         schema,
+        mode,
     )
 }
 
@@ -241,6 +247,7 @@ pub fn resumed(
     env: &[(&str, &str)],
     timeout: Duration,
     schema: Option<&Value>,
+    mode: Mode,
 ) -> Result<Reply, String> {
     announced(
         &mut std::io::stdout(),
@@ -252,6 +259,7 @@ pub fn resumed(
         env,
         timeout,
         schema,
+        mode,
     )
 }
 
@@ -266,6 +274,7 @@ fn announced(
     env: &[(&str, &str)],
     timeout: Duration,
     schema: Option<&Value>,
+    _mode: Mode,
 ) -> Result<Reply, String> {
     if let Some(session) = &session {
         let _ = writeln!(out, "{}", watch_line(root, session));
@@ -660,6 +669,7 @@ printf '{"result": "ok", "usage": {}}'"#,
             &[],
             LONG,
             None,
+            Mode::Plain,
         )
         .unwrap();
 
