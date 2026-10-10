@@ -1,12 +1,13 @@
 ---
 title: 'Release 3.3: live runner activity and compact build output'
 type: delta
-status: draft
+status: in-progress
 author: Jack Kaloger
 date: 2026-10-09
 tags: []
 related:
 - changes: SPEC-002
+reviewed: cfd12a91b6fbb5a133655b3fc8cf85cad315b4b1
 ---
 
 ## Intent
