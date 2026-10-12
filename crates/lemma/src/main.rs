@@ -1,3 +1,4 @@
+mod activity;
 mod advance;
 mod annotate;
 mod build;

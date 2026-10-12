@@ -2,7 +2,9 @@
   @ref crates/lemma/tests/plain.rs#piped_review_plan_and_build_print_the_plain_report_with_watch_lines
 - [AC-2] In live mode, while a runner call with `{session}` waits, the spinner shows the latest tool call in its transcript as `<tool> <target>`.
 - [AC-3] A file tool's target is its path relative to the repo root; `Bash` shows the first line of its command; `Grep` and `Glob` show the pattern; other tools show the name only.
+  @ref crates/lemma/src/activity.rs#each_tool_shows_its_target
 - [AC-4] The activity line is cut to terminal width.
+  @ref crates/lemma/src/activity.rs#the_activity_line_is_cut_to_terminal_width
 - [AC-5] A missing transcript, or a transcript line that is not JSON, leaves the spinner showing label and elapsed only, and the run's outcome is unchanged.
 - [AC-6] A runner command without `{session}` shows no activity.
 - [AC-7] Live mode prints no `watch:` line.

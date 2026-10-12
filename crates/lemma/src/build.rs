@@ -74,7 +74,7 @@ fn changed_between(before: &TreeState, after: &TreeState) -> usize {
         .count()
 }
 
-fn elapsed_text(elapsed: Duration) -> String {
+pub(crate) fn elapsed_text(elapsed: Duration) -> String {
     let secs = elapsed.as_secs();
     match secs >= 60 {
         true => format!("{}m{:02}s", secs / 60, secs % 60),
