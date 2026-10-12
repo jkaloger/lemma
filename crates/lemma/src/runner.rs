@@ -1,9 +1,11 @@
+use crate::activity::{follow, Tail};
 use crate::output::Mode;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -186,6 +188,18 @@ pub fn watch_line(root: &Path, session: &str) -> String {
     )
 }
 
+/// The transcript the live spinner follows; plain mode and session-less commands have none.
+fn transcript(root: &Path, session: Option<&str>, mode: Mode) -> Option<PathBuf> {
+    let session = session.filter(|_| mode == Mode::Live)?;
+    let home = std::env::var_os("HOME")?;
+    Some(
+        Path::new(&home)
+            .join(".claude/projects")
+            .join(encoded_root(root))
+            .join(format!("{session}.jsonl")),
+    )
+}
+
 fn with_session(command: &str) -> (String, Option<String>) {
     if !command.contains(SESSION) {
         return (command.to_string(), None);
@@ -194,12 +208,15 @@ fn with_session(command: &str) -> (String, Option<String>) {
     (command.replace(SESSION, &session), Some(session))
 }
 
-fn spinner(label: &str) -> indicatif::ProgressBar {
+fn spinner(label: &str, following: bool) -> indicatif::ProgressBar {
     let bar =
         indicatif::ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
+    let template = match following {
+        true => "{spinner} {msg}",
+        false => "{spinner} {msg} {elapsed}",
+    };
     bar.set_style(
-        indicatif::ProgressStyle::with_template("{spinner} {msg} {elapsed}")
-            .expect("the spinner template is valid"),
+        indicatif::ProgressStyle::with_template(template).expect("the spinner template is valid"),
     );
     bar.set_message(label.to_string());
     bar.enable_steady_tick(Duration::from_millis(100));
@@ -274,15 +291,54 @@ fn announced(
     env: &[(&str, &str)],
     timeout: Duration,
     schema: Option<&Value>,
-    _mode: Mode,
+    mode: Mode,
 ) -> Result<Reply, String> {
     if let Some(session) = &session {
         let _ = writeln!(out, "{}", watch_line(root, session));
     }
-    let bar = spinner(label);
-    let reply = run(command, prompt, root, env, timeout, schema);
+    let transcript = transcript(root, session.as_deref(), mode);
+    let bar = spinner(label, transcript.is_some());
+    let width = (console::Term::stderr().size().1 as usize).saturating_sub(2);
+    let reply = watched(
+        label,
+        command,
+        prompt,
+        root,
+        env,
+        timeout,
+        schema,
+        transcript,
+        width,
+        |line| bar.set_message(line),
+    );
     bar.finish_and_clear();
     reply.map(|reply| Reply { session, ..reply })
+}
+
+/// Runs `command`, showing the transcript's activity while it waits. The reply never reads it.
+#[allow(clippy::too_many_arguments)]
+fn watched(
+    label: &str,
+    command: &str,
+    prompt: &str,
+    root: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    schema: Option<&Value>,
+    transcript: Option<PathBuf>,
+    width: usize,
+    show: impl FnMut(String) + Send,
+) -> Result<Reply, String> {
+    let Some(transcript) = transcript else {
+        return run(command, prompt, root, env, timeout, schema);
+    };
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::scope(|scope| {
+        scope.spawn(move || follow(Tail::new(transcript), root, label, width, &stopped, show));
+        let reply = run(command, prompt, root, env, timeout, schema);
+        drop(stop);
+        reply
+    })
 }
 
 pub fn run(
@@ -405,6 +461,13 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let command = script.to_string_lossy().into_owned();
         (root, command)
+    }
+
+    fn root_with_script_in(root: &Path, body: &str) -> String {
+        let script = root.join(format!("fake-{}.sh", uuid::Uuid::new_v4()));
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script.to_string_lossy().into_owned()
     }
 
     const LONG: Duration = Duration::from_secs(30);
@@ -679,6 +742,130 @@ printf '{"result": "ok", "usage": {}}'"#,
             printed.contains(&format!("/{}.jsonl\"", reply.text)),
             "{printed}"
         );
+    }
+
+    fn watch_with(
+        root: &Path,
+        command: &str,
+        transcript: Option<PathBuf>,
+    ) -> (Result<Reply, String>, Vec<String>) {
+        let shown = std::sync::Mutex::new(Vec::new());
+        let reply = watched(
+            "T1 runner",
+            command,
+            "",
+            root,
+            &[],
+            LONG,
+            None,
+            transcript,
+            80,
+            |line| shown.lock().unwrap().push(line),
+        );
+        (reply, shown.into_inner().unwrap())
+    }
+
+    /// `T1 runner <elapsed>` then exactly `rest`; the elapsed depends on machine load.
+    fn label_elapsed(line: &str, rest: &str) -> bool {
+        regex::Regex::new(r"^T1 runner \d+s(.*)$")
+            .unwrap()
+            .captures(line)
+            .is_some_and(|c| &c[1] == rest)
+    }
+
+    fn tool_line(name: &str, input: serde_json::Value) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [{ "type": "tool_use", "name": name, "input": input }]}
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_spinner_shows_the_latest_tool_call_in_the_transcript() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("session.jsonl");
+        let read = tool_line(
+            "Read",
+            serde_json::json!({ "file_path": root.path().join("src/a.rs") }),
+        );
+        let bash = tool_line("Bash", serde_json::json!({ "command": "cargo test" }));
+        std::fs::write(root.path().join("read.json"), read).unwrap();
+        std::fs::write(root.path().join("bash.json"), bash).unwrap();
+        let command = root_with_script_in(
+            root.path(),
+            r#"cat read.json > session.jsonl; echo >> session.jsonl; sleep 1; cat bash.json >> session.jsonl; echo >> session.jsonl; sleep 1; printf '{"result": "ok"}'"#,
+        );
+
+        let (reply, shown) = watch_with(root.path(), &command, Some(transcript));
+
+        assert_eq!(reply.unwrap().text, "ok");
+        let is_read = |l: &String| label_elapsed(l, " · Read src/a.rs");
+        let is_bash = |l: &String| label_elapsed(l, " · Bash cargo test");
+        let first_bash = shown
+            .iter()
+            .position(is_bash)
+            .unwrap_or_else(|| panic!("{shown:?}"));
+        assert!(shown[..first_bash].iter().any(is_read), "{shown:?}");
+        assert!(!shown[first_bash..].iter().any(is_read), "{shown:?}");
+        assert!(is_bash(shown.last().unwrap()), "{shown:?}");
+    }
+
+    #[test]
+    fn a_missing_or_garbled_transcript_leaves_label_and_elapsed_and_the_outcome_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let ok = root_with_script_in(root.path(), r#"sleep 1; printf '{"result": "ok"}'"#);
+        let garbled = root_with_script_in(
+            root.path(),
+            r#"printf '{not json\n' > garbled.jsonl; sleep 1; printf '{"result": "ok"}'"#,
+        );
+
+        for (command, transcript) in [(&ok, "missing.jsonl"), (&garbled, "garbled.jsonl")] {
+            let (reply, shown) =
+                watch_with(root.path(), command, Some(root.path().join(transcript)));
+            let (plain, _) = watch_with(root.path(), command, None);
+
+            assert_eq!(reply.unwrap().text, plain.unwrap().text);
+            assert!(!shown.is_empty());
+            assert!(shown.iter().all(|l| label_elapsed(l, "")), "{shown:?}");
+        }
+    }
+
+    #[test]
+    fn a_runner_command_without_session_shows_no_activity() {
+        let (root, command) = root_with_script(r#"printf '{"result": "ok"}'"#);
+        let (command, session) = with_session(&command);
+
+        let transcript = transcript(root.path(), session.as_deref(), Mode::Live);
+        let (reply, shown) = watch_with(root.path(), &command, transcript);
+
+        assert_eq!(reply.unwrap().text, "ok");
+        assert!(shown.is_empty(), "{shown:?}");
+        assert!(transcript_for_session_in(root.path(), Mode::Live).is_some());
+        assert!(transcript_for_session_in(root.path(), Mode::Plain).is_none());
+    }
+
+    fn transcript_for_session_in(root: &Path, mode: Mode) -> Option<PathBuf> {
+        transcript(root, Some("abc"), mode)
+    }
+
+    #[test]
+    fn the_transcript_never_decides_the_reply_or_the_exit_status() {
+        let root = tempfile::tempdir().unwrap();
+        let decoy = r#"{"type":"result","subtype":"success","result":"{\"verdict\": \"done\"}"}"#;
+        std::fs::write(root.path().join("decoy.jsonl"), format!("{decoy}\n")).unwrap();
+        let failing = root_with_script_in(root.path(), "echo boom >&2; exit 3");
+        let passing = root_with_script_in(root.path(), r#"printf '{"result": "real"}'"#);
+        let transcript = Some(root.path().join("decoy.jsonl"));
+
+        let (failed, _) = watch_with(root.path(), &failing, transcript.clone());
+        let (passed, _) = watch_with(root.path(), &passing, transcript);
+
+        assert_eq!(
+            failed.unwrap_err(),
+            watch_with(root.path(), &failing, None).0.unwrap_err()
+        );
+        assert_eq!(passed.unwrap().text, "real");
     }
 
     #[test]
