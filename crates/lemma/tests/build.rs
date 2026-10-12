@@ -14,6 +14,7 @@ const RUNNER: &str = "#!/bin/sh\nmkdir -p .fixture\ncat > \".fixture/$LEMMA_TASK
 const REVIEWER: &str = "#!/bin/sh\nmkdir -p .fixture\nn=$(cat \".fixture/$LEMMA_TASK.rcalls\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \".fixture/$LEMMA_TASK.rcalls\"\ncat > \".fixture/$LEMMA_TASK.review-prompt\"\ncp \".fixture/$LEMMA_TASK.review-prompt\" \".fixture/$LEMMA_TASK.review-prompt.$n\"\ncp \"$1\" \".fixture/$LEMMA_TASK.schema\"\nif [ \"$n\" = 1 ]; then f=\".fixture/$LEMMA_TASK.review.json\"; else f=\".fixture/$LEMMA_TASK.review$n.json\"; fi\nif [ -f \"$f\" ]; then cat \"$f\"; else echo '{\"structured_output\":{\"stop\":\"\",\"findings\":[]}}'; fi\n";
 const REOPEN: (&str, &str, &str) = ("AC-1", "tests/store_test.rs", "reopen_keeps_prior");
 const OTHER: (&str, &str, &str) = ("AC-2", "tests/store_test.rs", "other_test");
+const MISSING: (&str, &str, &str) = ("AC-1", "tests/store_test.rs", "missing_fn");
 
 fn claims(ac1: bool, ac2: bool) -> String {
     let ref_of = |on: bool, line: &'static str| if on { line } else { "" };
@@ -147,51 +148,61 @@ fn the_report_follows_the_documented_shape() {
 }
 
 #[test]
-fn a_lint_error_stops_with_the_tree_kept() {
+fn a_lint_error_left_after_the_last_fix_round_stops_with_the_tree_kept() {
     let repo = project("in-progress", TWO_TASKS);
     let broken = "- [AC-1] Reopen keeps the prior answer.\n  @ref tests/store_test.rs#missing_fn\n- [AC-2] Writes are atomic.\n";
     fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
-    done(
-        &repo,
-        "T1",
-        &[("AC-1", "tests/store_test.rs", "missing_fn")],
-    );
-    let before = repo.head();
-
-    let run = build(&repo, &[]);
-
-    assert_eq!(run.code, 2, "{}", run.stdout);
-    assert!(run.stdout.contains("   lint: "), "{}", run.stdout);
-    assert!(run.stdout.contains("missing_fn"), "{}", run.stdout);
-    assert!(run
-        .stdout
-        .ends_with("   stopped. T1 left unticked; working tree kept.\n"));
-    assert_eq!(tasks(&repo), TWO_TASKS);
-    assert_eq!(repo.read("src/one.rs"), "pub fn one() {}\n");
-    assert_eq!(repo.read(CLAIMS_PATH), broken);
-    assert_eq!(repo.head(), before);
-}
-
-#[test]
-fn a_settled_claim_without_a_ref_stops() {
-    let repo = project("in-progress", TWO_TASKS);
-    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
-    done(&repo, "T1", &[]);
+    done(&repo, "T1", &[MISSING]);
+    fix_reply(&repo, "T1", 1, &[MISSING]);
     let before = repo.head();
 
     let run = build(&repo, &[]);
 
     assert_eq!(run.code, 2, "{}", run.stdout);
     assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("   lint: "), "{}", run.stdout);
+    assert!(run.stdout.contains("missing_fn"), "{}", run.stdout);
+    assert!(run
+        .stdout
+        .ends_with("   stopped. T1 left unticked; working tree kept.\n"));
+    assert_eq!(repo.read(".fixture/T1.fixes").trim(), "1");
+    assert!(!repo.path(".fixture/T1.rcalls").exists());
+    assert_eq!(tasks(&repo), TWO_TASKS);
+    assert_eq!(repo.read("src/one.rs"), "pub fn one() {}\n");
+    assert_eq!(repo.read(CLAIMS_PATH), broken);
+    assert_eq!(repo.head(), before);
+    let record = record(&repo);
+    assert_eq!(record["ending"], "unticked");
+    let finding = &record["findings"][0];
+    assert_eq!(finding["basis"], "AC-1");
+    assert!(
+        finding["text"].as_str().unwrap().starts_with("lint: "),
+        "{finding}"
+    );
+}
+
+#[test]
+fn a_settled_claim_without_a_ref_becomes_a_fix_round_finding_on_the_claim() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
         run.stdout.contains("   AC-1 has no @ref\n"),
         "{}",
         run.stdout
     );
-    assert!(run
-        .stdout
-        .ends_with("   stopped. T1 left unticked; working tree kept.\n"));
-    assert_eq!(tasks(&repo), TWO_TASKS);
-    assert_eq!(repo.head(), before);
+    assert!(fix_prompt(&repo).contains("- [AC-1] AC-1 has no @ref\n"));
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+    assert_eq!(repo.read(CLAIMS_PATH), claims(true, false));
 }
 
 #[test]
@@ -386,16 +397,17 @@ fn a_blocked_outcome_prints_the_reason_and_leaves_the_task_unticked() {
 }
 
 #[test]
-fn a_runner_that_edits_a_delta_part_stops_the_build() {
-    let repo = project("in-progress", TWO_TASKS);
+fn a_delta_part_edit_becomes_a_fix_round_finding() {
+    let repo = project("in-progress", single_task());
     fixture(&repo, "T1", CLAIMS_PATH, &claims(true, false));
     fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
     done(&repo, "T1", &[REOPEN]);
-    let before = repo.head();
+    fixture(&repo, "T1.fix1", CLAIMS_PATH, BARE);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
 
     let run = build(&repo, &[]);
 
-    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
         run.stdout.contains(&format!(
             "   runner edited {CLAIMS_PATH}; lemma writes delta parts\n"
@@ -403,28 +415,145 @@ fn a_runner_that_edits_a_delta_part_stops_the_build() {
         "{}",
         run.stdout
     );
-    assert!(run
-        .stdout
-        .ends_with("   stopped. T1 left unticked; working tree kept.\n"));
-    assert_eq!(tasks(&repo), TWO_TASKS);
-    assert_eq!(repo.head(), before);
+    assert!(fix_prompt(&repo).contains(&format!(
+        "- [task] runner edited {CLAIMS_PATH}; lemma writes delta parts\n"
+    )));
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+    assert_eq!(repo.read(CLAIMS_PATH), claims(true, false));
 }
 
 #[test]
-fn a_reply_with_no_json_stops_the_build() {
-    let repo = project("in-progress", TWO_TASKS);
+fn a_reply_without_json_becomes_a_fix_round_finding() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
     repo.write(".fixture/T1.json", r#"{"result": "all done"}"#);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
 
     let run = build(&repo, &[]);
 
-    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
         run.stdout
             .contains("   runner: runner reply has no JSON object\n"),
         "{}",
         run.stdout
     );
-    assert_eq!(tasks(&repo), TWO_TASKS);
+    assert!(fix_prompt(&repo).contains("- [task] runner: runner reply has no JSON object\n"));
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+}
+
+#[test]
+fn a_lint_error_becomes_a_fix_round_finding_on_the_claim_it_names() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[MISSING]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let fix = fix_prompt(&repo);
+    let finding = fix
+        .lines()
+        .find(|l| l.starts_with("- [AC-1] lint: "))
+        .unwrap_or_else(|| panic!("{fix}"));
+    assert!(finding.contains("missing_fn"), "{finding}");
+    assert_eq!(repo.read(CLAIMS_PATH), claims(true, false));
+}
+
+#[test]
+fn a_not_a_test_ref_becomes_a_fix_round_finding() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[("AC-1", "src/one.rs", "one")]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let fix = fix_prompt(&repo);
+    let finding = fix
+        .lines()
+        .find(|l| l.contains("src/one.rs#one"))
+        .unwrap_or_else(|| panic!("{fix}"));
+    assert!(finding.starts_with("- [AC-1] "), "{finding}");
+    assert!(finding.contains("not"), "{finding}");
+}
+
+#[test]
+fn a_check_fix_round_spends_the_budget_reviewer_findings_would_use() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    review_round(&repo, "T1", 1, &[HELPER]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .ends_with("   stopped. T1 left unticked after 1 fix round; working tree kept.\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(repo.read(".fixture/T1.fixes").trim(), "1");
+}
+
+#[test]
+fn a_check_failure_goes_to_a_fix_round_and_a_clean_review_commits() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[MISSING]);
+    fixture(
+        &repo,
+        "T1.fix1",
+        "src/one.rs",
+        "pub fn one() { /* fixed */ }\n",
+    );
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("   review: clean\n"), "{}", run.stdout);
+    assert_eq!(repo.read(".fixture/T1.rcalls").trim(), "1");
+    assert_eq!(
+        repo.git(&["log", "-1", "--format=%B"]).trim_end(),
+        "DELTA-001 T1: reopen\n\nLemma-Review: 1 finding fixed in 1 round"
+    );
+    assert_eq!(repo.read("src/one.rs"), "pub fn one() { /* fixed */ }\n");
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_blocked_reply_stops_at_once_without_a_fix_round() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", CLAIMS_PATH, &claims(true, false));
+    blocked(&repo, "T1", "needs a human");
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout.contains("   runner blocked: needs a human\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("fix round"), "{}", run.stdout);
+    assert!(!repo.path(".fixture/T1.fixes").exists());
+    assert_eq!(record(&repo)["ending"], "unticked");
 }
 
 #[test]
@@ -638,6 +767,10 @@ fn the_reviewer_sees_earlier_work_as_read_only_context() {
     assert!(!context.contains("pub fn two()"), "{context}");
     assert!(task_diff.contains("+pub fn two() {}"), "{task_diff}");
     assert!(!task_diff.contains("pub fn one()"), "{task_diff}");
+}
+
+fn fix_prompt(repo: &Repo) -> String {
+    repo.read(".fixture/T1.prompt.1")
 }
 
 fn fix_reply(repo: &Repo, task: &str, round: u32, refs: &[(&str, &str, &str)]) {
@@ -884,16 +1017,11 @@ fn without_a_session_the_fix_is_a_fresh_runner_with_the_build_prompt_and_the_fix
 }
 
 #[test]
-fn a_fix_that_breaks_lint_stops_before_the_second_review() {
+fn a_fix_that_breaks_lint_after_the_last_round_stops_before_the_second_review() {
     let repo = project("in-progress", single_task());
     one_task_fixtures(&repo);
     review_round(&repo, "T1", 1, &[HELPER]);
-    fix_reply(
-        &repo,
-        "T1",
-        1,
-        &[("AC-1", "tests/store_test.rs", "missing_fn")],
-    );
+    fix_reply(&repo, "T1", 1, &[MISSING]);
     let before = repo.head();
 
     let run = build(&repo, &[]);
@@ -908,6 +1036,7 @@ fn a_fix_that_breaks_lint_stops_before_the_second_review() {
         run.stdout
     );
     assert_eq!(repo.read(".fixture/T1.rcalls").trim(), "1");
+    assert_eq!(repo.read(".fixture/T1.fixes").trim(), "1");
     assert_eq!(tasks(&repo), single_task());
     assert_eq!(repo.head(), before);
     let record: Value =

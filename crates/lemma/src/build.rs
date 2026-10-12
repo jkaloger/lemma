@@ -25,6 +25,8 @@ pub enum Outcome {
 
 enum Ending {
     Unticked,
+    /// Unticked by a check failure, which a fix round may clear.
+    Checked,
     Ticked,
     Reviewed(String),
 }
@@ -61,6 +63,27 @@ impl Failure {
             })
             .collect()
     }
+
+    /// Check failures carry no basis of their own; a diagnostic that names a
+    /// claim rests on it, any other on the task.
+    fn with_check_findings(self, claim_ids: &[String]) -> Failure {
+        let findings = self
+            .detail
+            .iter()
+            .map(|line| {
+                let text = line.trim().to_string();
+                let basis = named_claim(&text, claim_ids).unwrap_or("task").to_string();
+                gate::Finding { text, basis }
+            })
+            .collect();
+        Failure { findings, ..self }
+    }
+}
+
+fn named_claim<'a>(text: &str, claim_ids: &'a [String]) -> Option<&'a str> {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .find_map(|word| claim_ids.iter().find(|id| *id == word))
+        .map(String::as_str)
 }
 
 fn unticked(detail: Vec<String>) -> Failure {
@@ -70,6 +93,22 @@ fn unticked(detail: Vec<String>) -> Failure {
         findings: Vec::new(),
         transcript: None,
         session: None,
+    }
+}
+
+fn check_failed(detail: Vec<String>) -> Failure {
+    Failure {
+        ending: Ending::Checked,
+        ..unticked(detail)
+    }
+}
+
+/// Splits a check failure, which goes to a fix round, from a stop.
+fn checked(result: Result<(), Failure>) -> Result<Option<Failure>, Failure> {
+    match result {
+        Ok(()) => Ok(None),
+        Err(failure) if matches!(failure.ending, Ending::Checked) => Ok(Some(failure)),
+        Err(failure) => Err(failure),
     }
 }
 
@@ -161,7 +200,7 @@ fn reject_part_edits(root: &Path, delta: &Doc, before: &[(String, String)]) -> R
     let Some(((path, _), _)) = before.iter().zip(&after).find(|(b, a)| b.1 != a.1) else {
         return Ok(());
     };
-    Err(unticked(vec![format!(
+    Err(check_failed(vec![format!(
         "   runner edited {path}; lemma writes delta parts"
     )]))
 }
@@ -213,6 +252,18 @@ struct Built {
     prompt: String,
     session: Option<String>,
     claims: String,
+    parts: Vec<(String, String)>,
+}
+
+impl Built {
+    fn claim_ids(&self) -> Vec<String> {
+        claims::parse(&self.claims)
+            .claims
+            .into_iter()
+            .filter(|c| !c.struck)
+            .map(|c| c.id)
+            .collect()
+    }
 }
 
 struct Call<'a> {
@@ -234,7 +285,7 @@ fn runner_reply(
         prompt,
         resume,
     } = call;
-    let failed = |message: String| unticked(vec![format!("   {name}: {message}")]);
+    let failed = |message: String| check_failed(vec![format!("   {name}: {message}")]);
     let ran = |failed: runner::Failed| failed_call(name, failed);
     let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
     let schema = schema::build(task);
@@ -299,18 +350,60 @@ fn accept(
     delta: &Doc,
     task: &Task,
     name: &str,
-    parts: &[(String, String)],
-    claims: &str,
+    built: &mut Built,
     reply: &Reply,
 ) -> Result<(), Failure> {
-    reject_part_edits(root, delta, parts)?;
     if let Verdict::Blocked = reply.outcome {
         return Err(unticked(vec![format!(
             "   {name} blocked: {}",
             reply.reason
         )]));
     }
-    write_refs(root, delta, task, claims, &reply.refs)
+    reject_part_edits(root, delta, &built.parts)?;
+    write_refs(root, delta, task, &built.claims, &reply.refs)?;
+    built.parts = delta_parts(root, delta);
+    Ok(())
+}
+
+/// Runs a runner call, accepts its reply and checks the work. A check failure
+/// is returned for a fix round; anything else stops.
+fn reply_and_check(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    built: &mut Built,
+    call: Call,
+    config: &runner::Config,
+    block: &Block,
+) -> Result<Option<Failure>, Failure> {
+    let name = call.name;
+    let (reply, session) = match runner_reply(root, delta, task, call, config, block) {
+        Ok(replied) => replied,
+        Err(failure) => {
+            built.session = built.session.take().or(failure.session.clone());
+            return checked(Err(failure));
+        }
+    };
+    built.session = built.session.take().or(session.clone());
+    let attach = |f: Failure| {
+        f.at(runner::transcript_line(
+            root,
+            session.as_deref(),
+            config.mode,
+        ))
+        .in_session(session.as_deref())
+    };
+    if let Some(failure) = checked(accept(root, delta, task, name, built, &reply).map_err(attach))?
+    {
+        return Ok(Some(failure));
+    }
+    checked(check_work(
+        root,
+        delta,
+        task,
+        &Look::current(config.mode),
+        block,
+    ))
 }
 
 fn run_runner(
@@ -320,38 +413,24 @@ fn run_runner(
     task: &Task,
     config: &runner::Config,
     block: &Block,
-) -> Result<Built, Failure> {
+) -> Result<(Built, Option<Failure>), Failure> {
     let mut values = context::assemble(store, root, delta);
     values.insert("task", context::task_text(delta, task));
     let prompt = prompts::rendered(Prompt::Build, root, &values)
         .map_err(|message| unticked(vec![format!("   runner: {message}")]))?;
-    let claims = plan::read(root, delta, CLAIMS_PART);
-    let parts = delta_parts(root, delta);
-    let (reply, session) = runner_reply(
-        root,
-        delta,
-        task,
-        Call {
-            name: "runner",
-            prompt: &prompt,
-            resume: None,
-        },
-        config,
-        block,
-    )?;
-    accept(root, delta, task, "runner", &parts, &claims, &reply).map_err(|f| {
-        f.at(runner::transcript_line(
-            root,
-            session.as_deref(),
-            config.mode,
-        ))
-        .in_session(session.as_deref())
-    })?;
-    Ok(Built {
-        prompt,
-        session,
-        claims,
-    })
+    let mut built = Built {
+        prompt: prompt.clone(),
+        session: None,
+        claims: plan::read(root, delta, CLAIMS_PART),
+        parts: delta_parts(root, delta),
+    };
+    let call = Call {
+        name: "runner",
+        prompt: &prompt,
+        resume: None,
+    };
+    let failed = reply_and_check(root, delta, task, &mut built, call, config, block)?;
+    Ok((built, failed))
 }
 
 fn findings_list(findings: &[gate::Finding]) -> String {
@@ -366,43 +445,28 @@ fn run_fix(
     root: &Path,
     delta: &Doc,
     task: &Task,
-    built: &Built,
+    built: &mut Built,
     findings: &[gate::Finding],
     config: &runner::Config,
     block: &Block,
-) -> Result<(), Failure> {
+) -> Result<Option<Failure>, Failure> {
     let values = BTreeMap::from([("findings", findings_list(findings))]);
     let fix = prompts::rendered(Prompt::Fix, root, &values)
         .map_err(|message| unticked(vec![format!("   fix: {message}")]))?;
     let session = built
         .session
-        .as_deref()
+        .clone()
         .filter(|_| runner::resumable(&config.resume));
     let prompt = match session {
         Some(_) => fix,
         None => format!("{}\n\n{fix}", built.prompt),
     };
-    let parts = delta_parts(root, delta);
-    let (reply, session) = runner_reply(
-        root,
-        delta,
-        task,
-        Call {
-            name: "fix",
-            prompt: &prompt,
-            resume: session,
-        },
-        config,
-        block,
-    )?;
-    accept(root, delta, task, "fix", &parts, &built.claims, &reply).map_err(|f| {
-        f.at(runner::transcript_line(
-            root,
-            session.as_deref(),
-            config.mode,
-        ))
-        .in_session(session.as_deref())
-    })
+    let call = Call {
+        name: "fix",
+        prompt: &prompt,
+        resume: session.as_deref(),
+    };
+    reply_and_check(root, delta, task, built, call, config, block)
 }
 
 fn check_lint(root: &Path, id: &str, look: &Look, block: &Block) -> Result<(), Failure> {
@@ -419,7 +483,7 @@ fn check_lint(root: &Path, id: &str, look: &Look, block: &Block) -> Result<(), F
     };
     let continuation = look.continuation(LINT_CONTINUATION);
     let rest = errors.map(|line| format!("{continuation}{line}"));
-    Err(unticked(
+    Err(check_failed(
         std::iter::once(format!("   lint: {first}"))
             .chain(rest)
             .collect(),
@@ -476,7 +540,7 @@ fn check_settled(
             .iter()
             .find(|c| &c.id == settled && !c.struck)
             .ok_or_else(|| unticked(vec![format!("   {settled} is not in claims.md")]))?;
-        let lines = claim_evidence(root, &tests, claim).map_err(|line| unticked(vec![line]))?;
+        let lines = claim_evidence(root, &tests, claim).map_err(|line| check_failed(vec![line]))?;
         lines
             .iter()
             .for_each(|(glyph, line)| block.say(&look.step(*glyph, line)));
@@ -573,8 +637,8 @@ fn check_work(
     check_settled(root, &delta.id, task, look, block)
 }
 
-fn print_fix_round(look: &Look, block: &Block, count: usize, round: u32) {
-    let found = format!("   review: {}", counted(count, "finding"));
+fn print_fix_round(look: &Look, block: &Block, source: &str, count: usize, round: u32) {
+    let found = format!("   {source}: {}", counted(count, "finding"));
     match look.mode {
         Mode::Plain => block.say(&format!("{found}, fix round {round}")),
         Mode::Live => {
@@ -584,60 +648,96 @@ fn print_fix_round(look: &Look, block: &Block, count: usize, round: u32) {
     }
 }
 
+/// One reviewer call: `None` when clean, the findings when another fix round
+/// is left, a stop otherwise.
+fn review_once(
+    root: &Path,
+    store: &lazyspec::engine::store::Store,
+    delta: &Doc,
+    task: &Task,
+    rounds: u32,
+    config: &runner::Config,
+    block: &Block,
+) -> Result<Option<Vec<gate::Finding>>, Failure> {
+    let look = &Look::current(config.mode);
+    let (verdict, session) = gate::review(root, store, delta, task, config).map_err(|failed| {
+        let runner_session_only = runner::Failed {
+            session: None,
+            ..failed
+        };
+        failed_call("review", runner_session_only)
+    })?;
+    let transcript = runner::transcript_line(root, session.as_deref(), config.mode);
+    if !verdict.stop.trim().is_empty() {
+        let ending = format!("review: {}", verdict.stop.trim());
+        return Err(reviewed_stop(&verdict, Vec::new(), ending).at(transcript));
+    }
+    let count = verdict.findings.len();
+    if count == 0 {
+        block.say(&look.step_toned(Glyph::Pass, "   review: clean", Some(Tone::Green)));
+        return Ok(None);
+    }
+    if rounds < config.review_rounds {
+        return Ok(Some(verdict.findings));
+    }
+    block.say(&look.step(
+        Glyph::Fail,
+        &format!("   review: {}", counted(count, "finding")),
+    ));
+    let detail = verdict
+        .findings
+        .iter()
+        .map(|f| format!("   {}: {}", f.basis, f.text))
+        .collect();
+    let ending = format!(
+        "left unticked after {}",
+        counted(rounds as usize, "fix round")
+    );
+    Err(reviewed_stop(&verdict, detail, ending).at(transcript))
+}
+
+/// Check failures and reviewer findings share one `review_rounds` budget.
+#[allow(clippy::too_many_arguments)]
 fn review_gate(
     root: &Path,
     store: &lazyspec::engine::store::Store,
     delta: &Doc,
     task: &Task,
-    built: &Built,
+    built: &mut Built,
+    failed: Option<Failure>,
     config: &runner::Config,
     block: &Block,
 ) -> Result<ReviewOutcome, Failure> {
     let look = &Look::current(config.mode);
     let (mut fixed, mut rounds) = (0, 0);
+    let mut failed = failed;
     loop {
-        let (verdict, session) =
-            gate::review(root, store, delta, task, config).map_err(|failed| {
-                let runner_session_only = runner::Failed {
-                    session: None,
-                    ..failed
-                };
-                failed_call("review", runner_session_only)
-            })?;
-        let transcript = runner::transcript_line(root, session.as_deref(), config.mode);
-        if !verdict.stop.trim().is_empty() {
-            let ending = format!("review: {}", verdict.stop.trim());
-            return Err(reviewed_stop(&verdict, Vec::new(), ending).at(transcript));
-        }
-        let count = verdict.findings.len();
-        if count == 0 {
-            block.say(&look.step_toned(Glyph::Pass, "   review: clean", Some(Tone::Green)));
-            return Ok(ReviewOutcome {
-                findings: fixed,
-                rounds,
-            });
-        }
-        if rounds == config.review_rounds {
-            block.say(&look.step(
-                Glyph::Fail,
-                &format!("   review: {}", counted(count, "finding")),
-            ));
-            let detail = verdict
-                .findings
-                .iter()
-                .map(|f| format!("   {}: {}", f.basis, f.text))
-                .collect();
-            let ending = format!(
-                "left unticked after {}",
-                counted(rounds as usize, "fix round")
-            );
-            return Err(reviewed_stop(&verdict, detail, ending).at(transcript));
-        }
+        let (source, findings) = match failed.take() {
+            Some(failure) => {
+                let failure = failure.with_check_findings(&built.claim_ids());
+                if rounds == config.review_rounds {
+                    return Err(failure);
+                }
+                failure
+                    .detail
+                    .iter()
+                    .for_each(|line| block.say(&look.step(Glyph::Fail, line)));
+                ("check", failure.findings)
+            }
+            None => match review_once(root, store, delta, task, rounds, config, block)? {
+                None => {
+                    return Ok(ReviewOutcome {
+                        findings: fixed,
+                        rounds,
+                    })
+                }
+                Some(findings) => ("review", findings),
+            },
+        };
         rounds += 1;
-        fixed += count;
-        print_fix_round(look, block, count, rounds);
-        run_fix(root, delta, task, built, &verdict.findings, config, block)?;
-        check_work(root, delta, task, look, block)?;
+        fixed += findings.len();
+        print_fix_round(look, block, source, findings.len(), rounds);
+        failed = run_fix(root, delta, task, built, &findings, config, block)?;
     }
 }
 
@@ -652,10 +752,10 @@ fn build_task(
     let look = &Look::current(config.mode);
     let started = std::time::Instant::now();
     block.say(&look.tone(Tone::Bold, &heading(task)));
-    let built = run_runner(root, store, delta, task, config, block)?;
+    let (mut built, failed) = run_runner(root, store, delta, task, config, block)?;
+    let review = review_gate(root, store, delta, task, &mut built, failed, config, block);
     let in_built = |f: Failure| f.in_session(built.session.as_deref());
-    check_work(root, delta, task, look, block).map_err(in_built)?;
-    let review = review_gate(root, store, delta, task, &built, config, block).map_err(in_built)?;
+    let review = review.map_err(in_built)?;
     tick(root, delta, task).map_err(in_built)?;
     let sha = commit(root, delta, task, &review.trailer(), look, block).map_err(in_built)?;
     builds::remove(root, &delta.id);
@@ -675,7 +775,7 @@ fn build_task(
 
 fn record_stop(root: &Path, delta: &Doc, task: &Task, base: String, failure: &Failure) {
     let ending = match failure.ending {
-        Ending::Unticked => "unticked",
+        Ending::Unticked | Ending::Checked => "unticked",
         Ending::Ticked => "ticked",
         Ending::Reviewed(_) => "reviewed",
     };
@@ -695,7 +795,7 @@ fn record_stop(root: &Path, delta: &Doc, task: &Task, base: String, failure: &Fa
 fn report(failure: &Failure, task: &Task, look: &Look) {
     let ending = match &failure.ending {
         Ending::Ticked => "ticked but not committed".to_string(),
-        Ending::Unticked => "left unticked".to_string(),
+        Ending::Unticked | Ending::Checked => "left unticked".to_string(),
         Ending::Reviewed(why) => why.clone(),
     };
     let stopped = format!("   stopped. {} {ending}; working tree kept.", task.id);

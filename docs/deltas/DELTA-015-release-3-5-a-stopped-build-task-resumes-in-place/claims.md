@@ -31,10 +31,24 @@
 - [AC-20] The resumed task's commit holds only uncommitted work; earlier human commits stay as they are.
 - [AC-21] A fresh run's task diff is unchanged.
 - [AC-22] After a runner or fix reply, a check failure becomes a finding and goes to a fix round within the same `review_rounds` budget as reviewer findings, instead of stopping at once.
+  @ref crates/lemma/tests/build.rs#a_check_failure_goes_to_a_fix_round_and_a_clean_review_commits
+  @ref crates/lemma/tests/build.rs#a_check_fix_round_spends_the_budget_reviewer_findings_would_use
 - [AC-23] A reply without JSON, a lint error, an unresolved or not-a-test ref, a settled claim without a ref, and an edit to a delta part each become a fix-round finding.
+  @ref crates/lemma/tests/build.rs#a_reply_without_json_becomes_a_fix_round_finding
+  @ref crates/lemma/tests/build.rs#a_lint_error_becomes_a_fix_round_finding_on_the_claim_it_names
+  @ref crates/lemma/tests/build.rs#a_not_a_test_ref_becomes_a_fix_round_finding
+  @ref crates/lemma/tests/build.rs#a_settled_claim_without_a_ref_becomes_a_fix_round_finding_on_the_claim
+  @ref crates/lemma/tests/build.rs#a_delta_part_edit_becomes_a_fix_round_finding
 - [AC-24] A check failure finding's text is the diagnostic; its basis is the claim id when the diagnostic names a claim, otherwise `task`.
+  @ref crates/lemma/tests/build.rs#a_settled_claim_without_a_ref_becomes_a_fix_round_finding_on_the_claim
+  @ref crates/lemma/tests/build.rs#a_lint_error_becomes_a_fix_round_finding_on_the_claim_it_names
+  @ref crates/lemma/tests/build.rs#a_reply_without_json_becomes_a_fix_round_finding
+  @ref crates/lemma/tests/build.rs#a_delta_part_edit_becomes_a_fix_round_finding
 - [AC-25] Check failures left after the last fix round stop the build with an `unticked` record.
+  @ref crates/lemma/tests/build.rs#a_lint_error_left_after_the_last_fix_round_stops_with_the_tree_kept
+  @ref crates/lemma/tests/build.rs#a_fix_that_breaks_lint_after_the_last_round_stops_before_the_second_review
 - [AC-26] A reply with `blocked` still stops at once.
+  @ref crates/lemma/tests/build.rs#a_blocked_reply_stops_at_once_without_a_fix_round
 - [AC-27] While a valid stop record exists for a delta, `lemma stop` reports that delta's findings as warnings, not errors, and names `lemma build <delta> --resume`.
 - [AC-28] `lemma stop` treats a stop record as invalid, and keeps that delta's findings as errors, when its task is not the next unticked one (or the ticked one for `ticked`) or its `head` is not an ancestor of HEAD.
 - [AC-29] Findings unrelated to a delta with a valid stop record are still errors in `lemma stop`.
