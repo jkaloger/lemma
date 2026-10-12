@@ -17,7 +17,9 @@
 - [AC-9] In live mode each build step line carries `✓` on pass, `✗` on failure, `·` for information.
   @ref crates/lemma/src/output.rs#live_step_lines_carry_a_glyph_per_outcome
 - [AC-10] When a task commits in live mode, its block is replaced by one line: `✓`, task id and title, elapsed, review outcome and short sha.
+  @ref crates/lemma/src/output.rs#a_committed_live_block_is_replaced_by_one_summary_line
 - [AC-11] A stopped task's block is not collapsed.
+  @ref crates/lemma/src/output.rs#a_stopped_task_is_never_collapsed
 - [AC-12] `NO_COLOR` removes colour and keeps glyphs.
   @ref crates/lemma/src/output.rs#no_color_removes_colour_and_keeps_glyphs
 - [AC-13] [intent] lemma reads the transcript for display only; no reply, check, decision or exit status depends on it.
@@ -25,3 +27,4 @@
 - [AC-14] A transcript line split across two polls produces its activity once, after the rest of the line arrives.
   @ref crates/lemma/src/activity.rs#a_line_split_across_two_polls_produces_its_activity_once
 - [AC-15] The collapsed task line's review outcome reads `review clean` or `<n> finding(s) fixed`, matching the commit trailer counts.
+  @ref crates/lemma/src/output.rs#the_collapsed_review_outcome_matches_the_commit_trailer_counts
