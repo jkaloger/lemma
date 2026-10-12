@@ -753,8 +753,9 @@ fn findings_left_after_the_last_round_stop_with_a_list_and_a_record_file() {
     assert_eq!(repo.head(), before);
     assert_eq!(repo.read("src/one.rs"), "pub fn one() { /* fixed */ }\n");
     let record: Value =
-        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001-T1.json")).unwrap();
-    assert_eq!(record["stop"], "");
+        serde_json::from_str(&repo.read(".git/lemma/builds/DELTA-001.json")).unwrap();
+    assert_eq!(record["task"], "T1");
+    assert_eq!(record["ending"], "reviewed");
     assert_eq!(
         record["findings"],
         json!([
@@ -775,8 +776,12 @@ fn a_stop_verdict_writes_the_record_file_too() {
 
     assert_eq!(run.code, 2, "{}", run.stdout);
     let record: Value =
-        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001-T1.json")).unwrap();
-    assert_eq!(record["stop"], "this is a different design");
+        serde_json::from_str(&repo.read(".git/lemma/builds/DELTA-001.json")).unwrap();
+    assert_eq!(record["ending"], "reviewed");
+    assert_eq!(
+        record["findings"],
+        json!([{"text": "this is a different design", "basis": "task"}])
+    );
 }
 
 #[test]
@@ -906,11 +911,11 @@ fn a_fix_that_breaks_lint_stops_before_the_second_review() {
     assert_eq!(tasks(&repo), single_task());
     assert_eq!(repo.head(), before);
     let record: Value =
-        serde_json::from_str(&repo.read(".git/lemma/reviews/DELTA-001-T1.json")).unwrap();
-    assert_eq!(
-        record["findings"],
-        json!([{"text": "back out the helper", "basis": "task"}])
-    );
+        serde_json::from_str(&repo.read(".git/lemma/builds/DELTA-001.json")).unwrap();
+    assert_eq!(record["ending"], "unticked");
+    let first = record["findings"][0]["text"].as_str().unwrap();
+    assert!(first.starts_with("lint: "), "{first}");
+    assert!(first.contains("missing_fn"), "{first}");
 }
 
 #[test]
@@ -956,4 +961,201 @@ fn a_struck_dictum_rule_is_not_a_basis() {
         schema["properties"]["findings"]["items"]["properties"]["basis"]["enum"],
         json!(["task", "design", "convention", "AC-1", "AC-2", "TEST-1"])
     );
+}
+
+const RECORD: &str = ".git/lemma/builds/DELTA-001.json";
+
+fn record(repo: &Repo) -> Value {
+    serde_json::from_str(&repo.read(RECORD)).unwrap()
+}
+
+fn blocked(repo: &Repo, task: &str, reason: &str) {
+    reply(repo, task, "blocked", reason, &[]);
+}
+
+fn discard(repo: &Repo) {
+    repo.git(&["checkout", "--", "."]);
+    repo.git(&["clean", "-fdq"]);
+}
+
+fn rfc3339_like(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    text.len() == 20
+        && text.ends_with('Z')
+        && [4, 7].iter().all(|&i| bytes[i] == b'-')
+        && bytes[10] == b'T'
+        && [13, 16].iter().all(|&i| bytes[i] == b':')
+}
+
+#[test]
+fn a_stop_writes_an_uncommitted_record_of_the_task_base_head_session_findings_tree_and_time() {
+    let repo = project("in-progress", single_task());
+    install_fakes_with(&repo, " {session}", "");
+    repo.commit("session runner");
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    blocked(&repo, "T1", "needs a human");
+    let base = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    let record = record(&repo);
+    assert_eq!(record["task"], "T1");
+    assert_eq!(record["ending"], "unticked");
+    assert_eq!(record["base"], base.as_str());
+    assert_eq!(record["head"], base.as_str());
+    assert_eq!(record["session"], repo.read(".fixture/T1.args.0").as_str());
+    assert_eq!(
+        record["findings"],
+        json!([{"text": "runner blocked: needs a human", "basis": "task"}])
+    );
+    let blob = repo.git(&["hash-object", "src/one.rs"]);
+    assert_eq!(record["tree"], json!({"src/one.rs": blob.trim()}));
+    let at = record["at"].as_str().unwrap();
+    assert!(rfc3339_like(at), "{at}");
+    assert_eq!(repo.git(&["ls-files", ".git"]), "");
+    assert!(!repo.git(&["status", "--porcelain"]).contains("lemma"));
+}
+
+#[test]
+fn a_stop_without_a_session_records_a_null_session() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    blocked(&repo, "T1", "needs a human");
+
+    build(&repo, &[]);
+
+    assert_eq!(record(&repo)["session"], Value::Null);
+}
+
+#[test]
+fn a_stop_before_the_tick_records_the_ending_unticked() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    blocked(&repo, "T1", "needs a human");
+
+    build(&repo, &[]);
+
+    assert_eq!(tasks(&repo), single_task());
+    assert_eq!(record(&repo)["ending"], "unticked");
+}
+
+#[test]
+fn a_failed_commit_after_the_tick_records_the_ending_ticked() {
+    let repo = project("in-progress", single_task());
+    repo.write(".git/hooks/pre-commit", "#!/bin/sh\nexit 1\n");
+    std::fs::set_permissions(
+        repo.path(".git/hooks/pre-commit"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    one_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+    let record = record(&repo);
+    assert_eq!(record["ending"], "ticked");
+    assert!(
+        record["findings"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("commit failed"),
+        "{record}"
+    );
+}
+
+#[test]
+fn findings_left_after_review_rounds_record_the_ending_reviewed() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    review_round(&repo, "T1", 2, &[ATOMIC]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    build(&repo, &[]);
+
+    let record = record(&repo);
+    assert_eq!(record["ending"], "reviewed");
+    assert_eq!(
+        record["findings"],
+        json!([{"text": "atomic is not proven", "basis": "AC-2"}])
+    );
+}
+
+#[test]
+fn a_reviewer_stop_records_the_ending_reviewed() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_reply(&repo, "T1", "this is a different design", &[]);
+
+    build(&repo, &[]);
+
+    assert_eq!(record(&repo)["ending"], "reviewed");
+}
+
+#[test]
+fn a_second_stop_of_the_task_replaces_the_record() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    blocked(&repo, "T1", "first");
+    build(&repo, &[]);
+    discard(&repo);
+    blocked(&repo, "T1", "second");
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(
+        record(&repo)["findings"],
+        json!([{"text": "runner blocked: second", "basis": "task"}])
+    );
+}
+
+#[test]
+fn the_record_is_deleted_when_the_task_commits() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    blocked(&repo, "T1", "first");
+    build(&repo, &[]);
+    assert!(repo.path(RECORD).exists());
+    discard(&repo);
+    done(&repo, "T1", &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!repo.path(RECORD).exists());
+}
+
+#[test]
+fn build_writes_no_per_task_review_file_and_leaves_the_review_record_alone() {
+    let repo = project("in-progress", single_task());
+    let resolved = "[{\"part\":\"design\",\"anchor\":\"x\",\"text\":\"y\"}]";
+    repo.write(".git/lemma/reviews/DELTA-001.json", resolved);
+    one_task_fixtures(&repo);
+    review_reply(&repo, "T1", "", &[HELPER]);
+    review_round(&repo, "T1", 2, &[HELPER]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(!repo.path(".git/lemma/reviews/DELTA-001-T1.json").exists());
+    assert_eq!(repo.read(".git/lemma/reviews/DELTA-001.json"), resolved);
+}
+
+#[test]
+fn a_runner_call_that_fails_still_records_its_session() {
+    let repo = project("in-progress", single_task());
+    install_fakes_with(&repo, " {session}", "");
+    repo.commit("session runner");
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    let session = repo.read(".fixture/T1.args.0");
+    assert!(uuid_like(&session), "{session}");
+    assert_eq!(record(&repo)["session"], session.as_str());
 }

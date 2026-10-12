@@ -119,6 +119,7 @@ fn tail(text: &str) -> String {
 pub struct Failed {
     pub message: String,
     pub transcript: Option<String>,
+    pub session: Option<String>,
 }
 
 impl From<String> for Failed {
@@ -126,6 +127,7 @@ impl From<String> for Failed {
         Failed {
             message,
             transcript: None,
+            session: None,
         }
     }
 }
@@ -354,6 +356,7 @@ fn announced(
         Err(message) => Err(Failed {
             message,
             transcript: failed_at,
+            session,
         }),
     }
 }

@@ -1,5 +1,5 @@
 <!-- Written by `lemma review` once the review is clean; tasks you add by hand are kept. Each task settles claims or is a chore: `- [ ] T1 <text> (settles AC-1, AC-2)` or `- [ ] T2 <text> (chore)`. -->
-- [ ] T1 Write one per-delta stop record on every build stop (settles AC-1, AC-2, AC-3, AC-4)
+- [x] T1 Write one per-delta stop record on every build stop (settles AC-1, AC-2, AC-3, AC-4)
 - [ ] T2 Turn check failures into fix-round findings (settles AC-22, AC-23, AC-24, AC-25, AC-26)
 - [ ] T3 Gate build entry on stop record and --resume flag (settles AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-30)
 - [ ] T4 Retry only the commit when resuming a ticked stop (settles AC-12)

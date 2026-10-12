@@ -12,7 +12,7 @@ use std::path::Path;
 
 const FIXED_BASES: [&str; 3] = ["task", "design", "convention"];
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Finding {
     pub text: String,
     pub basis: String,

@@ -1,9 +1,18 @@
 <!-- One bullet per behaviour, in plain words: `- An empty account has balance zero.` `lemma review` assigns ids (`- [AC-1] ...`). Mark a behaviour no test can settle `[intent]` after its id. -->
 
 - [AC-1] Every build stop writes a stop record at `<git-dir>/lemma/builds/<delta>.json` holding the task, ending, base, head, session, findings, a blob sha per dirty path and the time; it is not committed.
+  @ref crates/lemma/tests/build.rs#a_stop_writes_an_uncommitted_record_of_the_task_base_head_session_findings_tree_and_time
+  @ref crates/lemma/tests/build.rs#a_runner_call_that_fails_still_records_its_session
 - [AC-2] A stop's ending is `unticked` when it stopped before the tick, `ticked` when the tick landed but the commit failed, and `reviewed` when the reviewer stopped it or findings were left after `review_rounds`.
+  @ref crates/lemma/tests/build.rs#a_stop_before_the_tick_records_the_ending_unticked
+  @ref crates/lemma/tests/build.rs#a_failed_commit_after_the_tick_records_the_ending_ticked
+  @ref crates/lemma/tests/build.rs#findings_left_after_review_rounds_record_the_ending_reviewed
+  @ref crates/lemma/tests/build.rs#a_reviewer_stop_records_the_ending_reviewed
 - [AC-3] A stopped task that stops again replaces the record; the record is deleted when the task commits.
+  @ref crates/lemma/tests/build.rs#a_second_stop_of_the_task_replaces_the_record
+  @ref crates/lemma/tests/build.rs#the_record_is_deleted_when_the_task_commits
 - [AC-4] Build no longer writes `reviews/<delta>-T<n>.json`; `lemma review`'s `reviews/<delta>.json` is unchanged.
+  @ref crates/lemma/tests/build.rs#build_writes_no_per_task_review_file_and_leaves_the_review_record_alone
 - [AC-5] Without `--resume`, a dirty tree with a stop record is refused with `T<n> stopped <at>: <reason>; rerun with --resume, or clean the tree to start T<n> fresh`.
 - [AC-6] Without `--resume`, a dirty tree with no stop record is refused as before.
 - [AC-7] Without `--resume`, a clean tree with a stop record deletes the record and starts the task fresh.

@@ -9,7 +9,7 @@ use crate::prompts::{self, Prompt};
 use crate::review::{part_file, PARTS};
 use crate::tasks::{self, Task};
 use crate::world::World;
-use crate::{context, plan, project, reviews, runner, schema};
+use crate::{builds, context, plan, project, runner, schema};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -32,12 +32,34 @@ enum Ending {
 struct Failure {
     detail: Vec<String>,
     ending: Ending,
+    findings: Vec<gate::Finding>,
     transcript: Option<String>,
+    session: Option<String>,
 }
 
 impl Failure {
     fn at(self, transcript: Option<String>) -> Failure {
         Failure { transcript, ..self }
+    }
+
+    fn in_session(self, session: Option<&str>) -> Failure {
+        Failure {
+            session: self.session.or(session.map(str::to_string)),
+            ..self
+        }
+    }
+
+    fn record_findings(&self) -> Vec<gate::Finding> {
+        if !self.findings.is_empty() {
+            return self.findings.clone();
+        }
+        self.detail
+            .iter()
+            .map(|line| gate::Finding {
+                text: line.trim().to_string(),
+                basis: "task".to_string(),
+            })
+            .collect()
     }
 }
 
@@ -45,7 +67,9 @@ fn unticked(detail: Vec<String>) -> Failure {
     Failure {
         detail,
         ending: Ending::Unticked,
+        findings: Vec::new(),
         transcript: None,
+        session: None,
     }
 }
 
@@ -251,11 +275,13 @@ fn runner_reply(
         ),
     ));
     let after = |message: String| {
-        failed(message).at(runner::transcript_line(
-            root,
-            reply.session.as_deref(),
-            config.mode,
-        ))
+        failed(message)
+            .at(runner::transcript_line(
+                root,
+                reply.session.as_deref(),
+                config.mode,
+            ))
+            .in_session(reply.session.as_deref())
     };
     let parsed = serde_json::from_value(reply.json().map_err(after)?)
         .map_err(|e| after(format!("reply: {e}")))?;
@@ -263,7 +289,9 @@ fn runner_reply(
 }
 
 fn failed_call(name: &str, failed: runner::Failed) -> Failure {
-    unticked(vec![format!("   {name}: {}", failed.message)]).at(failed.transcript)
+    unticked(vec![format!("   {name}: {}", failed.message)])
+        .at(failed.transcript)
+        .in_session(failed.session.as_deref())
 }
 
 fn accept(
@@ -317,6 +345,7 @@ fn run_runner(
             session.as_deref(),
             config.mode,
         ))
+        .in_session(session.as_deref())
     })?;
     Ok(Built {
         prompt,
@@ -372,6 +401,7 @@ fn run_fix(
             session.as_deref(),
             config.mode,
         ))
+        .in_session(session.as_deref())
     })
 }
 
@@ -496,7 +526,9 @@ fn commit(
     let failed = |why: String| Failure {
         detail: vec![format!("   commit failed: {why}")],
         ending: Ending::Ticked,
+        findings: Vec::new(),
         transcript: None,
+        session: None,
     };
     git_run(root, &["add", "-A"]).map_err(failed)?;
     git_run(root, &["commit", "-q", "-m", &message, "-m", trailer]).map_err(failed)?;
@@ -512,25 +544,21 @@ fn commit(
     Ok(sha)
 }
 
-fn record_review(root: &Path, delta: &Doc, task: &Task, verdict: &gate::Verdict) -> Option<()> {
-    let file = reviews::file(root, &format!("{}-{}", delta.id, task.id))?;
-    std::fs::create_dir_all(file.parent()?).ok()?;
-    std::fs::write(file, serde_json::to_string_pretty(verdict).ok()?).ok()
-}
-
-fn reviewed_stop(
-    root: &Path,
-    delta: &Doc,
-    task: &Task,
-    verdict: &gate::Verdict,
-    detail: Vec<String>,
-    ending: String,
-) -> Failure {
-    record_review(root, delta, task, verdict);
+fn reviewed_stop(verdict: &gate::Verdict, detail: Vec<String>, ending: String) -> Failure {
+    let stop = verdict.stop.trim();
+    let stopped = (!stop.is_empty()).then(|| gate::Finding {
+        text: stop.to_string(),
+        basis: "task".to_string(),
+    });
     Failure {
         detail,
         ending: Ending::Reviewed(ending),
+        findings: stopped
+            .into_iter()
+            .chain(verdict.findings.clone())
+            .collect(),
         transcript: None,
+        session: None,
     }
 }
 
@@ -568,14 +596,18 @@ fn review_gate(
     let look = &Look::current(config.mode);
     let (mut fixed, mut rounds) = (0, 0);
     loop {
-        let (verdict, session) = gate::review(root, store, delta, task, config)
-            .map_err(|failed| failed_call("review", failed))?;
+        let (verdict, session) =
+            gate::review(root, store, delta, task, config).map_err(|failed| {
+                let runner_session_only = runner::Failed {
+                    session: None,
+                    ..failed
+                };
+                failed_call("review", runner_session_only)
+            })?;
         let transcript = runner::transcript_line(root, session.as_deref(), config.mode);
         if !verdict.stop.trim().is_empty() {
             let ending = format!("review: {}", verdict.stop.trim());
-            return Err(
-                reviewed_stop(root, delta, task, &verdict, Vec::new(), ending).at(transcript),
-            );
+            return Err(reviewed_stop(&verdict, Vec::new(), ending).at(transcript));
         }
         let count = verdict.findings.len();
         if count == 0 {
@@ -599,16 +631,13 @@ fn review_gate(
                 "left unticked after {}",
                 counted(rounds as usize, "fix round")
             );
-            return Err(reviewed_stop(root, delta, task, &verdict, detail, ending).at(transcript));
+            return Err(reviewed_stop(&verdict, detail, ending).at(transcript));
         }
         rounds += 1;
         fixed += count;
         print_fix_round(look, block, count, rounds);
-        run_fix(root, delta, task, built, &verdict.findings, config, block)
-            .and_then(|()| check_work(root, delta, task, look, block))
-            .inspect_err(|_| {
-                record_review(root, delta, task, &verdict);
-            })?;
+        run_fix(root, delta, task, built, &verdict.findings, config, block)?;
+        check_work(root, delta, task, look, block)?;
     }
 }
 
@@ -624,10 +653,12 @@ fn build_task(
     let started = std::time::Instant::now();
     block.say(&look.tone(Tone::Bold, &heading(task)));
     let built = run_runner(root, store, delta, task, config, block)?;
-    check_work(root, delta, task, look, block)?;
-    let review = review_gate(root, store, delta, task, &built, config, block)?;
-    tick(root, delta, task)?;
-    let sha = commit(root, delta, task, &review.trailer(), look, block)?;
+    let in_built = |f: Failure| f.in_session(built.session.as_deref());
+    check_work(root, delta, task, look, block).map_err(in_built)?;
+    let review = review_gate(root, store, delta, task, &built, config, block).map_err(in_built)?;
+    tick(root, delta, task).map_err(in_built)?;
+    let sha = commit(root, delta, task, &review.trailer(), look, block).map_err(in_built)?;
+    builds::remove(root, &delta.id);
     let elapsed = elapsed_text(started.elapsed());
     let committed = Committed {
         id: &task.id,
@@ -640,6 +671,25 @@ fn build_task(
         println!("{collapsed}");
     }
     Ok(())
+}
+
+fn record_stop(root: &Path, delta: &Doc, task: &Task, base: String, failure: &Failure) {
+    let ending = match failure.ending {
+        Ending::Unticked => "unticked",
+        Ending::Ticked => "ticked",
+        Ending::Reviewed(_) => "reviewed",
+    };
+    let record = builds::Record {
+        task: task.id.clone(),
+        ending,
+        base,
+        head: builds::head(root),
+        session: failure.session.clone(),
+        findings: failure.record_findings(),
+        tree: builds::dirty_tree(root),
+        at: builds::now(),
+    };
+    builds::write(root, &delta.id, &record);
 }
 
 fn report(failure: &Failure, task: &Task, look: &Look) {
@@ -705,7 +755,9 @@ pub fn run(
             return Ok(Outcome::Complete);
         };
         let block = Block::on_terminal();
+        let base = builds::head(root);
         if let Err(failure) = build_task(root, &store, &delta, task, config, &block) {
+            record_stop(root, &delta, task, base, &failure);
             let look = Look::current(config.mode);
             if let Some(collapsed) = block.finish(&look, Finish::Stopped) {
                 println!("{collapsed}");
