@@ -42,9 +42,13 @@
   @ref crates/lemma/tests/build.rs#a_resume_without_a_recorded_session_fixes_in_a_fresh_runner
   @ref crates/lemma/tests/build.rs#a_resume_whose_commands_lack_session_fixes_in_a_fresh_runner
 - [AC-18] On a resume, the reviewer's task diff runs from the record's `base` to the working tree, so commits the human made during the stop are reviewed.
+  @ref crates/lemma/tests/build.rs#a_resumed_review_diffs_from_the_task_base_so_commits_during_the_stop_are_reviewed
 - [AC-19] Human edits made during the stop, including paths outside the task's original diff, are in the resumed task's diff and are reviewed.
+  @ref crates/lemma/tests/build.rs#human_edits_outside_the_original_diff_are_in_the_resumed_task_diff
 - [AC-20] The resumed task's commit holds only uncommitted work; earlier human commits stay as they are.
+  @ref crates/lemma/tests/build.rs#the_resumed_commit_holds_only_uncommitted_work_and_keeps_human_commits
 - [AC-21] A fresh run's task diff is unchanged.
+  @ref crates/lemma/tests/build.rs#a_fresh_run_diffs_the_task_against_head
 - [AC-22] After a runner or fix reply, a check failure becomes a finding and goes to a fix round within the same `review_rounds` budget as reviewer findings, instead of stopping at once.
   @ref crates/lemma/tests/build.rs#a_check_failure_goes_to_a_fix_round_and_a_clean_review_commits
   @ref crates/lemma/tests/build.rs#a_check_fix_round_spends_the_budget_reviewer_findings_would_use

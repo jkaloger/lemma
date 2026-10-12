@@ -1688,3 +1688,74 @@ fn a_resume_whose_commands_lack_session_fixes_in_a_fresh_runner() {
     assert!(uuid_like(&args), "{args}");
     assert_ne!(args, session);
 }
+
+fn resume_after_human_work(repo: &Repo) {
+    stop_t1(repo);
+    repo.write("notes.txt", "during the stop\n");
+    repo.git(&["add", "notes.txt"]);
+    repo.git(&["commit", "-q", "-m", "human note"]);
+    repo.write("src/human.rs", "pub fn human() {}\n");
+    let run = build(repo, &["--resume"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+}
+
+fn last_task_diff(repo: &Repo, task: &str) -> String {
+    let calls = repo.read(&format!(".fixture/{task}.rcalls"));
+    let prompt = repo.read(&format!(".fixture/{task}.review-prompt.{}", calls.trim()));
+    prompt.split("# Task diff").nth(1).unwrap().to_string()
+}
+
+#[test]
+fn a_resumed_review_diffs_from_the_task_base_so_commits_during_the_stop_are_reviewed() {
+    let repo = project("in-progress", single_task());
+
+    resume_after_human_work(&repo);
+
+    let task_diff = last_task_diff(&repo, "T1");
+    assert!(task_diff.contains("+++ b/notes.txt"), "{task_diff}");
+    assert!(task_diff.contains("+during the stop"), "{task_diff}");
+    assert!(task_diff.contains("+pub fn one() {}"), "{task_diff}");
+}
+
+#[test]
+fn human_edits_outside_the_original_diff_are_in_the_resumed_task_diff() {
+    let repo = project("in-progress", single_task());
+
+    resume_after_human_work(&repo);
+
+    let task_diff = last_task_diff(&repo, "T1");
+    assert!(task_diff.contains("+++ b/src/human.rs"), "{task_diff}");
+    assert!(task_diff.contains("+pub fn human() {}"), "{task_diff}");
+}
+
+#[test]
+fn the_resumed_commit_holds_only_uncommitted_work_and_keeps_human_commits() {
+    let repo = project("in-progress", single_task());
+
+    resume_after_human_work(&repo);
+
+    assert_eq!(
+        &subjects(&repo)[..2],
+        ["DELTA-001 T1: reopen", "human note"]
+    );
+    let committed = repo.git(&["show", "--name-only", "--format=", "HEAD"]);
+    assert!(!committed.contains("notes.txt"), "{committed}");
+    assert!(committed.contains("src/human.rs"), "{committed}");
+    assert!(committed.contains("src/one.rs"), "{committed}");
+    let human = repo.git(&["show", "--name-only", "--format=", "HEAD~1"]);
+    assert_eq!(human.trim(), "notes.txt");
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_fresh_run_diffs_the_task_against_head() {
+    let repo = project("in-progress", TWO_TASKS);
+    two_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let task_diff = last_task_diff(&repo, "T2");
+    assert!(task_diff.contains("+pub fn two() {}"), "{task_diff}");
+    assert!(!task_diff.contains("pub fn one()"), "{task_diff}");
+}

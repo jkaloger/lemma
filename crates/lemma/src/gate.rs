@@ -46,9 +46,11 @@ fn bases(delta: &Doc, dictums: &str, related: Vec<String>) -> Vec<String> {
     found
 }
 
-fn staged_task_diff(root: &Path) -> Result<String, String> {
+/// `base` is a resumed task's start, so commits made during its stop are in the diff.
+fn staged_task_diff(root: &Path, base: Option<&str>) -> Result<String, String> {
     git_run(root, &["add", "-A"])?;
-    git_output(root, &["diff", "--cached", "HEAD"]).ok_or("cannot diff the staged task".to_string())
+    git_output(root, &["diff", "--cached", base.unwrap_or("HEAD")])
+        .ok_or("cannot diff the staged task".to_string())
 }
 
 fn parse(reply: serde_json::Value, bases: &[String]) -> Result<Verdict, String> {
@@ -65,6 +67,7 @@ pub fn review(
     store: &Store,
     delta: &Doc,
     task: &Task,
+    base: Option<&str>,
     config: &runner::Config,
 ) -> Result<(Verdict, Option<String>), Failed> {
     let mut values = context::assemble(store, root, delta);
@@ -74,7 +77,7 @@ pub fn review(
         context::related_ids(store, delta),
     );
     values.insert("task", context::task_text(delta, task));
-    values.insert("task_diff", staged_task_diff(root)?);
+    values.insert("task_diff", staged_task_diff(root, base)?);
     let base = context::diff_base(root, delta);
     values.insert(
         "delta_diff",

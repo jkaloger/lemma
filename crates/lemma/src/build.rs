@@ -251,6 +251,7 @@ fn write_refs(
 struct Built {
     prompt: String,
     session: Option<String>,
+    diff_base: Option<String>,
     claims: String,
     parts: Vec<(String, String)>,
 }
@@ -430,6 +431,7 @@ fn run_runner(
     let mut built = Built {
         prompt: prompt.clone(),
         session: None,
+        diff_base: None,
         claims: plan::read(root, delta, CLAIMS_PART),
         parts: delta_parts(root, delta),
     };
@@ -468,6 +470,7 @@ fn resume_checks(
     let built = Built {
         prompt: build_prompt(root, store, delta, task)?,
         session: stopped.session.clone(),
+        diff_base: Some(stopped.base.clone()),
         claims: plan::read(root, delta, CLAIMS_PART),
         parts: delta_parts(root, delta),
     };
@@ -692,23 +695,26 @@ fn print_fix_round(look: &Look, block: &Block, source: &str, count: usize, round
 
 /// One reviewer call: `None` when clean, the findings when another fix round
 /// is left, a stop otherwise.
+#[allow(clippy::too_many_arguments)]
 fn review_once(
     root: &Path,
     store: &lazyspec::engine::store::Store,
     delta: &Doc,
     task: &Task,
+    diff_base: Option<&str>,
     rounds: u32,
     config: &runner::Config,
     block: &Block,
 ) -> Result<Option<Vec<gate::Finding>>, Failure> {
     let look = &Look::current(config.mode);
-    let (verdict, session) = gate::review(root, store, delta, task, config).map_err(|failed| {
-        let runner_session_only = runner::Failed {
-            session: None,
-            ..failed
-        };
-        failed_call("review", runner_session_only)
-    })?;
+    let (verdict, session) =
+        gate::review(root, store, delta, task, diff_base, config).map_err(|failed| {
+            let runner_session_only = runner::Failed {
+                session: None,
+                ..failed
+            };
+            failed_call("review", runner_session_only)
+        })?;
     let transcript = runner::transcript_line(root, session.as_deref(), config.mode);
     if !verdict.stop.trim().is_empty() {
         let ending = format!("review: {}", verdict.stop.trim());
@@ -766,7 +772,16 @@ fn review_gate(
                     .for_each(|line| block.say(&look.step(Glyph::Fail, line)));
                 ("check", failure.findings)
             }
-            None => match review_once(root, store, delta, task, rounds, config, block)? {
+            None => match review_once(
+                root,
+                store,
+                delta,
+                task,
+                built.diff_base.as_deref(),
+                rounds,
+                config,
+                block,
+            )? {
                 None => {
                     return Ok(ReviewOutcome {
                         findings: fixed,
