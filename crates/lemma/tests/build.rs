@@ -230,9 +230,11 @@ fn a_rerun_resumes_at_the_first_unticked_task() {
     assert_eq!(stopped.code, 2, "{}", stopped.stdout);
     assert_eq!(subjects(&repo)[0], "DELTA-001 T1: reopen");
     repo.write(CLAIMS_PATH, &claims(true, true));
-    repo.commit("human fix");
+    let refused = build(&repo, &[]);
+    assert_eq!(refused.code, 2, "{}", refused.stdout);
+    assert!(refused.stderr.contains("T2 stopped "), "{}", refused.stderr);
 
-    let run = build(&repo, &[]);
+    let run = build(&repo, &["--resume"]);
 
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(run.stdout.starts_with("T2 atomic (settles AC-2)\n"));
@@ -1287,4 +1289,197 @@ fn a_runner_call_that_fails_still_records_its_session() {
     let session = repo.read(".fixture/T1.args.0");
     assert!(uuid_like(&session), "{session}");
     assert_eq!(record(&repo)["session"], session.as_str());
+}
+
+fn stop_t1(repo: &Repo) -> Value {
+    fixture(repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    blocked(repo, "T1", "needs a human");
+    let run = build(repo, &[]);
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    done(repo, "T1", &[REOPEN]);
+    record(repo)
+}
+
+#[test]
+fn a_dirty_tree_with_a_stop_record_is_refused_naming_the_stop() {
+    let repo = project("in-progress", single_task());
+    let stopped = stop_t1(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    let at = stopped["at"].as_str().unwrap();
+    assert!(
+        run.stderr.contains(&format!(
+            "lemma: T1 stopped {at}: runner blocked: needs a human; rerun with --resume, or clean the tree to start T1 fresh"
+        )),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(tasks(&repo), single_task());
+    assert!(repo.path(RECORD).exists());
+}
+
+#[test]
+fn a_dirty_tree_without_a_stop_record_is_refused_as_before() {
+    let repo = project("in-progress", single_task());
+    repo.write("stray.txt", "x");
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2);
+    assert!(!repo.path(RECORD).exists());
+    assert!(run
+        .stderr
+        .contains("lemma: build needs a clean working tree; commit or stash first"));
+}
+
+#[test]
+fn a_clean_tree_with_a_stop_record_deletes_it_and_starts_the_task_fresh() {
+    let repo = project("in-progress", single_task());
+    stop_t1(&repo);
+    discard(&repo);
+    let probe = format!(
+        "#!/bin/sh\nmkdir -p .fixture\nif [ -e {RECORD} ]; then echo present; else echo absent; fi > .fixture/record-seen\nexec {} \"$@\"\n",
+        repo.path("fake-runner.sh").display()
+    );
+    repo.write("probe-runner.sh", &probe);
+    std::fs::set_permissions(
+        repo.path("probe-runner.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    repo.write(
+        "lemma.toml",
+        &format!(
+            "runner = \"{}\"\nreviewer = \"{} {{schema_file}}\"\n",
+            repo.path("probe-runner.sh").display(),
+            repo.path("fake-reviewer.sh").display()
+        ),
+    );
+    repo.commit("probe runner");
+    assert!(repo.path(RECORD).exists());
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.starts_with("T1 reopen (settles AC-1)\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(repo.read(".fixture/record-seen"), "absent\n");
+    assert!(!repo
+        .read(".fixture/T1.prompt.0")
+        .contains("A reviewer read your work"));
+}
+
+#[test]
+fn resume_without_a_stop_record_has_nothing_to_resume() {
+    let repo = project("in-progress", single_task());
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.stderr.contains("nothing to resume"), "{}", run.stderr);
+    assert_eq!(subjects(&repo)[0], "start");
+}
+
+#[test]
+fn resume_names_both_tasks_when_the_record_is_not_for_the_task_given_or_next() {
+    let repo = project("in-progress", TWO_TASKS);
+    stop_t1(&repo);
+
+    let given = build(&repo, &["--resume", "--task", "T2"]);
+
+    assert_eq!(given.code, 2, "{}", given.stdout);
+    assert!(
+        given
+            .stderr
+            .contains("cannot resume: the stop record is for T1, not --task T2"),
+        "{}",
+        given.stderr
+    );
+
+    let mut moved = record(&repo);
+    moved["task"] = json!("T2");
+    repo.write(RECORD, &moved.to_string());
+
+    let next = build(&repo, &["--resume"]);
+
+    assert_eq!(next.code, 2, "{}", next.stdout);
+    assert!(
+        next.stderr
+            .contains("cannot resume: the stop record is for T2, not the next unticked task T1"),
+        "{}",
+        next.stderr
+    );
+    assert_eq!(subjects(&repo)[0], "start");
+}
+
+#[test]
+fn resume_is_refused_with_both_shas_when_history_changed_under_the_task() {
+    let repo = project("in-progress", single_task());
+    let stopped = stop_t1(&repo);
+    repo.git(&[
+        "commit",
+        "-q",
+        "--amend",
+        "--allow-empty",
+        "-m",
+        "rewritten",
+    ]);
+    let head = repo.head();
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    let at = stopped["head"].as_str().unwrap();
+    assert!(run.stderr.contains(at), "{}", run.stderr);
+    assert!(run.stderr.contains(&head), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("not an ancestor of HEAD"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(repo.head(), head);
+    assert_eq!(repo.read("src/one.rs"), "pub fn one() {}\n");
+    assert_eq!(tasks(&repo), single_task());
+}
+
+#[test]
+fn resume_is_allowed_after_commits_on_top_of_the_stop() {
+    let repo = project("in-progress", single_task());
+    stop_t1(&repo);
+    repo.write("notes.txt", "during the stop\n");
+    repo.git(&["add", "notes.txt"]);
+    repo.git(&["commit", "-q", "-m", "human note"]);
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(subjects(&repo)[..2], ["DELTA-001 T1: reopen", "human note"]);
+    assert!(!repo.path(RECORD).exists());
+}
+
+#[test]
+fn resume_accepts_a_ticked_stop_naming_the_ticked_task() {
+    let repo = project("in-progress", TWO_TASKS);
+    let hook = ".git/hooks/pre-commit";
+    repo.write(hook, "#!/bin/sh\nexit 1\n");
+    std::fs::set_permissions(repo.path(hook), std::fs::Permissions::from_mode(0o755)).unwrap();
+    two_task_fixtures(&repo);
+    assert_eq!(build(&repo, &[]).code, 2);
+    assert_eq!(record(&repo)["ending"], "ticked");
+    assert!(tasks(&repo).starts_with("- [x] T1"));
+    std::fs::remove_file(repo.path(hook)).unwrap();
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stderr.contains("cannot resume"), "{}", run.stderr);
+    assert_eq!(
+        subjects(&repo)[..2],
+        ["DELTA-001 T2: atomic", "DELTA-001 T1: reopen"]
+    );
 }

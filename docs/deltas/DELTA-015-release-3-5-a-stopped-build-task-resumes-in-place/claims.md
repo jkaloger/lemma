@@ -14,12 +14,19 @@
 - [AC-4] Build no longer writes `reviews/<delta>-T<n>.json`; `lemma review`'s `reviews/<delta>.json` is unchanged.
   @ref crates/lemma/tests/build.rs#build_writes_no_per_task_review_file_and_leaves_the_review_record_alone
 - [AC-5] Without `--resume`, a dirty tree with a stop record is refused with `T<n> stopped <at>: <reason>; rerun with --resume, or clean the tree to start T<n> fresh`.
+  @ref crates/lemma/tests/build.rs#a_dirty_tree_with_a_stop_record_is_refused_naming_the_stop
 - [AC-6] Without `--resume`, a dirty tree with no stop record is refused as before.
+  @ref crates/lemma/tests/build.rs#a_dirty_tree_without_a_stop_record_is_refused_as_before
 - [AC-7] Without `--resume`, a clean tree with a stop record deletes the record and starts the task fresh.
+  @ref crates/lemma/tests/build.rs#a_clean_tree_with_a_stop_record_deletes_it_and_starts_the_task_fresh
 - [AC-8] `--resume` with no stop record errors: nothing to resume.
+  @ref crates/lemma/tests/build.rs#resume_without_a_stop_record_has_nothing_to_resume
 - [AC-9] `--resume` errors naming both tasks when the record's task is not the next unticked task, or not the `--task` given.
+  @ref crates/lemma/tests/build.rs#resume_names_both_tasks_when_the_record_is_not_for_the_task_given_or_next
 - [AC-10] `--resume` is refused with both shas when the record's `head` is not an ancestor of HEAD; nothing is reset or rewritten.
+  @ref crates/lemma/tests/build.rs#resume_is_refused_with_both_shas_when_history_changed_under_the_task
 - [AC-11] `--resume` is allowed when commits were made on top of the record's `head` during the stop.
+  @ref crates/lemma/tests/build.rs#resume_is_allowed_after_commits_on_top_of_the_stop
 - [AC-12] Resuming a `ticked` stop retries only the commit, runs no runner and no review, then continues to the next task.
 - [AC-13] A resume prints `resuming T<n> (stopped <at>: <reason>)` and the paths changed since the stop: the working tree against the recorded blob shas, plus paths in commits since `head`.
 - [AC-14] A resume runs the checks on the tree as it is; on pass it runs the review gate, then ticks and commits.
@@ -53,3 +60,4 @@
 - [AC-28] `lemma stop` treats a stop record as invalid, and keeps that delta's findings as errors, when its task is not the next unticked one (or the ticked one for `ticked`) or its `head` is not an ancestor of HEAD.
 - [AC-29] Findings unrelated to a delta with a valid stop record are still errors in `lemma stop`.
 - [AC-30] `--resume` on a `ticked` stop record is accepted when the record names the ticked task, even though that task is no longer the first unticked one.
+  @ref crates/lemma/tests/build.rs#resume_accepts_a_ticked_stop_naming_the_ticked_task

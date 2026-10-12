@@ -827,18 +827,90 @@ pub(crate) fn require_clean(root: &Path) -> Result<(), String> {
     }
 }
 
+fn stopped_message(stopped: &builds::Stopped) -> String {
+    let task = &stopped.task;
+    format!(
+        "{task} stopped {}: {}; rerun with --resume, or clean the tree to start {task} fresh",
+        stopped.at,
+        stopped.reason()
+    )
+}
+
+/// The task a valid `--resume` continues; a `ticked` stop names a task that
+/// is no longer the first unticked one.
+fn resumed_task(
+    root: &Path,
+    parsed: &tasks::Tasks,
+    only: Option<&str>,
+    stopped: &builds::Stopped,
+) -> Result<String, String> {
+    let ticked_stop = stopped.ending == "ticked"
+        && only.is_none()
+        && parsed.named(&stopped.task).is_some_and(|t| t.ticked);
+    let expected = match only {
+        Some(name) => Some(name.to_string()),
+        None => parsed.first_unticked().map(|t| t.id.clone()),
+    };
+    if !ticked_stop && expected.as_deref() != Some(stopped.task.as_str()) {
+        let against = match (only, expected) {
+            (Some(name), _) => format!("--task {name}"),
+            (None, Some(next)) => format!("the next unticked task {next}"),
+            (None, None) => "no unticked task".to_string(),
+        };
+        return Err(format!(
+            "cannot resume: the stop record is for {}, not {against}",
+            stopped.task
+        ));
+    }
+    if !builds::is_ancestor(root, &stopped.head) {
+        return Err(format!(
+            "cannot resume {}: it stopped at {}, which is not an ancestor of HEAD {}; history changed under the task",
+            stopped.task,
+            stopped.head,
+            builds::head(root)
+        ));
+    }
+    Ok(stopped.task.clone())
+}
+
+/// Decides how a build enters: `Some((task, base))` resumes a stopped task.
+fn enter(
+    root: &Path,
+    id: &str,
+    parsed: &tasks::Tasks,
+    only: Option<&str>,
+    resume: bool,
+) -> Result<Option<(String, String)>, String> {
+    let stopped = builds::read(root, id);
+    if resume {
+        let stopped = stopped.ok_or(format!("nothing to resume: {id} has no stopped task"))?;
+        let task = resumed_task(root, parsed, only, &stopped)?;
+        return Ok(Some((task, stopped.base)));
+    }
+    let Some(stopped) = stopped else {
+        require_clean(root)?;
+        return Ok(None);
+    };
+    require_clean(root).map_err(|_| stopped_message(&stopped))?;
+    builds::remove(root, id);
+    Ok(None)
+}
+
 pub fn run(
     root: &Path,
     id: &str,
     only: Option<&str>,
+    resume: bool,
     config: &runner::Config,
 ) -> Result<Outcome, String> {
-    require_clean(root)?;
     let (_, delta) = load_delta(root, id)?;
     let parsed = tasks::parse(delta.part_body(TASKS_PART));
     if let Some(name) = only {
-        let task = parsed.named(name).ok_or(format!("unknown task {name}"))?;
-        if task.ticked {
+        parsed.named(name).ok_or(format!("unknown task {name}"))?;
+    }
+    let mut resumed = enter(root, &delta.id, &parsed, only, resume)?;
+    if let (Some(name), None) = (only, &resumed) {
+        if parsed.named(name).is_some_and(|t| t.ticked) {
             println!("{name} is already ticked");
             return Ok(Outcome::Complete);
         }
@@ -846,16 +918,21 @@ pub fn run(
     loop {
         let (store, delta) = load_delta(root, id)?;
         let parsed = tasks::parse(delta.part_body(TASKS_PART));
-        let next = match only {
-            Some(name) => parsed.named(name),
-            None => parsed.first_unticked(),
+        let (next, base) = match resumed.take() {
+            Some((name, base)) => (parsed.named(&name), base),
+            None => {
+                let next = match only {
+                    Some(name) => parsed.named(name),
+                    None => parsed.first_unticked(),
+                };
+                (next.filter(|t| !t.ticked), builds::head(root))
+            }
         };
-        let Some(task) = next.filter(|t| !t.ticked) else {
+        let Some(task) = next else {
             println!("all tasks complete");
             return Ok(Outcome::Complete);
         };
         let block = Block::on_terminal();
-        let base = builds::head(root);
         if let Err(failure) = build_task(root, &store, &delta, task, config, &block) {
             record_stop(root, &delta, task, base, &failure);
             let look = Look::current(config.mode);

@@ -1,7 +1,7 @@
 use crate::gate::Finding;
 use crate::git::{changed_since, git_output};
 use crate::session::{is_safe_file_name, lemma_dir};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +16,35 @@ pub struct Record {
     pub findings: Vec<Finding>,
     pub tree: BTreeMap<String, Option<String>>,
     pub at: String,
+}
+
+/// The parts of a stop record that decide whether and where a build resumes.
+#[derive(Deserialize)]
+pub struct Stopped {
+    pub task: String,
+    pub ending: String,
+    pub base: String,
+    pub head: String,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
+    pub at: String,
+}
+
+impl Stopped {
+    pub fn reason(&self) -> &str {
+        self.findings
+            .first()
+            .map_or(self.ending.as_str(), |f| f.text.as_str())
+    }
+}
+
+pub fn read(root: &Path, delta_id: &str) -> Option<Stopped> {
+    let text = std::fs::read_to_string(file(root, delta_id)?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+pub fn is_ancestor(root: &Path, sha: &str) -> bool {
+    git_output(root, &["merge-base", "--is-ancestor", sha, "HEAD"]).is_some()
 }
 
 pub fn file(root: &Path, delta_id: &str) -> Option<PathBuf> {

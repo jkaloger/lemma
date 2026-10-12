@@ -90,6 +90,9 @@ enum Command {
         /// Run only this task, as T<n>
         #[arg(long)]
         task: Option<String>,
+        /// Continue the stopped task in place
+        #[arg(long)]
+        resume: bool,
         /// Print the assembled prompt and exit
         #[arg(long)]
         dry_run: bool,
@@ -386,7 +389,7 @@ fn next_after_build(id: &str) {
     next(advance::update_command(id, "complete"));
 }
 
-fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
+fn build_command(id: &str, task: Option<&str>, resume: bool, dry_run: bool) -> ExitCode {
     let start = match startup(id) {
         Ok(start) => start,
         Err(message) => return fail(message),
@@ -400,7 +403,7 @@ fn build_command(id: &str, task: Option<&str>, dry_run: bool) -> ExitCode {
                 return fail(message);
             }
         }
-        return match build::run(&start.root, &start.delta.id, task, &start.config) {
+        return match build::run(&start.root, &start.delta.id, task, resume, &start.config) {
             Ok(build::Outcome::Complete) => {
                 next_after_build(&start.delta.id);
                 ExitCode::SUCCESS
@@ -495,8 +498,9 @@ fn main() -> ExitCode {
         Command::Build {
             delta,
             task,
+            resume,
             dry_run,
-        } => build_command(&delta, task.as_deref(), dry_run),
+        } => build_command(&delta, task.as_deref(), resume, dry_run),
         Command::Refs { claim } => refs_command(&claim),
         Command::Stop => stop_command(),
         Command::SessionStart => session_start_command(),
