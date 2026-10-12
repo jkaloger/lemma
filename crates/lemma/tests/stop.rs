@@ -522,3 +522,110 @@ mod session_start_hook {
         assert!(!dir.path().join(".git/lemma/sessions/s").exists());
     }
 }
+
+mod stopped_build {
+    use super::*;
+
+    const TWO_TASKS: &str = "- [x] T1 first (chore)\n- [ ] T2 second (chore)\n";
+    const RESUME: &str = "lemma build DELTA-001 --resume";
+
+    /// A delta mid-build whose claims carry a broken ref the session meets.
+    fn stopped_delta() -> Repo {
+        let repo = two_specs();
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.delta_file(1, "in-progress", &["SPEC-001"], "## Intent\n\nOne.\n");
+        repo.delta_tasks(1, TWO_TASKS);
+        repo.commit("delta");
+        repo.delta_claims(1, "- [AC-1] Gone.\n  @ref tests/store_test.rs#missing\n");
+        repo
+    }
+
+    fn record(repo: &Repo, task: &str, ending: &str, head: &str) {
+        let record = json!({
+            "task": task,
+            "ending": ending,
+            "base": head,
+            "head": head,
+            "session": null,
+            "findings": [{ "text": "lint failed", "basis": "task" }],
+            "tree": {},
+            "at": "2026-10-12T03:04:05Z",
+        });
+        repo.write(".git/lemma/builds/DELTA-001.json", &record.to_string());
+    }
+
+    fn sideways_commit(repo: &Repo) -> String {
+        repo.git(&["checkout", "-q", "-b", "side"]);
+        repo.git(&["commit", "-q", "--allow-empty", "-m", "elsewhere"]);
+        let sha = repo.head();
+        repo.git(&["checkout", "-q", "feature"]);
+        sha
+    }
+
+    fn is_warned(run: &Run) -> bool {
+        run.code == 0
+            && run.stderr.contains("warning: ")
+            && run.stderr.contains("does not resolve")
+            && run.stderr.contains(RESUME)
+            && !run.stderr.contains("error: ")
+    }
+
+    fn is_blocked(run: &Run) -> bool {
+        run.code == 2
+            && run.stderr.contains("error: ")
+            && run.stderr.contains("does not resolve")
+            && !run.stderr.contains(RESUME)
+    }
+
+    #[test]
+    fn a_valid_stop_record_warns_on_its_deltas_findings_and_names_resume() {
+        let repo = stopped_delta();
+        assert!(is_blocked(&stop(&repo)));
+
+        record(&repo, "T2", "unticked", &repo.head());
+        let unticked = stop(&repo);
+        record(&repo, "T1", "ticked", &repo.head());
+        let ticked = stop(&repo);
+
+        assert!(is_warned(&unticked), "{}", unticked.stderr);
+        assert!(is_warned(&ticked), "{}", ticked.stderr);
+    }
+
+    #[test]
+    fn a_stop_record_off_the_task_or_off_history_keeps_its_deltas_findings_errors() {
+        let repo = stopped_delta();
+        let sideways = sideways_commit(&repo);
+        let head = repo.head();
+
+        let cases = [
+            ("T1", "unticked", head.as_str()),
+            ("T2", "ticked", head.as_str()),
+            ("T2", "unticked", sideways.as_str()),
+        ];
+        for (task, ending, at) in cases {
+            record(&repo, task, ending, at);
+            let run = stop(&repo);
+            assert!(is_blocked(&run), "{task} {ending} {at}: {}", run.stderr);
+        }
+    }
+
+    #[test]
+    fn findings_unrelated_to_the_stopped_delta_stay_errors() {
+        let repo = stopped_delta();
+        record(&repo, "T2", "unticked", &repo.head());
+        touch_both(&repo);
+
+        let run = stop(&repo);
+
+        assert_eq!(run.code, 2, "{}", run.stderr);
+        let line = |needle: &str| {
+            run.stderr
+                .lines()
+                .find(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("no {needle}: {}", run.stderr))
+                .to_string()
+        };
+        assert!(line("does not resolve").contains("warning: "));
+        assert!(line("SPEC-002").contains("error: "));
+    }
+}

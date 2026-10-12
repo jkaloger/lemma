@@ -1,6 +1,9 @@
+use crate::builds;
 use crate::git::changed_since;
 use crate::lint::{self, Finding, Options, Span, Suite};
+use crate::payload::TASKS_PART;
 use crate::session::{recorded_base, say_once};
+use crate::tasks;
 use crate::world::World;
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
@@ -23,12 +26,43 @@ pub fn run(store: &Store, root: &Path, session_id: Option<&str>) -> Vec<Finding>
         ..Options::default()
     };
     let span = lint::resolve_span(root, &options, None);
+    let stopped = resumable_deltas(store, root);
     let mut findings: Vec<Finding> = lint::run_with(store, root, &options, None, Some(&span))
         .into_iter()
         .filter(Finding::is_error)
+        .map(|f| warn_if_stopped(f, &stopped))
         .collect();
     findings.extend(unapproved_completions(store, root, session_id, &span));
     findings
+}
+
+/// Deltas whose stopped build waits on the human: the session that meets
+/// their findings cannot clear them.
+fn resumable_deltas(store: &Store, root: &Path) -> Vec<String> {
+    World::load(store, None)
+        .docs()
+        .iter()
+        .filter(|d| d.doc_type == "delta")
+        .filter(|d| {
+            builds::read(root, &d.id)
+                .is_some_and(|s| s.is_resumable(root, &tasks::parse(d.part_body(TASKS_PART))))
+        })
+        .map(|d| d.id.clone())
+        .collect()
+}
+
+fn warn_if_stopped(finding: Finding, stopped: &[String]) -> Finding {
+    let Some(id) = finding.id.clone().filter(|id| stopped.contains(id)) else {
+        return finding;
+    };
+    Finding {
+        severity: "warning",
+        message: format!(
+            "{}; {id} has a stopped build task, run `lemma build {id} --resume`",
+            finding.message
+        ),
+        ..finding
+    }
 }
 
 fn unapproved_completions(

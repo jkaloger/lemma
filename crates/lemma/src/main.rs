@@ -456,11 +456,11 @@ fn stop_command() -> ExitCode {
         }
     };
     let findings = stop::run(&store, &root, input.session_id.as_deref());
-    if findings.is_empty() {
-        return ExitCode::SUCCESS;
-    }
     findings.iter().for_each(|f| eprintln!("{}", f.render()));
-    ExitCode::from(2)
+    match findings.iter().any(|f| f.is_error()) {
+        true => ExitCode::from(2),
+        false => ExitCode::SUCCESS,
+    }
 }
 
 fn signal_command() -> ExitCode {

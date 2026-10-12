@@ -5,5 +5,5 @@
 - [x] T4 Retry only the commit when resuming a ticked stop (settles AC-12)
 - [x] T5 Resume a stopped task through checks, fix round and review (settles AC-13, AC-14, AC-15, AC-16, AC-17)
 - [x] T6 Review a resumed task from base to working tree (settles AC-18, AC-19, AC-20, AC-21)
-- [ ] T7 Warn instead of block in stop hook for valid stop records (settles AC-27, AC-28, AC-29)
+- [x] T7 Warn instead of block in stop hook for valid stop records (settles AC-27, AC-28, AC-29)
 - [ ] T8 Update README, SPEC-002 and SPEC-003 for resume and stop warning (chore)

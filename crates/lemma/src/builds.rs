@@ -1,6 +1,7 @@
 use crate::gate::Finding;
 use crate::git::{changed_since, git_output};
 use crate::session::{is_safe_file_name, lemma_dir};
+use crate::tasks::Tasks;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -39,6 +40,15 @@ impl Stopped {
         self.findings
             .first()
             .map_or(self.ending.as_str(), |f| f.text.as_str())
+    }
+
+    /// Still the task a resume would continue, with history intact under it.
+    pub fn is_resumable(&self, root: &Path, parsed: &Tasks) -> bool {
+        let on_task = match self.ending.as_str() {
+            "ticked" => parsed.named(&self.task).is_some_and(|t| t.ticked),
+            _ => parsed.first_unticked().is_some_and(|t| t.id == self.task),
+        };
+        on_task && is_ancestor(root, &self.head)
     }
 
     /// The tree against the snapshot taken at the stop, plus paths in commits

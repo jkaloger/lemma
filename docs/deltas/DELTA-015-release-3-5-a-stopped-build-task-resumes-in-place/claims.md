@@ -69,7 +69,10 @@
 - [AC-26] A reply with `blocked` still stops at once.
   @ref crates/lemma/tests/build.rs#a_blocked_reply_stops_at_once_without_a_fix_round
 - [AC-27] While a valid stop record exists for a delta, `lemma stop` reports that delta's findings as warnings, not errors, and names `lemma build <delta> --resume`.
+  @ref crates/lemma/tests/stop.rs#a_valid_stop_record_warns_on_its_deltas_findings_and_names_resume
 - [AC-28] `lemma stop` treats a stop record as invalid, and keeps that delta's findings as errors, when its task is not the next unticked one (or the ticked one for `ticked`) or its `head` is not an ancestor of HEAD.
+  @ref crates/lemma/tests/stop.rs#a_stop_record_off_the_task_or_off_history_keeps_its_deltas_findings_errors
 - [AC-29] Findings unrelated to a delta with a valid stop record are still errors in `lemma stop`.
+  @ref crates/lemma/tests/stop.rs#findings_unrelated_to_the_stopped_delta_stay_errors
 - [AC-30] `--resume` on a `ticked` stop record is accepted when the record names the ticked task, even though that task is no longer the first unticked one.
   @ref crates/lemma/tests/build.rs#resume_accepts_a_ticked_stop_naming_the_ticked_task
