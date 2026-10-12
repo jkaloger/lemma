@@ -116,6 +116,36 @@ fn tail(text: &str) -> String {
 }
 
 #[derive(Debug)]
+pub struct Failed {
+    pub message: String,
+    pub transcript: Option<String>,
+}
+
+impl From<String> for Failed {
+    fn from(message: String) -> Failed {
+        Failed {
+            message,
+            transcript: None,
+        }
+    }
+}
+
+impl From<Failed> for String {
+    fn from(failed: Failed) -> String {
+        failed.message
+    }
+}
+
+pub fn stop_lines(detail: &[String], stopped: String, transcript: Option<String>) -> Vec<String> {
+    detail
+        .iter()
+        .cloned()
+        .chain(std::iter::once(stopped))
+        .chain(transcript)
+        .collect()
+}
+
+#[derive(Debug)]
 pub struct Reply {
     pub text: String,
     pub session: Option<String>,
@@ -200,6 +230,12 @@ fn transcript(root: &Path, session: Option<&str>, mode: Mode) -> Option<PathBuf>
     )
 }
 
+/// The line a stopped task ends with so the human can read the failed call; plain mode prints the watch line instead.
+pub fn transcript_line(root: &Path, session: Option<&str>, mode: Mode) -> Option<String> {
+    let path = transcript(root, session, mode)?;
+    Some(format!("   transcript: {}", path.display()))
+}
+
 fn with_session(command: &str) -> (String, Option<String>) {
     if !command.contains(SESSION) {
         return (command.to_string(), None);
@@ -233,7 +269,7 @@ pub fn tracked(
     timeout: Duration,
     schema: Option<&Value>,
     mode: Mode,
-) -> Result<Reply, String> {
+) -> Result<Reply, Failed> {
     let (command, session) = with_session(command);
     announced(
         &mut std::io::stdout(),
@@ -265,7 +301,7 @@ pub fn resumed(
     timeout: Duration,
     schema: Option<&Value>,
     mode: Mode,
-) -> Result<Reply, String> {
+) -> Result<Reply, Failed> {
     announced(
         &mut std::io::stdout(),
         label,
@@ -292,10 +328,11 @@ fn announced(
     timeout: Duration,
     schema: Option<&Value>,
     mode: Mode,
-) -> Result<Reply, String> {
-    if let Some(session) = &session {
+) -> Result<Reply, Failed> {
+    if let Some(session) = session.as_ref().filter(|_| mode == Mode::Plain) {
         let _ = writeln!(out, "{}", watch_line(root, session));
     }
+    let failed_at = transcript_line(root, session.as_deref(), mode);
     let transcript = transcript(root, session.as_deref(), mode);
     let bar = spinner(label, transcript.is_some());
     let width = (console::Term::stderr().size().1 as usize).saturating_sub(2);
@@ -312,7 +349,13 @@ fn announced(
         |line| bar.set_message(line),
     );
     bar.finish_and_clear();
-    reply.map(|reply| Reply { session, ..reply })
+    match reply {
+        Ok(reply) => Ok(Reply { session, ..reply }),
+        Err(message) => Err(Failed {
+            message,
+            transcript: failed_at,
+        }),
+    }
 }
 
 /// Runs `command`, showing the transcript's activity while it waits. The reply never reads it.
@@ -896,6 +939,86 @@ printf '{"result": "ok", "usage": {}}'"#,
             ),
             "{line}"
         );
+    }
+
+    #[test]
+    fn live_mode_prints_no_watch_line() {
+        let (root, command) = root_with_script(r#"cat >/dev/null; printf '{"result": "ok"}'"#);
+        let (command, session) = with_session(&format!("{command} {{session}}"));
+        let mut out = Vec::new();
+
+        announced(
+            &mut out,
+            "label",
+            &command,
+            session,
+            "",
+            root.path(),
+            &[],
+            LONG,
+            None,
+            Mode::Live,
+        )
+        .unwrap();
+
+        assert_eq!(String::from_utf8(out).unwrap(), "");
+    }
+
+    fn failed_call(mode: Mode) -> (Failed, String) {
+        let (root, command) = root_with_script("cat >/dev/null; exit 3");
+        let (command, session) = with_session(&format!("{command} {{session}}"));
+        let session = session.unwrap();
+        let failed = announced(
+            &mut Vec::new(),
+            "label",
+            &command,
+            Some(session.clone()),
+            "",
+            root.path(),
+            &[],
+            LONG,
+            None,
+            mode,
+        )
+        .unwrap_err();
+        (failed, session)
+    }
+
+    #[test]
+    fn a_failed_live_call_carries_the_transcript_of_its_own_session() {
+        let (failed, session) = failed_call(Mode::Live);
+
+        let line = failed.transcript.unwrap();
+        assert!(line.starts_with("   transcript: "), "{line}");
+        assert!(line.ends_with(&format!("/{session}.jsonl")), "{line}");
+        assert!(
+            failed.message.contains("exited with 3"),
+            "{}",
+            failed.message
+        );
+    }
+
+    #[test]
+    fn a_failed_plain_call_carries_no_transcript() {
+        assert_eq!(failed_call(Mode::Plain).0.transcript, None);
+    }
+
+    #[test]
+    fn a_stopped_live_task_ends_with_the_transcript_of_the_failed_call() {
+        let detail = vec!["   runner: boom".to_string()];
+        let stopped = "   stopped. T1 left unticked; working tree kept.".to_string();
+        let (failed, _) = failed_call(Mode::Live);
+        let line = failed.transcript.clone().unwrap();
+
+        let live = stop_lines(&detail, stopped.clone(), failed.transcript);
+        let plain = stop_lines(
+            &detail,
+            stopped.clone(),
+            failed_call(Mode::Plain).0.transcript,
+        );
+
+        assert_eq!(live, [detail[0].clone(), stopped.clone(), line]);
+        assert_eq!(plain, [detail[0].clone(), stopped]);
     }
 
     #[test]

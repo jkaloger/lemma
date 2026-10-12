@@ -32,12 +32,20 @@ enum Ending {
 struct Failure {
     detail: Vec<String>,
     ending: Ending,
+    transcript: Option<String>,
+}
+
+impl Failure {
+    fn at(self, transcript: Option<String>) -> Failure {
+        Failure { transcript, ..self }
+    }
 }
 
 fn unticked(detail: Vec<String>) -> Failure {
     Failure {
         detail,
         ending: Ending::Unticked,
+        transcript: None,
     }
 }
 
@@ -193,6 +201,7 @@ fn runner_reply(
     config: &runner::Config,
 ) -> Result<(Reply, Option<String>), Failure> {
     let failed = |message: String| unticked(vec![format!("   {name}: {message}")]);
+    let ran = |failed: runner::Failed| failed_call(name, failed);
     let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
     let schema = schema::build(task);
     let label = format!("{} {name}", task.id);
@@ -221,15 +230,26 @@ fn runner_reply(
             config.mode,
         ),
     }
-    .map_err(failed)?;
+    .map_err(ran)?;
     println!(
         "   {name}: {}, {} files",
         elapsed_text(started.elapsed()),
         changed_between(&before, &tree_state(root))
     );
-    let parsed = serde_json::from_value(reply.json().map_err(failed)?)
-        .map_err(|e| failed(format!("reply: {e}")))?;
+    let after = |message: String| {
+        failed(message).at(runner::transcript_line(
+            root,
+            reply.session.as_deref(),
+            config.mode,
+        ))
+    };
+    let parsed = serde_json::from_value(reply.json().map_err(after)?)
+        .map_err(|e| after(format!("reply: {e}")))?;
     Ok((parsed, reply.session))
+}
+
+fn failed_call(name: &str, failed: runner::Failed) -> Failure {
+    unticked(vec![format!("   {name}: {}", failed.message)]).at(failed.transcript)
 }
 
 fn accept(
@@ -265,7 +285,13 @@ fn run_runner(
     let claims = plan::read(root, delta, CLAIMS_PART);
     let parts = delta_parts(root, delta);
     let (reply, session) = runner_reply(root, delta, task, "runner", &prompt, None, config)?;
-    accept(root, delta, task, "runner", &parts, &claims, &reply)?;
+    accept(root, delta, task, "runner", &parts, &claims, &reply).map_err(|f| {
+        f.at(runner::transcript_line(
+            root,
+            session.as_deref(),
+            config.mode,
+        ))
+    })?;
     Ok(Built {
         prompt,
         session,
@@ -301,8 +327,14 @@ fn run_fix(
         None => format!("{}\n\n{fix}", built.prompt),
     };
     let parts = delta_parts(root, delta);
-    let (reply, _) = runner_reply(root, delta, task, "fix", &prompt, session, config)?;
-    accept(root, delta, task, "fix", &parts, &built.claims, &reply)
+    let (reply, session) = runner_reply(root, delta, task, "fix", &prompt, session, config)?;
+    accept(root, delta, task, "fix", &parts, &built.claims, &reply).map_err(|f| {
+        f.at(runner::transcript_line(
+            root,
+            session.as_deref(),
+            config.mode,
+        ))
+    })
 }
 
 fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {
@@ -406,6 +438,7 @@ fn commit(root: &Path, delta: &Doc, task: &Task, trailer: &str) -> Result<(), Fa
     let failed = |why: String| Failure {
         detail: vec![format!("   commit failed: {why}")],
         ending: Ending::Ticked,
+        transcript: None,
     };
     git_run(root, &["add", "-A"]).map_err(failed)?;
     git_run(root, &["commit", "-q", "-m", &message, "-m", trailer]).map_err(failed)?;
@@ -436,6 +469,7 @@ fn reviewed_stop(
     Failure {
         detail,
         ending: Ending::Reviewed(ending),
+        transcript: None,
     }
 }
 
@@ -472,18 +506,14 @@ fn review_gate(
 ) -> Result<String, Failure> {
     let (mut fixed, mut rounds) = (0, 0);
     loop {
-        let verdict = gate::review(root, store, delta, task, config)
-            .map_err(|message| unticked(vec![format!("   review: {message}")]))?;
+        let (verdict, session) = gate::review(root, store, delta, task, config)
+            .map_err(|failed| failed_call("review", failed))?;
+        let transcript = runner::transcript_line(root, session.as_deref(), config.mode);
         if !verdict.stop.trim().is_empty() {
             let ending = format!("review: {}", verdict.stop.trim());
-            return Err(reviewed_stop(
-                root,
-                delta,
-                task,
-                &verdict,
-                Vec::new(),
-                ending,
-            ));
+            return Err(
+                reviewed_stop(root, delta, task, &verdict, Vec::new(), ending).at(transcript),
+            );
         }
         let count = verdict.findings.len();
         if count == 0 {
@@ -501,7 +531,7 @@ fn review_gate(
                 "left unticked after {}",
                 counted(rounds as usize, "fix round")
             );
-            return Err(reviewed_stop(root, delta, task, &verdict, detail, ending));
+            return Err(reviewed_stop(root, delta, task, &verdict, detail, ending).at(transcript));
         }
         rounds += 1;
         fixed += count;
@@ -533,17 +563,15 @@ fn build_task(
 }
 
 fn report(failure: &Failure, task: &Task) {
-    let red = |line: &str| println!("{}", console::style(line).red());
-    failure.detail.iter().for_each(|line| red(line));
     let ending = match &failure.ending {
         Ending::Ticked => "ticked but not committed".to_string(),
         Ending::Unticked => "left unticked".to_string(),
         Ending::Reviewed(why) => why.clone(),
     };
-    red(&format!(
-        "   stopped. {} {ending}; working tree kept.",
-        task.id
-    ));
+    let stopped = format!("   stopped. {} {ending}; working tree kept.", task.id);
+    runner::stop_lines(&failure.detail, stopped, failure.transcript.clone())
+        .iter()
+        .for_each(|line| println!("{}", console::style(line).red()));
 }
 
 pub(crate) const DIRTY_TREE: &str = "build needs a clean working tree; commit or stash first";

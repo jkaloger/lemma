@@ -3,6 +3,7 @@ use crate::claims;
 use crate::git::git_output;
 use crate::payload::{Doc, CLAIMS_PART};
 use crate::prompts::{self, Prompt};
+use crate::runner::Failed;
 use crate::tasks::Task;
 use crate::{context, runner, schema};
 use lazyspec::engine::store::Store;
@@ -65,7 +66,7 @@ pub fn review(
     delta: &Doc,
     task: &Task,
     config: &runner::Config,
-) -> Result<Verdict, String> {
+) -> Result<(Verdict, Option<String>), Failed> {
     let mut values = context::assemble(store, root, delta);
     let bases = bases(
         delta,
@@ -92,7 +93,8 @@ pub fn review(
         Some(&schema),
         config.mode,
     )?;
-    parse(reply.json()?, &bases)
+    let verdict = parse(reply.json()?, &bases)?;
+    Ok((verdict, reply.session))
 }
 
 #[cfg(test)]

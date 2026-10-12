@@ -11,7 +11,9 @@
 - [AC-6] A runner command without `{session}` shows no activity.
   @ref crates/lemma/src/runner.rs#a_runner_command_without_session_shows_no_activity
 - [AC-7] Live mode prints no `watch:` line.
+  @ref crates/lemma/src/runner.rs#live_mode_prints_no_watch_line
 - [AC-8] A stopped task in live mode ends its block with `transcript: <path>` for the call that failed.
+  @ref crates/lemma/src/runner.rs#a_stopped_live_task_ends_with_the_transcript_of_the_failed_call
 - [AC-9] In live mode each build step line carries `✓` on pass, `✗` on failure, `·` for information.
 - [AC-10] When a task commits in live mode, its block is replaced by one line: `✓`, task id and title, elapsed, review outcome and short sha.
 - [AC-11] A stopped task's block is not collapsed.
