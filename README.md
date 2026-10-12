@@ -146,6 +146,51 @@ An `in-progress` delta requires a clean working tree. Build processes unticked m
 
 A failure before the review gate leaves the task unticked and preserves the working tree. A failed commit leaves the task ticked and preserves the working tree. Build never resets the tree. A rerun resumes at the first unticked task. `--task T<n>` runs one task. When no tasks remain, output is `all tasks complete`.
 
+#### Output
+
+Output has two modes, picked once per command. **Live** mode applies when stdout and stderr are both terminals. **Plain** mode applies otherwise. A task with one fix round prints in plain mode:
+
+```
+T<n> <text> (settles AC-1)
+   watch: <command>
+   runner: <elapsed>, <n> files
+   lint: clean
+   AC-1 @ref <path>#<symbol> resolves
+   watch: <command>
+   review: 1 finding, fix round 1
+   watch: <command>
+   fix: <elapsed>, <n> files
+   lint: clean
+   AC-1 @ref <path>#<symbol> resolves
+   watch: <command>
+   review: clean
+   commit <sha> <delta> T<n>: <text>
+```
+
+In live mode no `watch:` line is printed, and each step line carries a status glyph: `✓` on pass, `✗` on failure, `·` for information. The review line and the fix-round heading are separate lines:
+
+```
+T<n> <text> (settles AC-1)
+   ✓ runner: <elapsed>, <n> files
+   ✓ lint: clean
+   ✓ AC-1 @ref <path>#<symbol> resolves
+   ✗ review: 1 finding
+   · fix round 1
+   ✓ fix: <elapsed>, <n> files
+   ✓ lint: clean
+   ✓ AC-1 @ref <path>#<symbol> resolves
+   ✓ review: clean
+   ✓ commit <sha> <delta> T<n>: <text>
+```
+
+When the task commits, the block is replaced by one line. The review outcome reads `review clean` or `<n> finding(s) fixed` and matches the commit trailer:
+
+```
+✓ T<n> <text>  <elapsed> · 1 finding fixed · <sha>
+```
+
+If the block's line count is unknown, the summary line is printed under the block. A stopped task's block is not collapsed. In live mode the stop block ends with `   transcript: <path>` for the call that failed.
+
 #### Review gate
 
 After the runner, lint and settled-claim checks pass, Lemma runs `git add -A` and invokes the `reviewer` command with the `review-task` prompt. The prompt includes the task, its claims, conventions, dictums, spec intent, related documents, design, claims, `task_diff` and `delta_diff`.
@@ -263,9 +308,9 @@ Unknown keys are errors. Commands are split into words on whitespace; single and
 
 In each command word, `{schema}` is replaced with compact JSON and `{schema_file}` with the path to a temporary schema file that exists for the run. A command containing either placeholder fails when no schema is available. Stdout is parsed as JSON. A non-null `structured_output` is the reply; `result` is optional in that case. Otherwise, the first JSON object in `result` is used. `is_error: true`, a `subtype` other than `success` or a non-zero exit is a failure. The message is `result`, or `subtype` if `result` is absent. Other fields are ignored.
 
-`{session}` in a runner or reviewer command is replaced with a fresh v4 UUID for each call. In a resume command it is replaced with the build call's UUID. Commands without the placeholder run without a session or watch line. The default command passes it as `--session-id`; Claude Code writes the transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` while it runs. Lemma does not read the transcript.
+`{session}` in a runner or reviewer command is replaced with a fresh v4 UUID for each call. In a resume command it is replaced with the build call's UUID. Commands without the placeholder run without a session or watch line. The default command passes it as `--session-id`; Claude Code writes the transcript to `~/.claude/projects/<encoded root>/<uuid>.jsonl` while it runs. In live mode Lemma reads the transcript to show activity, and for nothing else. No reply, check, decision or exit status depends on it.
 
-Before each agent call, Lemma prints a watch command for the transcript. Run it in a second terminal to view tool calls. While a call waits, a spinner with its label and elapsed time appears on stderr when stderr is a terminal. Terminal output uses colour unless `NO_COLOR` is set: task headings are bold, `commit` and `lint: clean` are green, `stopped` and errors are red, and the `next:` label is dim.
+In plain mode, Lemma prints a watch command for the transcript before each agent call. The command prints the call's tool calls. While a call waits, a spinner with its label and elapsed time appears on stderr when stderr is a terminal. In live mode, while a call with `{session}` waits, the spinner also shows the latest tool call in the transcript as `<tool> <target>`. A file tool shows its path relative to the repository root. `Bash` shows the first line of its command. `Grep` and `Glob` show the pattern. Other tools show the name only. The line is cut to terminal width. A missing transcript or a line that is not JSON leaves label and elapsed only. Terminal output uses colour unless `NO_COLOR` is set. `NO_COLOR` keeps the status glyphs. task headings are bold, `commit` and `lint: clean` are green, `stopped` and errors are red, and the `next:` label is dim.
 
 ### Prompts
 

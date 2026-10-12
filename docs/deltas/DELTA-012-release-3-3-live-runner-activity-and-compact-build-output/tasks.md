@@ -5,4 +5,4 @@
 - [x] T4 Replace watch lines with transcript path on stop (settles AC-7, AC-8)
 - [x] T5 Mark build step lines with status glyphs (settles AC-9, AC-12)
 - [x] T6 Collapse a committed task block to one summary line (settles AC-10, AC-11, AC-15)
-- [ ] T7 Update README transcript note and live build sample (chore)
+- [x] T7 Update README transcript note and live build sample (chore)
