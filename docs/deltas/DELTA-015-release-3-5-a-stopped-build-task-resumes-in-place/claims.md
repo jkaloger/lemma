@@ -29,4 +29,4 @@
 - [AC-27] While a valid stop record exists for a delta, `lemma stop` reports that delta's findings as warnings, not errors, and names `lemma build <delta> --resume`.
 - [AC-28] `lemma stop` treats a stop record as invalid, and keeps that delta's findings as errors, when its task is not the next unticked one (or the ticked one for `ticked`) or its `head` is not an ancestor of HEAD.
 - [AC-29] Findings unrelated to a delta with a valid stop record are still errors in `lemma stop`.
-- [AC-30] [proposed] `--resume` on a `ticked` stop record is accepted when the record names the ticked task, even though that task is no longer the first unticked one.
+- [AC-30] `--resume` on a `ticked` stop record is accepted when the record names the ticked task, even though that task is no longer the first unticked one.

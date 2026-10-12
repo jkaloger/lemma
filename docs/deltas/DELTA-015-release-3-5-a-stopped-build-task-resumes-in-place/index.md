@@ -1,13 +1,14 @@
 ---
 title: "Release 3.5: a stopped build task resumes in place"
 type: delta
-status: draft
+status: in-progress
 author: Jack Kaloger
 date: 2026-10-12
 tags: []
 related:
   - changes: SPEC-002
   - changes: SPEC-003
+reviewed: 16964c33b0635297640debbdccfec123043a8546
 ---
 
 ## Intent
