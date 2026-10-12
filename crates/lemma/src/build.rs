@@ -773,6 +773,25 @@ fn build_task(
     Ok(())
 }
 
+/// A `ticked` stop already passed the runner and the review gate; only its
+/// commit is left.
+fn retry_commit(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    config: &runner::Config,
+    block: &Block,
+) -> Result<(), Failure> {
+    let look = &Look::current(config.mode);
+    block.say(&look.tone(Tone::Bold, &heading(task)));
+    block.say(&look.step(Glyph::Info, "   retrying the commit"));
+    commit(root, delta, task, RETRIED_TRAILER, look, block)?;
+    builds::remove(root, &delta.id);
+    Ok(())
+}
+
+const RETRIED_TRAILER: &str = "Lemma-Review: passed before a failed commit";
+
 fn record_stop(root: &Path, delta: &Doc, task: &Task, base: String, failure: &Failure) {
     let ending = match failure.ending {
         Ending::Unticked | Ending::Checked => "unticked",
@@ -873,19 +892,29 @@ fn resumed_task(
     Ok(stopped.task.clone())
 }
 
-/// Decides how a build enters: `Some((task, base))` resumes a stopped task.
+struct Resumed {
+    task: String,
+    base: String,
+    ticked: bool,
+}
+
+/// Decides how a build enters: `Some` resumes a stopped task.
 fn enter(
     root: &Path,
     id: &str,
     parsed: &tasks::Tasks,
     only: Option<&str>,
     resume: bool,
-) -> Result<Option<(String, String)>, String> {
+) -> Result<Option<Resumed>, String> {
     let stopped = builds::read(root, id);
     if resume {
         let stopped = stopped.ok_or(format!("nothing to resume: {id} has no stopped task"))?;
         let task = resumed_task(root, parsed, only, &stopped)?;
-        return Ok(Some((task, stopped.base)));
+        return Ok(Some(Resumed {
+            task,
+            base: stopped.base,
+            ticked: stopped.ending == "ticked",
+        }));
     }
     let Some(stopped) = stopped else {
         require_clean(root)?;
@@ -918,14 +947,14 @@ pub fn run(
     loop {
         let (store, delta) = load_delta(root, id)?;
         let parsed = tasks::parse(delta.part_body(TASKS_PART));
-        let (next, base) = match resumed.take() {
-            Some((name, base)) => (parsed.named(&name), base),
+        let (next, base, ticked) = match resumed.take() {
+            Some(r) => (parsed.named(&r.task), r.base, r.ticked),
             None => {
                 let next = match only {
                     Some(name) => parsed.named(name),
                     None => parsed.first_unticked(),
                 };
-                (next.filter(|t| !t.ticked), builds::head(root))
+                (next.filter(|t| !t.ticked), builds::head(root), false)
             }
         };
         let Some(task) = next else {
@@ -933,7 +962,11 @@ pub fn run(
             return Ok(Outcome::Complete);
         };
         let block = Block::on_terminal();
-        if let Err(failure) = build_task(root, &store, &delta, task, config, &block) {
+        let built = match ticked {
+            true => retry_commit(root, &delta, task, config, &block),
+            false => build_task(root, &store, &delta, task, config, &block),
+        };
+        if let Err(failure) = built {
             record_stop(root, &delta, task, base, &failure);
             let look = Look::current(config.mode);
             if let Some(collapsed) = block.finish(&look, Finish::Stopped) {

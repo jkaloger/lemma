@@ -1483,3 +1483,37 @@ fn resume_accepts_a_ticked_stop_naming_the_ticked_task() {
         ["DELTA-001 T2: atomic", "DELTA-001 T1: reopen"]
     );
 }
+
+#[test]
+fn resuming_a_ticked_stop_retries_only_the_commit_then_continues() {
+    let repo = project("in-progress", TWO_TASKS);
+    let hook = ".git/hooks/pre-commit";
+    repo.write(hook, "#!/bin/sh\nexit 1\n");
+    std::fs::set_permissions(repo.path(hook), std::fs::Permissions::from_mode(0o755)).unwrap();
+    two_task_fixtures(&repo);
+    assert_eq!(build(&repo, &[]).code, 2);
+    assert_eq!(record(&repo)["ending"], "ticked");
+    std::fs::remove_file(repo.path(hook)).unwrap();
+    std::fs::remove_file(repo.path(".fixture/T1.prompt.0")).unwrap();
+    let reviews = repo.read(".fixture/T1.rcalls");
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!repo.path(".fixture/T1.prompt.0").exists(), "runner ran");
+    assert_eq!(repo.read(".fixture/T1.rcalls"), reviews, "review ran");
+    assert!(
+        run.stdout.contains("   retrying the commit\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        subjects(&repo)[..2],
+        ["DELTA-001 T2: atomic", "DELTA-001 T1: reopen"]
+    );
+    let t1 = repo.git(&["show", "--name-only", "--format=", "HEAD~1"]);
+    assert!(t1.contains("src/one.rs"), "{t1}");
+    assert!(repo.path(".fixture/T2.prompt.0").exists());
+    assert!(!repo.path(RECORD).exists());
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}

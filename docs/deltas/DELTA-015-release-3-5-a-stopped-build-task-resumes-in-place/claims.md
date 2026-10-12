@@ -28,6 +28,7 @@
 - [AC-11] `--resume` is allowed when commits were made on top of the record's `head` during the stop.
   @ref crates/lemma/tests/build.rs#resume_is_allowed_after_commits_on_top_of_the_stop
 - [AC-12] Resuming a `ticked` stop retries only the commit, runs no runner and no review, then continues to the next task.
+  @ref crates/lemma/tests/build.rs#resuming_a_ticked_stop_retries_only_the_commit_then_continues
 - [AC-13] A resume prints `resuming T<n> (stopped <at>: <reason>)` and the paths changed since the stop: the working tree against the recorded blob shas, plus paths in commits since `head`.
 - [AC-14] A resume runs the checks on the tree as it is; on pass it runs the review gate, then ticks and commits.
 - [AC-15] A resume starts a fresh `review_rounds` budget, shared by its check-failure and reviewer fix rounds; the stopped run's budget is not carried.
