@@ -3,6 +3,7 @@ use crate::evidence::{self, RefStatus};
 use crate::gate;
 use crate::git::{changed_since, git_output};
 use crate::lint::{self, ref_name};
+use crate::output::{Glyph, Look, Mode, Tone};
 use crate::payload::{Doc, CLAIMS_PART, TASKS_PART};
 use crate::prompts::{self, Prompt};
 use crate::review::{part_file, PARTS};
@@ -231,10 +232,17 @@ fn runner_reply(
         ),
     }
     .map_err(ran)?;
+    let look = Look::current(config.mode);
     println!(
-        "   {name}: {}, {} files",
-        elapsed_text(started.elapsed()),
-        changed_between(&before, &tree_state(root))
+        "{}",
+        look.step(
+            Glyph::Pass,
+            &format!(
+                "   {name}: {}, {} files",
+                elapsed_text(started.elapsed()),
+                changed_between(&before, &tree_state(root))
+            )
+        )
     );
     let after = |message: String| {
         failed(message).at(runner::transcript_line(
@@ -337,7 +345,7 @@ fn run_fix(
     })
 }
 
-fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {
+fn check_lint(root: &Path, id: &str, look: &Look) -> Result<(), Failure> {
     let (store, _) = load_delta(root, id).map_err(|message| unticked(vec![message]))?;
     let options = lint::Options {
         delta: Some(id),
@@ -346,10 +354,14 @@ fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {
     let findings = lint::run(&store, root, &options, None);
     let mut errors = findings.iter().filter(|f| f.is_error()).map(|f| f.render());
     let Some(first) = errors.next() else {
-        println!("{}", console::style("   lint: clean").green());
+        println!(
+            "{}",
+            look.step_toned(Glyph::Pass, "   lint: clean", Some(Tone::Green))
+        );
         return Ok(());
     };
-    let rest = errors.map(|line| format!("{LINT_CONTINUATION}{line}"));
+    let continuation = look.continuation(LINT_CONTINUATION);
+    let rest = errors.map(|line| format!("{continuation}{line}"));
     Err(unticked(
         std::iter::once(format!("   lint: {first}"))
             .chain(rest)
@@ -357,9 +369,13 @@ fn check_lint(root: &Path, id: &str) -> Result<(), Failure> {
     ))
 }
 
-fn claim_evidence(root: &Path, tests: &[String], claim: &Claim) -> Result<Vec<String>, String> {
+fn claim_evidence(
+    root: &Path,
+    tests: &[String],
+    claim: &Claim,
+) -> Result<Vec<(Glyph, String)>, String> {
     if claim.intent {
-        return Ok(vec![format!("   {} [intent]", claim.id)]);
+        return Ok(vec![(Glyph::Info, format!("   {} [intent]", claim.id))]);
     }
     if claim.receipts.is_empty() {
         return Err(format!("   {} has no @ref", claim.id));
@@ -370,7 +386,7 @@ fn claim_evidence(root: &Path, tests: &[String], claim: &Claim) -> Result<Vec<St
         .map(|r| {
             let name = ref_name(&r.path, r.symbol.as_deref());
             match evidence::resolve(root, &r.path, r.symbol.as_deref(), tests) {
-                RefStatus::Ok => Ok(format!("   {} @ref {name} resolves", claim.id)),
+                RefStatus::Ok => Ok((Glyph::Pass, format!("   {} @ref {name} resolves", claim.id))),
                 RefStatus::Unresolved(why) => Err(format!(
                     "   {} @ref {name} does not resolve: {why}",
                     claim.id
@@ -384,7 +400,7 @@ fn claim_evidence(root: &Path, tests: &[String], claim: &Claim) -> Result<Vec<St
         .collect()
 }
 
-fn check_settled(root: &Path, id: &str, task: &Task) -> Result<(), Failure> {
+fn check_settled(root: &Path, id: &str, task: &Task, look: &Look) -> Result<(), Failure> {
     if task.chore {
         return Ok(());
     }
@@ -398,7 +414,9 @@ fn check_settled(root: &Path, id: &str, task: &Task) -> Result<(), Failure> {
             .find(|c| &c.id == settled && !c.struck)
             .ok_or_else(|| unticked(vec![format!("   {settled} is not in claims.md")]))?;
         let lines = claim_evidence(root, &tests, claim).map_err(|line| unticked(vec![line]))?;
-        lines.iter().for_each(|line| println!("{line}"));
+        lines
+            .iter()
+            .for_each(|(glyph, line)| println!("{}", look.step(*glyph, line)));
     }
     Ok(())
 }
@@ -433,7 +451,13 @@ pub(crate) fn git_run(root: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn commit(root: &Path, delta: &Doc, task: &Task, trailer: &str) -> Result<(), Failure> {
+fn commit(
+    root: &Path,
+    delta: &Doc,
+    task: &Task,
+    trailer: &str,
+    look: &Look,
+) -> Result<(), Failure> {
     let message = format!("{} {}: {}", delta.id, task.id, task.text);
     let failed = |why: String| Failure {
         detail: vec![format!("   commit failed: {why}")],
@@ -443,11 +467,17 @@ fn commit(root: &Path, delta: &Doc, task: &Task, trailer: &str) -> Result<(), Fa
     git_run(root, &["add", "-A"]).map_err(failed)?;
     git_run(root, &["commit", "-q", "-m", &message, "-m", trailer]).map_err(failed)?;
     let sha = git_output(root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
-    println!(
-        "   {} {} {message}",
-        console::style("commit").green(),
-        sha.trim()
-    );
+    match look.mode {
+        Mode::Plain => println!(
+            "   {} {} {message}",
+            console::style("commit").green(),
+            sha.trim()
+        ),
+        Mode::Live => println!(
+            "{}",
+            look.step(Glyph::Pass, &format!("   commit {} {message}", sha.trim()))
+        ),
+    }
     Ok(())
 }
 
@@ -473,9 +503,9 @@ fn reviewed_stop(
     }
 }
 
-fn check_work(root: &Path, delta: &Doc, task: &Task) -> Result<(), Failure> {
-    check_lint(root, &delta.id)?;
-    check_settled(root, &delta.id, task)
+fn check_work(root: &Path, delta: &Doc, task: &Task, look: &Look) -> Result<(), Failure> {
+    check_lint(root, &delta.id, look)?;
+    check_settled(root, &delta.id, task, look)
 }
 
 fn counted(n: usize, noun: &str) -> String {
@@ -496,6 +526,20 @@ fn trailer(findings: usize, rounds: u32) -> String {
     }
 }
 
+fn print_fix_round(look: &Look, count: usize, round: u32) {
+    let found = format!("   review: {}", counted(count, "finding"));
+    match look.mode {
+        Mode::Plain => println!("{found}, fix round {round}"),
+        Mode::Live => {
+            println!("{}", look.step(Glyph::Fail, &found));
+            println!(
+                "{}",
+                look.step(Glyph::Info, &format!("   fix round {round}"))
+            );
+        }
+    }
+}
+
 fn review_gate(
     root: &Path,
     store: &lazyspec::engine::store::Store,
@@ -504,6 +548,7 @@ fn review_gate(
     built: &Built,
     config: &runner::Config,
 ) -> Result<String, Failure> {
+    let look = &Look::current(config.mode);
     let (mut fixed, mut rounds) = (0, 0);
     loop {
         let (verdict, session) = gate::review(root, store, delta, task, config)
@@ -517,11 +562,20 @@ fn review_gate(
         }
         let count = verdict.findings.len();
         if count == 0 {
-            println!("{}", console::style("   review: clean").green());
+            println!(
+                "{}",
+                look.step_toned(Glyph::Pass, "   review: clean", Some(Tone::Green))
+            );
             return Ok(trailer(fixed, rounds));
         }
         if rounds == config.review_rounds {
-            println!("   review: {}", counted(count, "finding"));
+            println!(
+                "{}",
+                look.step(
+                    Glyph::Fail,
+                    &format!("   review: {}", counted(count, "finding"))
+                )
+            );
             let detail = verdict
                 .findings
                 .iter()
@@ -535,12 +589,9 @@ fn review_gate(
         }
         rounds += 1;
         fixed += count;
-        println!(
-            "   review: {}, fix round {rounds}",
-            counted(count, "finding")
-        );
+        print_fix_round(look, count, rounds);
         run_fix(root, delta, task, built, &verdict.findings, config)
-            .and_then(|()| check_work(root, delta, task))
+            .and_then(|()| check_work(root, delta, task, look))
             .inspect_err(|_| {
                 record_review(root, delta, task, &verdict);
             })?;
@@ -554,24 +605,35 @@ fn build_task(
     task: &Task,
     config: &runner::Config,
 ) -> Result<(), Failure> {
-    println!("{}", console::style(heading(task)).bold());
+    let look = &Look::current(config.mode);
+    println!("{}", look.tone(Tone::Bold, &heading(task)));
     let built = run_runner(root, store, delta, task, config)?;
-    check_work(root, delta, task)?;
+    check_work(root, delta, task, look)?;
     let trailer = review_gate(root, store, delta, task, &built, config)?;
     tick(root, delta, task)?;
-    commit(root, delta, task, &trailer)
+    commit(root, delta, task, &trailer, look)
 }
 
-fn report(failure: &Failure, task: &Task) {
+fn report(failure: &Failure, task: &Task, look: &Look) {
     let ending = match &failure.ending {
         Ending::Ticked => "ticked but not committed".to_string(),
         Ending::Unticked => "left unticked".to_string(),
         Ending::Reviewed(why) => why.clone(),
     };
     let stopped = format!("   stopped. {} {ending}; working tree kept.", task.id);
-    runner::stop_lines(&failure.detail, stopped, failure.transcript.clone())
+    let detail: Vec<String> = failure
+        .detail
         .iter()
-        .for_each(|line| println!("{}", console::style(line).red()));
+        .map(|line| look.step_toned(Glyph::Fail, line, Some(Tone::Red)))
+        .collect();
+    let stopped = look.tone(Tone::Red, &stopped);
+    let transcript = failure
+        .transcript
+        .as_deref()
+        .map(|t| look.tone(Tone::Red, t));
+    runner::stop_lines(&detail, stopped, transcript)
+        .iter()
+        .for_each(|line| println!("{line}"));
 }
 
 pub(crate) const DIRTY_TREE: &str = "build needs a clean working tree; commit or stash first";
@@ -615,7 +677,7 @@ pub fn run(
             return Ok(Outcome::Complete);
         };
         if let Err(failure) = build_task(root, &store, &delta, task, config) {
-            report(&failure, task);
+            report(&failure, task, &Look::current(config.mode));
             return Ok(Outcome::Stopped);
         }
         if only.is_some() {

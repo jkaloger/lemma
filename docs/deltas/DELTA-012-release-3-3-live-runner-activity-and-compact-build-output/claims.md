@@ -15,9 +15,11 @@
 - [AC-8] A stopped task in live mode ends its block with `transcript: <path>` for the call that failed.
   @ref crates/lemma/src/runner.rs#a_stopped_live_task_ends_with_the_transcript_of_the_failed_call
 - [AC-9] In live mode each build step line carries `✓` on pass, `✗` on failure, `·` for information.
+  @ref crates/lemma/src/output.rs#live_step_lines_carry_a_glyph_per_outcome
 - [AC-10] When a task commits in live mode, its block is replaced by one line: `✓`, task id and title, elapsed, review outcome and short sha.
 - [AC-11] A stopped task's block is not collapsed.
 - [AC-12] `NO_COLOR` removes colour and keeps glyphs.
+  @ref crates/lemma/src/output.rs#no_color_removes_colour_and_keeps_glyphs
 - [AC-13] [intent] lemma reads the transcript for display only; no reply, check, decision or exit status depends on it.
   @ref crates/lemma/src/runner.rs#the_transcript_never_decides_the_reply_or_the_exit_status
 - [AC-14] A transcript line split across two polls produces its activity once, after the rest of the line arrives.
