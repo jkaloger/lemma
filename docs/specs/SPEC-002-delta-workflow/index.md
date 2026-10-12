@@ -25,8 +25,10 @@ governs:
   - "crates/lemma/src/testgit.rs"
   - "crates/lemma/src/main.rs"
   - ".lazyspec/prompts/**"
+  - "crates/lemma/src/activity.rs"
 tests:
   - "crates/lemma/tests/**"
+  - "crates/lemma/src/activity.rs"
 related: []
 ---
 
