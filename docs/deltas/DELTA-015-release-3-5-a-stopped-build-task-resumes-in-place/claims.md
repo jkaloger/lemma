@@ -1,1 +1,31 @@
 <!-- One bullet per behaviour, in plain words: `- An empty account has balance zero.` `lemma review` assigns ids (`- [AC-1] ...`). Mark a behaviour no test can settle `[intent]` after its id. -->
+
+- Every build stop writes a stop record at `<git-dir>/lemma/builds/<delta>.json` holding the task, ending, base, head, session, findings, a blob sha per dirty path and the time; it is not committed.
+- A stop's ending is `unticked` when it stopped before the tick, `ticked` when the tick landed but the commit failed, and `reviewed` when the reviewer stopped it or findings were left after `review_rounds`.
+- A stopped task that stops again replaces the record; the record is deleted when the task commits.
+- Build no longer writes `reviews/<delta>-T<n>.json`; `lemma review`'s `reviews/<delta>.json` is unchanged.
+- Without `--resume`, a dirty tree with a stop record is refused with `T<n> stopped <at>: <reason>; rerun with --resume, or clean the tree to start T<n> fresh`.
+- Without `--resume`, a dirty tree with no stop record is refused as before.
+- Without `--resume`, a clean tree with a stop record deletes the record and starts the task fresh.
+- `--resume` with no stop record errors: nothing to resume.
+- `--resume` errors naming both tasks when the record's task is not the next unticked task, or not the `--task` given.
+- `--resume` is refused with both shas when the record's `head` is not an ancestor of HEAD; nothing is reset or rewritten.
+- `--resume` is allowed when commits were made on top of the record's `head` during the stop.
+- Resuming a `ticked` stop retries only the commit, runs no runner and no review, then continues to the next task.
+- A resume prints `resuming T<n> (stopped <at>: <reason>)` and the paths changed since the stop: the working tree against the recorded blob shas, plus paths in commits since `head`.
+- A resume runs the checks on the tree as it is; on pass it runs the review gate, then ticks and commits.
+- A resume starts a fresh `review_rounds` budget, shared by its check-failure and reviewer fix rounds; the stopped run's budget is not carried.
+- A resume whose checks fail runs a fix round with the failures as findings, through the recorded session's `resume` command.
+- A resume whose record has no session, or whose runner commands lack `{session}`, runs the fix round as a fresh runner.
+- On a resume, the reviewer's task diff runs from the record's `base` to the working tree, so commits the human made during the stop are reviewed.
+- Human edits made during the stop, including paths outside the task's original diff, are in the resumed task's diff and are reviewed.
+- The resumed task's commit holds only uncommitted work; earlier human commits stay as they are.
+- A fresh run's task diff is unchanged.
+- After a runner or fix reply, a check failure becomes a finding and goes to a fix round within the same `review_rounds` budget as reviewer findings, instead of stopping at once.
+- A reply without JSON, a lint error, an unresolved or not-a-test ref, a settled claim without a ref, and an edit to a delta part each become a fix-round finding.
+- A check failure finding's text is the diagnostic; its basis is the claim id when the diagnostic names a claim, otherwise `task`.
+- Check failures left after the last fix round stop the build with an `unticked` record.
+- A reply with `blocked` still stops at once.
+- While a valid stop record exists for a delta, `lemma stop` reports that delta's findings as warnings, not errors, and names `lemma build <delta> --resume`.
+- `lemma stop` treats a stop record as invalid, and keeps that delta's findings as errors, when its task is not the next unticked one (or the ticked one for `ticked`) or its `head` is not an ancestor of HEAD.
+- Findings unrelated to a delta with a valid stop record are still errors in `lemma stop`.

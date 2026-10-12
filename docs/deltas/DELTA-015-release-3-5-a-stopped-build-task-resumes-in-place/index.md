@@ -1,13 +1,13 @@
 ---
-title: 'Release 3.5: a stopped build task resumes in place'
+title: "Release 3.5: a stopped build task resumes in place"
 type: delta
 status: draft
 author: Jack Kaloger
 date: 2026-10-12
 tags: []
 related:
-- changes: SPEC-002
-- changes: SPEC-003
+  - changes: SPEC-002
+  - changes: SPEC-003
 ---
 
 ## Intent
@@ -20,7 +20,7 @@ Two related faults. Check failures after the first runner call (lint, settled-cl
 
 Trigger: DELTA-012 T2 stopped on a lint error and could not resume.
 
-This delta adds `lemma build <delta> --resume`, which continues a stopped task in place: same tree, same session where possible, human edits included, still through the review gate. It turns check failures into findings for the fix round, and makes `lemma stop` warn rather than block on a resumable stop.
+This delta adds `lemma build <delta> --resume`, which continues a stopped task in place: same tree, same session where possible, human edits included, still through the review gate. It turns check failures into findings for the fix round, and makes `lemma stop` warn rather than block on a resumable stop. That last is an exception to SPEC-003's constraint that signals block at Stop; this delta amends the constraint (see design).
 
 ## Out of scope
 
