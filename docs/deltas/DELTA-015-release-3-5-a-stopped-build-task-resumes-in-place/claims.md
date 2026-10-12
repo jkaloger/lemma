@@ -30,10 +30,17 @@
 - [AC-12] Resuming a `ticked` stop retries only the commit, runs no runner and no review, then continues to the next task.
   @ref crates/lemma/tests/build.rs#resuming_a_ticked_stop_retries_only_the_commit_then_continues
 - [AC-13] A resume prints `resuming T<n> (stopped <at>: <reason>)` and the paths changed since the stop: the working tree against the recorded blob shas, plus paths in commits since `head`.
+  @ref crates/lemma/tests/build.rs#a_resume_prints_the_stop_and_the_paths_changed_since_it
 - [AC-14] A resume runs the checks on the tree as it is; on pass it runs the review gate, then ticks and commits.
+  @ref crates/lemma/tests/build.rs#a_resume_whose_checks_pass_reviews_then_ticks_and_commits
 - [AC-15] A resume starts a fresh `review_rounds` budget, shared by its check-failure and reviewer fix rounds; the stopped run's budget is not carried.
+  @ref crates/lemma/tests/build.rs#a_resume_after_the_cap_gets_a_fresh_review_rounds_budget
+  @ref crates/lemma/tests/build.rs#a_resume_check_fix_round_spends_the_budget_reviewer_findings_would_use
 - [AC-16] A resume whose checks fail runs a fix round with the failures as findings, through the recorded session's `resume` command.
+  @ref crates/lemma/tests/build.rs#a_resume_whose_checks_fail_fixes_through_the_recorded_session
 - [AC-17] A resume whose record has no session, or whose runner commands lack `{session}`, runs the fix round as a fresh runner.
+  @ref crates/lemma/tests/build.rs#a_resume_without_a_recorded_session_fixes_in_a_fresh_runner
+  @ref crates/lemma/tests/build.rs#a_resume_whose_commands_lack_session_fixes_in_a_fresh_runner
 - [AC-18] On a resume, the reviewer's task diff runs from the record's `base` to the working tree, so commits the human made during the stop are reviewed.
 - [AC-19] Human edits made during the stop, including paths outside the task's original diff, are in the resumed task's diff and are reviewed.
 - [AC-20] The resumed task's commit holds only uncommitted work; earlier human commits stay as they are.

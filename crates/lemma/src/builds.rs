@@ -2,7 +2,7 @@ use crate::gate::Finding;
 use crate::git::{changed_since, git_output};
 use crate::session::{is_safe_file_name, lemma_dir};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,7 +26,11 @@ pub struct Stopped {
     pub base: String,
     pub head: String,
     #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
     pub findings: Vec<Finding>,
+    #[serde(default)]
+    pub tree: BTreeMap<String, Option<String>>,
     pub at: String,
 }
 
@@ -35,6 +39,27 @@ impl Stopped {
         self.findings
             .first()
             .map_or(self.ending.as_str(), |f| f.text.as_str())
+    }
+
+    /// The tree against the snapshot taken at the stop, plus paths in commits
+    /// made on top of it.
+    pub fn changed_paths(&self, root: &Path) -> Vec<String> {
+        let now = dirty_tree(root);
+        let committed = git_output(
+            root,
+            &["diff", "--name-only", "--relative", &self.head, "HEAD"],
+        )
+        .unwrap_or_default();
+        let edited = self
+            .tree
+            .keys()
+            .chain(now.keys())
+            .filter(|path| self.tree.get(*path) != now.get(*path));
+        let paths: BTreeSet<&str> = edited
+            .map(String::as_str)
+            .chain(committed.lines())
+            .collect();
+        paths.into_iter().map(str::to_string).collect()
     }
 }
 

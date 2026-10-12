@@ -1297,6 +1297,7 @@ fn stop_t1(repo: &Repo) -> Value {
     let run = build(repo, &[]);
     assert_eq!(run.code, 2, "{}", run.stdout);
     done(repo, "T1", &[REOPEN]);
+    fix_reply(repo, "T1", 1, &[REOPEN]);
     record(repo)
 }
 
@@ -1516,4 +1517,174 @@ fn resuming_a_ticked_stop_retries_only_the_commit_then_continues() {
     assert!(repo.path(".fixture/T2.prompt.0").exists());
     assert!(!repo.path(RECORD).exists());
     assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_resume_prints_the_stop_and_the_paths_changed_since_it() {
+    let repo = project("in-progress", single_task());
+    fixture(&repo, "T1", "src/kept.rs", "pub fn kept() {}\n");
+    let stopped = stop_t1(&repo);
+    repo.write("src/one.rs", "pub fn one() { /* human */ }\n");
+    repo.write("src/human.rs", "pub fn human() {}\n");
+    repo.write("notes.txt", "during the stop\n");
+    repo.git(&["add", "notes.txt"]);
+    repo.git(&["commit", "-q", "-m", "human note"]);
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let at = stopped["at"].as_str().unwrap();
+    assert!(
+        run.stdout.contains(&format!(
+            "   resuming T1 (stopped {at}: runner blocked: needs a human)\n"
+        )),
+        "{}",
+        run.stdout
+    );
+    let changed: Vec<&str> = run
+        .stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("   changed since the stop: "))
+        .collect();
+    assert_eq!(changed, ["notes.txt", "src/human.rs", "src/one.rs"]);
+}
+
+#[test]
+fn a_resume_whose_checks_pass_reviews_then_ticks_and_commits() {
+    let repo = project("in-progress", single_task());
+    stop_t1(&repo);
+    repo.write(CLAIMS_PATH, &claims(true, false));
+    std::fs::remove_file(repo.path(".fixture/T1.prompt.0")).unwrap();
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!repo.path(".fixture/T1.prompt.0").exists(), "runner ran");
+    assert!(!repo.path(".fixture/T1.prompt.1").exists(), "fix ran");
+    assert_eq!(repo.read(".fixture/T1.rcalls"), "1\n");
+    let review = repo.read(".fixture/T1.review-prompt.1");
+    let task_diff = review.split("# Task diff").nth(1).unwrap();
+    assert!(task_diff.contains("+pub fn one() {}"), "{task_diff}");
+    let checks = run
+        .stdout
+        .find("   lint: clean\n   AC-1 @ref tests/store_test.rs#reopen_keeps_prior resolves\n")
+        .expect(&run.stdout);
+    let review = run.stdout.find("   review: clean\n").expect(&run.stdout);
+    assert!(checks < review, "{}", run.stdout);
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+    assert_eq!(subjects(&repo)[0], "DELTA-001 T1: reopen");
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_resume_after_the_cap_gets_a_fresh_review_rounds_budget() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    review_round(&repo, "T1", 2, &[ATOMIC]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    assert_eq!(build(&repo, &[]).code, 2);
+    assert_eq!(record(&repo)["ending"], "reviewed");
+    review_round(&repo, "T1", 3, &[HELPER]);
+    fix_reply(&repo, "T1", 2, &[REOPEN]);
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("   review: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        repo.git(&["log", "-1", "--format=%B"]).trim_end(),
+        "DELTA-001 T1: reopen\n\nLemma-Review: 1 finding fixed in 1 round"
+    );
+}
+
+#[test]
+fn a_resume_check_fix_round_spends_the_budget_reviewer_findings_would_use() {
+    let repo = project("in-progress", single_task());
+    stop_t1(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .ends_with("   stopped. T1 left unticked after 1 fix round; working tree kept.\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(record(&repo)["ending"], "reviewed");
+}
+
+#[test]
+fn a_resume_whose_checks_fail_fixes_through_the_recorded_session() {
+    let repo = project("in-progress", single_task());
+    let resume = format!(
+        "resume = \"{} resumed {{session}}\"\n",
+        repo.path("fake-runner.sh").display()
+    );
+    install_fakes_with(&repo, " {session}", &resume);
+    repo.commit("session runner");
+    let stopped = stop_t1(&repo);
+    let session = stopped["session"].as_str().unwrap().to_string();
+    assert!(uuid_like(&session), "{session}");
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        repo.read(".fixture/T1.args.1"),
+        format!("resumed {session}")
+    );
+    let fix = repo.read(".fixture/T1.prompt.1");
+    assert!(fix.contains("- [AC-1] AC-1 has no @ref"), "{fix}");
+    assert!(!fix.contains("# Convention"), "{fix}");
+    assert_eq!(subjects(&repo)[0], "DELTA-001 T1: reopen");
+}
+
+#[test]
+fn a_resume_without_a_recorded_session_fixes_in_a_fresh_runner() {
+    let repo = project("in-progress", single_task());
+    let stopped = stop_t1(&repo);
+    assert_eq!(stopped["session"], Value::Null);
+    let build_prompt = repo.read(".fixture/T1.prompt.0");
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let fix = repo.read(".fixture/T1.prompt.1");
+    assert!(fix.starts_with(&build_prompt), "{fix}");
+    assert!(fix.contains("- [AC-1] AC-1 has no @ref"), "{fix}");
+}
+
+#[test]
+fn a_resume_whose_commands_lack_session_fixes_in_a_fresh_runner() {
+    let repo = project("in-progress", single_task());
+    let resume = format!(
+        "resume = \"{} resumed\"\n",
+        repo.path("fake-runner.sh").display()
+    );
+    install_fakes_with(&repo, " {session}", &resume);
+    repo.commit("session runner");
+    let stopped = stop_t1(&repo);
+    let session = stopped["session"].as_str().unwrap();
+    let build_prompt = repo.read(".fixture/T1.prompt.0");
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let fix = repo.read(".fixture/T1.prompt.1");
+    assert!(fix.starts_with(&build_prompt), "{fix}");
+    let args = repo.read(".fixture/T1.args.1");
+    assert!(uuid_like(&args), "{args}");
+    assert_ne!(args, session);
 }

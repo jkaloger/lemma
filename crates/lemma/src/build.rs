@@ -406,6 +406,18 @@ fn reply_and_check(
     ))
 }
 
+fn build_prompt(
+    root: &Path,
+    store: &lazyspec::engine::store::Store,
+    delta: &Doc,
+    task: &Task,
+) -> Result<String, Failure> {
+    let mut values = context::assemble(store, root, delta);
+    values.insert("task", context::task_text(delta, task));
+    prompts::rendered(Prompt::Build, root, &values)
+        .map_err(|message| unticked(vec![format!("   runner: {message}")]))
+}
+
 fn run_runner(
     root: &Path,
     store: &lazyspec::engine::store::Store,
@@ -414,10 +426,7 @@ fn run_runner(
     config: &runner::Config,
     block: &Block,
 ) -> Result<(Built, Option<Failure>), Failure> {
-    let mut values = context::assemble(store, root, delta);
-    values.insert("task", context::task_text(delta, task));
-    let prompt = prompts::rendered(Prompt::Build, root, &values)
-        .map_err(|message| unticked(vec![format!("   runner: {message}")]))?;
+    let prompt = build_prompt(root, store, delta, task)?;
     let mut built = Built {
         prompt: prompt.clone(),
         session: None,
@@ -430,6 +439,39 @@ fn run_runner(
         resume: None,
     };
     let failed = reply_and_check(root, delta, task, &mut built, call, config, block)?;
+    Ok((built, failed))
+}
+
+/// A resume checks the tree as the stop and the human left it; no runner runs
+/// unless the checks send it to a fix round.
+fn resume_checks(
+    root: &Path,
+    store: &lazyspec::engine::store::Store,
+    delta: &Doc,
+    task: &Task,
+    stopped: &builds::Stopped,
+    look: &Look,
+    block: &Block,
+) -> Result<(Built, Option<Failure>), Failure> {
+    block.say(&look.step(
+        Glyph::Info,
+        &format!(
+            "   resuming {} (stopped {}: {})",
+            task.id,
+            stopped.at,
+            stopped.reason()
+        ),
+    ));
+    for path in stopped.changed_paths(root) {
+        block.say(&look.step(Glyph::Info, &format!("   changed since the stop: {path}")));
+    }
+    let built = Built {
+        prompt: build_prompt(root, store, delta, task)?,
+        session: stopped.session.clone(),
+        claims: plan::read(root, delta, CLAIMS_PART),
+        parts: delta_parts(root, delta),
+    };
+    let failed = checked(check_work(root, delta, task, look, block))?;
     Ok((built, failed))
 }
 
@@ -746,13 +788,18 @@ fn build_task(
     store: &lazyspec::engine::store::Store,
     delta: &Doc,
     task: &Task,
+    stopped: Option<&builds::Stopped>,
     config: &runner::Config,
     block: &Block,
 ) -> Result<(), Failure> {
     let look = &Look::current(config.mode);
     let started = std::time::Instant::now();
     block.say(&look.tone(Tone::Bold, &heading(task)));
-    let (mut built, failed) = run_runner(root, store, delta, task, config, block)?;
+    let (mut built, failed) = match stopped {
+        Some(stopped) => resume_checks(root, store, delta, task, stopped, look, block)
+            .map_err(|f| f.in_session(stopped.session.as_deref()))?,
+        None => run_runner(root, store, delta, task, config, block)?,
+    };
     let review = review_gate(root, store, delta, task, &mut built, failed, config, block);
     let in_built = |f: Failure| f.in_session(built.session.as_deref());
     let review = review.map_err(in_built)?;
@@ -894,8 +941,7 @@ fn resumed_task(
 
 struct Resumed {
     task: String,
-    base: String,
-    ticked: bool,
+    stopped: builds::Stopped,
 }
 
 /// Decides how a build enters: `Some` resumes a stopped task.
@@ -910,11 +956,7 @@ fn enter(
     if resume {
         let stopped = stopped.ok_or(format!("nothing to resume: {id} has no stopped task"))?;
         let task = resumed_task(root, parsed, only, &stopped)?;
-        return Ok(Some(Resumed {
-            task,
-            base: stopped.base,
-            ticked: stopped.ending == "ticked",
-        }));
+        return Ok(Some(Resumed { task, stopped }));
     }
     let Some(stopped) = stopped else {
         require_clean(root)?;
@@ -947,14 +989,18 @@ pub fn run(
     loop {
         let (store, delta) = load_delta(root, id)?;
         let parsed = tasks::parse(delta.part_body(TASKS_PART));
-        let (next, base, ticked) = match resumed.take() {
-            Some(r) => (parsed.named(&r.task), r.base, r.ticked),
+        let (next, base, stopped) = match resumed.take() {
+            Some(r) => (
+                parsed.named(&r.task),
+                r.stopped.base.clone(),
+                Some(r.stopped),
+            ),
             None => {
                 let next = match only {
                     Some(name) => parsed.named(name),
                     None => parsed.first_unticked(),
                 };
-                (next.filter(|t| !t.ticked), builds::head(root), false)
+                (next.filter(|t| !t.ticked), builds::head(root), None)
             }
         };
         let Some(task) = next else {
@@ -962,9 +1008,9 @@ pub fn run(
             return Ok(Outcome::Complete);
         };
         let block = Block::on_terminal();
-        let built = match ticked {
-            true => retry_commit(root, &delta, task, config, &block),
-            false => build_task(root, &store, &delta, task, config, &block),
+        let built = match &stopped {
+            Some(s) if s.ending == "ticked" => retry_commit(root, &delta, task, config, &block),
+            _ => build_task(root, &store, &delta, task, stopped.as_ref(), config, &block),
         };
         if let Err(failure) = built {
             record_stop(root, &delta, task, base, &failure);
