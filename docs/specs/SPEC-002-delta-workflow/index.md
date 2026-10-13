@@ -47,7 +47,7 @@ The human types four commands: `lemma review`, `lemma plan`, `lemma build`, and 
 - The runner never edits a delta part. lemma writes ids, tasks and refs from the runner's JSON reply.
 - Every review-gate finding cites a written basis: the task, the design, the convention, a claim, a dictum rule or a related document. Fix rounds are bounded by `review_rounds`, and nothing commits around a finding (DECISION-004).
 - Build never completes a delta. Completion is the human's step (DECISION-009).
-- A stop never resets the working tree. A re-run resumes at the first unticked task.
+- A stop never resets the working tree. A re-run resumes at the first unticked task. A stop leaves an uncommitted, per-clone record; `lemma build --resume` continues the stopped task in place, human edits included, through the same review gate. Its task diff runs from the task's base, so commits made during the stop are reviewed. A resume is refused when history changed under the task. Cleaning the tree is the discard.
 - No shell layer. Orchestration is child processes plus JSON. The runner is a `lemma.toml` command string, and every reply is checked against a JSON Schema generated from the delta.
 - Prompts are pack files a human can edit. The binary carries the same defaults.
 - One agent per delta (DECISION-013).

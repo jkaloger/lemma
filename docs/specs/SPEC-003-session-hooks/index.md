@@ -22,11 +22,11 @@ related: []
 
 ## Intent
 
-`lemma session-start`, `lemma signal` and `lemma stop`, and the Claude Code plugin that registers them. They give an agent scoped context and early warning inside a session. Prompting cannot scope context to the code being touched; these hooks can. `signal` points the agent at the specs, decisions, dictums and in-flight deltas governing the file it just touched. `stop` refuses to end a turn that leaves error findings behind.
+`lemma session-start`, `lemma signal` and `lemma stop`, and the Claude Code plugin that registers them. They give an agent scoped context and early warning inside a session. Prompting cannot scope context to the code being touched; these hooks can. `signal` points the agent at the specs, decisions, dictums and in-flight deltas governing the file it just touched. `stop` refuses to end a turn that leaves error findings behind, except where a stopped build waits on the human to resume it.
 
 ## Constraints
 
-- Signals escalate: per edit they inform, at Stop they block the turn, at the gate and in CI they block the change (DECISION-001, DECISION-010).
+- Signals escalate: per edit they inform, at Stop they block the turn, at the gate and in CI they block the change (DECISION-001, DECISION-010). One exception: findings of a delta with a valid build stop record warn at Stop and name `lemma build <delta> --resume`. The session that meets them cannot clear them, and the gate and CI still block. A record whose task or `head` no longer matches keeps the findings as errors.
 - Context is pointers to documents, not their content.
 - Each message is said once per session, keyed on a stable identity rather than rendered text.
 - `signal` never blocks and exits 0 on any failure. Every hook is a no-op when `lemma` is not on `PATH`.

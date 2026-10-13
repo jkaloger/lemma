@@ -17,7 +17,7 @@ lemma [command] [options]
 lemma lint [<delta>] [--gate in-progress|complete] [--base <rev>] [--trunk <name>] [--json|--hook]
 lemma review <delta> [--dry-run]
 lemma plan <delta> [--dry-run]
-lemma build <delta> [--task T<n>] [--dry-run]
+lemma build <delta> [--task T<n>] [--resume] [--dry-run]
 lemma refs <claim>
 lemma session-start | lemma signal | lemma stop
 ```
@@ -134,17 +134,17 @@ Planning reorders frontmatter keys to `title, type, status, author, date, tags, 
 
 Before the prompt, build requires a clean working tree outside the delta directory. Uncommitted or untracked paths elsewhere produce `build needs a clean working tree; commit or stash first`. After confirmation, build lints with `--gate in-progress`. Error findings stop the command; lazyspec is not run. Otherwise build runs `lazyspec update <id> --status in-progress` with inherited stdio and verifies the resulting status. A failed update or wrong status leaves the delta draft. Build then commits only the delta directory as `<id>: in-progress`. A failed commit leaves the delta in progress and reports that it must be committed before build can continue.
 
-An `in-progress` delta requires a clean working tree. Build processes unticked main tasks in order, then follow-ups. For each task:
+An `in-progress` delta requires a clean working tree unless the build is run with `--resume` (see [Stops and resume](#stops-and-resume)). Build processes unticked main tasks in order, then follow-ups. For each task:
 
 1. The `build` prompt includes the task and its claims. The runner receives `LEMMA_DELTA` and `LEMMA_TASK`. Its reply is `{"outcome":"done"|"blocked","reason","refs":[{"claim","path","symbol"}]}`. `claim` must be one of the claims settled by the task. A chore has no refs.
-2. A runner that changes `index.md`, `design.md`, `claims.md` or `tasks.md` fails with `runner edited <path>; Lemma writes delta parts`. A blocked outcome fails with its reason. A reply without JSON fails.
+2. A runner that changes `index.md`, `design.md`, `claims.md` or `tasks.md` fails with `runner edited <path>; Lemma writes delta parts`. A reply without JSON fails. A blocked outcome stops the task at once with its reason.
 3. Refs are written under their claims after existing lines. Existing refs are skipped. A ref for a claim the task does not settle fails.
-4. `lemma lint <delta>` runs. Any error stops the task.
+4. `lemma lint <delta>` runs. Any error fails the check.
 5. Unless the task is a chore, every settled claim must be `[intent]`, or have at least one ref and all refs must resolve.
 6. The review gate runs.
 7. The task is ticked, then `git add -A` and `git commit` record it with message `<delta> T<n>: <text>` and a review trailer.
 
-A failure before the review gate leaves the task unticked and preserves the working tree. A failed commit leaves the task ticked and preserves the working tree. Build never resets the tree. A rerun resumes at the first unticked task. `--task T<n>` runs one task. When no tasks remain, output is `all tasks complete`.
+A failed check in steps 2 to 5 does not stop the task. It becomes a finding and goes to a fix round, as reviewer findings do (see [Fix rounds](#fix-rounds)). Build never resets the tree. `--task T<n>` runs one task. When no tasks remain, output is `all tasks complete`.
 
 #### Output
 
@@ -195,7 +195,7 @@ If the block's line count is unknown, the summary line is printed under the bloc
 
 After the runner, lint and settled-claim checks pass, Lemma runs `git add -A` and invokes the `reviewer` command with the `review-task` prompt. The prompt includes the task, its claims, conventions, dictums, spec intent, related documents, design, claims, `task_diff` and `delta_diff`.
 
-`task_diff` is `git diff --cached HEAD`, containing the staged work of this task, including untracked files. `delta_diff` is `git diff <base> HEAD`, containing committed work for the delta so far as read-only context. The prompt directs the reviewer to judge only the task diff and use the delta diff to detect a task undoing earlier work.
+`task_diff` is `git diff --cached HEAD`, containing the staged work of this task, including untracked files. On a resume, `task_diff` runs from the stop record's `base` to the working tree instead, so commits made during the stop are reviewed with the rest. `delta_diff` is `git diff <base> HEAD`, containing committed work for the delta so far as read-only context. The prompt directs the reviewer to judge only the task diff and use the delta diff to detect a task undoing earlier work.
 
 The reviewer reply is `{"stop":"<reason or empty>","findings":[{"text","basis"}]}`. `basis` must be `task`, `design`, a live claim id, a live dictum rule id or a related document id other than `changes`. A reply with another basis fails with `review: reviewer reply: unknown basis` and the invalid basis.
 
@@ -209,22 +209,63 @@ The prompt directs the reviewer to report work outside the task as a finding wit
 
 #### Fix rounds
 
-A fix round prints `review: <n> findings, fix round <k>`, then runs the builder with the `fix` prompt. The prompt lists findings as `- [<basis>] <text>`. Its reply uses the build schema. The fix reply replaces the task's refs; refs are written onto claim lines as they stood before the task ran. The build reply checks apply again, followed by lint, settled-claim checks and another review gate.
+Reviewer findings and check failures both go to fix rounds. A check failure becomes a finding whose text is the diagnostic. Its basis is the claim id when the diagnostic names a claim, otherwise `task`. A check failure is printed, then counted as `check: <n> findings`.
+
+A fix round prints `review: <n> findings, fix round <k>` or `check: <n> findings, fix round <k>`, then runs the builder with the `fix` prompt. The prompt lists findings as `- [<basis>] <text>`. Its reply uses the build schema. The fix reply replaces the task's refs; refs are written onto claim lines as they stood before the task ran. The build reply checks apply again, followed by lint, settled-claim checks and another review gate.
 
 | Runner configuration                           | Fix round command                                                                                    |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `runner` and `resume` both contain `{session}` | The `resume` command, with `{session}` set to the build call's session id and the `fix` prompt alone |
 | Either command lacks `{session}`               | The `runner` command in a fresh run, with the `build` prompt followed by the `fix` prompt            |
 
-`review_rounds` is the maximum number of fix rounds per task and defaults to 1. If findings remain after the final round, build stops without committing.
+`review_rounds` is the maximum number of fix rounds per task and defaults to 1. Check failures and reviewer findings share that one budget. If findings remain after the final round, build stops without committing.
 
-| Stop cause                            | Output                                                                                                     |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Findings remain after `review_rounds` | Finding count and basis lines, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
-| Reviewer returns `stop`               | `stopped. T<n> review: <reason>; working tree kept.`                                                       |
-| A fix round fails a check             | Check failure lines, then `stopped. T<n> left unticked; working tree kept.`                                |
+#### Stops and resume
 
-Each stop exits 2 and preserves the working tree, including staged work. A rerun resumes at the first unticked task. When a stop leaves findings open, they are written to `<git-dir>/lemma/reviews/<delta>-T<n>.json` as `{"stop","findings":[{"text","basis"}]}`. This includes reviewer stops and fix-round failures caused by a blocked reply, part edit, bad ref, lint or settled-claim check. The file is not committed and is overwritten by the next stop for that task. `tasks.md` and `claims.md` are not modified by the stop record.
+| Stop cause                                     | Output                                                                                                     |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Reviewer findings remain after `review_rounds` | Finding count and basis lines, then `stopped. T<n> left unticked after <k> fix rounds; working tree kept.` |
+| Check failures remain after `review_rounds`    | Check failure lines, then `stopped. T<n> left unticked; working tree kept.`                                |
+| Reviewer returns `stop`                        | `stopped. T<n> review: <reason>; working tree kept.`                                                       |
+| Runner replies `blocked`                       | `<runner> blocked: <reason>`, then `stopped. T<n> left unticked; working tree kept.`                       |
+| The commit fails after the tick                | `commit failed: <why>`, then `stopped. T<n> ticked but not committed; working tree kept.`                  |
+
+Each stop exits 2 and preserves the working tree, including staged work. Build never resets or rewrites anything. Each stop writes a stop record to `<git-dir>/lemma/builds/<delta>.json`. The file is not committed, belongs to one clone and is replaced by the next stop. Build deletes it when the task commits. `tasks.md` and `claims.md` are not modified by the stop record.
+
+```json
+{
+  "task": "T2",
+  "ending": "unticked|ticked|reviewed",
+  "base": "<HEAD at task start>",
+  "head": "<HEAD at stop>",
+  "session": "<runner session id or null>",
+  "findings": [{ "text": "...", "basis": "..." }],
+  "tree": { "<path>": "<blob sha>" },
+  "at": "<rfc3339>"
+}
+```
+
+`ending` is `unticked` for a stop before the tick, `ticked` when the tick landed but the commit failed, and `reviewed` when the reviewer stopped the task or findings remained after `review_rounds`. `tree` holds the blob SHA of each dirty path at the stop.
+
+Without `--resume`, the stop record decides how build starts:
+
+| Tree  | Stop record | Result                                                                                           |
+| ----- | ----------- | ------------------------------------------------------------------------------------------------ |
+| dirty | none        | `build needs a clean working tree; commit or stash first`                                        |
+| dirty | present     | `T<n> stopped <at>: <reason>; rerun with --resume, or clean the tree to start T<n> fresh`        |
+| clean | present     | The work was discarded. Build deletes the record and starts the task fresh                       |
+| clean | none        | Build starts at the first unticked task                                                          |
+
+`lemma build <delta> --resume` continues the stopped task in place, with the tree as the stop and the human left it. It fails with `nothing to resume` when there is no record. It fails naming both tasks when the record's task is not the first unticked task, or not the `--task` given. A `ticked` record names the ticked task instead. It fails with both SHAs when the record's `head` is not an ancestor of `HEAD`; commits made on top of `head` during the stop are allowed.
+
+A resumed `ticked` stop retries only the commit with the trailer `Lemma-Review: passed before a failed commit`, then continues to the next task. No runner or reviewer runs. Any other resume:
+
+1. Prints `resuming T<n> (stopped <at>: <reason>)`, then one `changed since the stop: <path>` line per path changed against `tree` or in commits since `head`.
+2. Runs the checks on the tree as it is. On a failure, it runs a fix round with the failures as findings. The fix round uses the `resume` command with the recorded session. A fresh runner is used when the record has no session or a runner command lacks `{session}`.
+3. Runs the review gate with `task_diff` from `base` to the working tree. Edits made during the stop are reviewed, including paths outside the task's original diff.
+4. Ticks and commits as on a fresh run, then continues to the next task.
+
+A resume starts a new `review_rounds` budget. The task commit holds only uncommitted work. Commits made during the stop stay as they are.
 
 Each task commit has a `Lemma-Review` trailer. It is `Lemma-Review: clean` when the first review has no findings. Otherwise it is `Lemma-Review: <n> findings fixed in <k> rounds`, with singular forms `1 finding` and `1 round`. Delta parts do not record that the gate ran.
 
@@ -252,6 +293,8 @@ These commands are Claude Code hooks; they are not typed as part of the workflow
 Each message is emitted once per session using a stable identity and recorded in `<git-dir>/lemma/sessions/<session_id>.said`. `lemma signal` exits 0 on failure.
 
 `lemma stop` reports error findings on stderr and exits 2 when any exist. It checks coverage and dictums against the session base, and evidence on documents touched in the session: changed specs and dictums, plus in-flight deltas whose files changed or whose specs govern a changed file. It also reports a delta moved to `complete` after the session base, once per session. When `stop_hook_active` is set, it exits 0.
+
+A delta with a valid build stop record has its findings reported as warnings. Each message ends `<id> has a stopped build task, run` followed by `lemma build <id> --resume`. A record is valid when its task is the first unticked task, or the ticked task for `ending: ticked`, and its `head` is an ancestor of `HEAD`. An invalid record leaves the delta's findings as errors. Findings for other deltas or documents are unaffected.
 
 ## Checks
 
