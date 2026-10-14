@@ -5,6 +5,7 @@
 - [AC-2] A ref's status in `lemma refs --json` is the diagnostic `evidence::resolve` gives, the same text lint reports for that ref when the doc is in lint's base range.
   @ref crates/lemma/tests/refs.rs#json_ref_status_is_the_diagnostic_lint_reports
 - [AC-3] A resolving ref with a symbol targets the symbol's first line; without a symbol, line 1.
+  @ref crates/lemma/tests/refs.rs#json_target_is_the_symbols_first_line_or_line_one_without_a_symbol
 - [AC-4] A doc id is a configured type prefix, `-` and digits, outside `[...]`; rule ids and claim ids are not listed as doc ids.
 - [AC-5] A doc id targets that doc's `index.md` line 1; a configured prefix with no such doc has status `unknown`.
 - [AC-6] `lemma refs --json` exits 0 when it prints the listing, whatever the entries' status, and exits 2 on a missing file or a file outside the lazyspec root.

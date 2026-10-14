@@ -112,7 +112,8 @@ fn json_lists_every_ref_and_per_with_span_text_and_status() {
         entries(&run),
         vec![
             serde_json::json!({"kind": "ref", "line": 2, "col": 2, "end_col": 37,
-                "text": "@ref tests/store_test.rs#other_test", "status": "ok"}),
+                "text": "@ref tests/store_test.rs#other_test", "status": "ok",
+                "target": {"path": "tests/store_test.rs", "line": 5}}),
             serde_json::json!({"kind": "per", "line": 3, "col": 2, "end_col": 19,
                 "text": "@per DECISION-003", "status": "ok"}),
             serde_json::json!({"kind": "ref", "line": 8, "col": 6, "end_col": 23,
@@ -143,6 +144,40 @@ fn json_ref_status_is_the_diagnostic_lint_reports() {
     for status in &listed {
         assert!(linted.contains(status), "{status} not in {linted:?}");
     }
+}
+
+#[test]
+fn json_target_is_the_symbols_first_line_or_line_one_without_a_symbol() {
+    let repo = repo();
+    repo.write(
+        "tests/jump.test.ts",
+        "import x from 'x';\n\ndescribe('a', () => {\n  it('b', () => {});\n});\n\nfunction later() {}\n",
+    );
+    repo.write(
+        "tests/spec.lua",
+        "local T = {}\n\nT['jumps'] = function() end\n",
+    );
+    repo.delta_claims(
+        1,
+        "- [AC-1] A.\n  @ref tests/store_test.rs#reopen_keeps_prior\n  @ref tests/store_test.rs#other_test\n  @ref tests/jump.test.ts#later\n  @ref tests/spec.lua#jumps\n  @ref tests/store_test.rs\n  @ref tests/store_test.rs#missing\n",
+    );
+
+    let run = refs_json(&repo, CLAIMS);
+
+    assert_eq!(run.code, 0);
+    let targets: Vec<serde_json::Value> =
+        entries(&run).iter().map(|e| e["target"].clone()).collect();
+    assert_eq!(
+        targets,
+        vec![
+            serde_json::json!({"path": "tests/store_test.rs", "line": 2}),
+            serde_json::json!({"path": "tests/store_test.rs", "line": 5}),
+            serde_json::json!({"path": "tests/jump.test.ts", "line": 7}),
+            serde_json::json!({"path": "tests/spec.lua", "line": 3}),
+            serde_json::json!({"path": "tests/store_test.rs", "line": 1}),
+            serde_json::Value::Null,
+        ]
+    );
 }
 
 #[test]

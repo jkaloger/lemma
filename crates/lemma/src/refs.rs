@@ -1,5 +1,5 @@
 use crate::claims::{live_lines, parse, per_text, Claim};
-use crate::evidence::{resolve, RefStatus};
+use crate::evidence::{clean, resolve, symbol_line, RefStatus};
 use crate::lint::{cite, ref_diagnostic, ref_name};
 use crate::payload::{tests_or_default, Attributes, Doc};
 use crate::world::World;
@@ -62,6 +62,25 @@ pub struct Entry {
     pub end_col: usize,
     pub text: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<Target>,
+}
+
+/// Where a resolving entry points: `path` relative to the root, `line` 1-based.
+#[derive(Serialize)]
+pub struct Target {
+    pub path: String,
+    pub line: usize,
+}
+
+fn ref_target(root: &Path, status: &RefStatus, path: &str, symbol: Option<&str>) -> Option<Target> {
+    if *status != RefStatus::Ok {
+        return None;
+    }
+    Some(Target {
+        path: clean(path).to_string(),
+        line: symbol_line(root, path, symbol)?,
+    })
 }
 
 fn owner<'a>(world: &'a World, path: &str) -> Option<&'a Doc> {
@@ -94,6 +113,7 @@ fn per_entry(line: usize, text: &str) -> Option<Entry> {
         end_col: col + directive.len(),
         text: directive.to_string(),
         status: "ok".to_string(),
+        target: None,
     })
 }
 
@@ -125,6 +145,7 @@ pub fn directives(store: &Store, root: &Path, path: &str, source: &str) -> Vec<E
                 end_col: r.span.1,
                 text: text[r.span.0..r.span.1].to_string(),
                 status: diagnostic.unwrap_or_else(|| "ok".to_string()),
+                target: ref_target(root, &status, &r.path, r.symbol.as_deref()),
             });
         }
         entries.extend(per_entry(line, text));

@@ -51,20 +51,37 @@ fn names_a_test(path: &str, globs: &[String]) -> bool {
     glob_set(globs).is_match(clean(path))
 }
 
-fn text_has_word(source: &str, symbol: &str) -> bool {
+fn word_offset(source: &str, symbol: &str) -> Option<usize> {
     Regex::new(&format!(r"\b{}\b", regex::escape(symbol)))
-        .map(|re| re.is_match(source))
-        .unwrap_or(false)
+        .ok()?
+        .find(source)
+        .map(|m| m.start())
+}
+
+/// Byte offset where `symbol` starts in `source`. The lazyspec extractors return the
+/// symbol's source text, not a span, so the text is located again in the file.
+fn symbol_offset(path: &str, source: &str, symbol: &str) -> Option<usize> {
+    match extension(path) {
+        Some("rs") => source.find(&RustSymbolExtractor::new().extract(source, symbol)?),
+        Some(ext) if is_script(ext) => {
+            source.find(&TypeScriptSymbolExtractor::new().extract(source, symbol)?)
+        }
+        _ => word_offset(source, symbol),
+    }
 }
 
 fn symbol_in(path: &str, source: &str, symbol: &str) -> bool {
-    match extension(path) {
-        Some("rs") => RustSymbolExtractor::new().extract(source, symbol).is_some(),
-        Some(ext) if is_script(ext) => TypeScriptSymbolExtractor::new()
-            .extract(source, symbol)
-            .is_some(),
-        _ => text_has_word(source, symbol),
-    }
+    symbol_offset(path, source, symbol).is_some()
+}
+
+/// 1-based line where `symbol` starts in the file at `path`; line 1 with no symbol.
+pub fn symbol_line(root: &Path, path: &str, symbol: Option<&str>) -> Option<usize> {
+    let Some(symbol) = symbol else {
+        return Some(1);
+    };
+    let source = std::fs::read_to_string(root.join(clean(path))).ok()?;
+    let offset = symbol_offset(path, &source, symbol)?;
+    Some(source[..offset].matches('\n').count() + 1)
 }
 
 pub fn resolve(root: &Path, path: &str, symbol: Option<&str>, tests: &[String]) -> RefStatus {
