@@ -98,7 +98,13 @@ enum Command {
         dry_run: bool,
     },
     /// List the refs of a claim and whether each resolves
-    Refs { claim: String },
+    Refs {
+        #[arg(required_unless_present = "json", conflicts_with = "json")]
+        claim: Option<String>,
+        /// List every directive in this doc as JSON, with each ref's status
+        #[arg(long, value_name = "FILE")]
+        json: Option<PathBuf>,
+    },
     /// Bound a session's changes (Claude Code Stop hook)
     Stop,
     /// Per-edit context and findings (Claude Code PostToolUse hook)
@@ -223,6 +229,26 @@ fn refs_command(claim: &str) -> ExitCode {
         true => ExitCode::SUCCESS,
         false => ExitCode::from(2),
     }
+}
+
+fn refs_json_command(file: &Path) -> ExitCode {
+    let (root, store) = match cli_store() {
+        Ok(found) => found,
+        Err(message) => return fail(message),
+    };
+    let Ok(source) = std::fs::read_to_string(file) else {
+        return fail(format!("cannot read {}", file.display()));
+    };
+    let rel = std::fs::canonicalize(file)
+        .ok()
+        .zip(std::fs::canonicalize(&root).ok())
+        .and_then(|(file, root)| Some(file.strip_prefix(root).ok()?.to_path_buf()));
+    let Some(rel) = rel else {
+        return fail(format!("{} is outside the lazyspec root", file.display()));
+    };
+    let entries = refs::directives(&store, &root, &rel.to_string_lossy(), &source);
+    println!("{}", serde_json::json!({ "entries": entries }));
+    ExitCode::SUCCESS
 }
 
 struct Startup {
@@ -501,7 +527,11 @@ fn main() -> ExitCode {
             resume,
             dry_run,
         } => build_command(&delta, task.as_deref(), resume, dry_run),
-        Command::Refs { claim } => refs_command(&claim),
+        Command::Refs { claim, json } => match (claim, json) {
+            (_, Some(file)) => refs_json_command(&file),
+            (Some(claim), None) => refs_command(&claim),
+            (None, None) => unreachable!("clap requires a claim or --json"),
+        },
         Command::Stop => stop_command(),
         Command::SessionStart => session_start_command(),
         Command::Signal => signal_command(),

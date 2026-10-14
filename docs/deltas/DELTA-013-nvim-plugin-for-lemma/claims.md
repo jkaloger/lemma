@@ -1,12 +1,16 @@
 <!-- One bullet per behaviour, in plain words: `- An empty account has balance zero.` `lemma review` assigns ids (`- [AC-1] ...`). Mark a behaviour no test can settle `[intent]` after its id. -->
 
 - [AC-1] `lemma refs --json <file>` lists every `@ref`, `@per` and doc id in the doc with kind, line and column span, raw text and status.
+  @ref crates/lemma/tests/refs.rs#json_lists_every_ref_and_per_with_span_text_and_status
 - [AC-2] A ref's status in `lemma refs --json` is the diagnostic `evidence::resolve` gives, the same text lint reports for that ref when the doc is in lint's base range.
+  @ref crates/lemma/tests/refs.rs#json_ref_status_is_the_diagnostic_lint_reports
 - [AC-3] A resolving ref with a symbol targets the symbol's first line; without a symbol, line 1.
 - [AC-4] A doc id is a configured type prefix, `-` and digits, outside `[...]`; rule ids and claim ids are not listed as doc ids.
 - [AC-5] A doc id targets that doc's `index.md` line 1; a configured prefix with no such doc has status `unknown`.
 - [AC-6] `lemma refs --json` exits 0 when it prints the listing, whatever the entries' status, and exits 2 on a missing file or a file outside the lazyspec root.
+  @ref crates/lemma/tests/refs.rs#json_exits_zero_whatever_the_status_and_two_on_bad_input
 - [AC-7] `lemma refs <claim>` output is unchanged.
+  @ref crates/lemma/tests/refs.rs#each_ref_gets_its_own_status_and_any_failure_exits_two
 - [AC-8] In a markdown buffer under a lazyspec root, claim ids, struck ids, directives and their targets, `[intent]`/`[proposed]` markers, `> review:` lines and doc ids with a pack prefix get their `Lemma*` highlight group.
 - [AC-9] Markdown buffers outside a lazyspec root get no lemma highlights.
 - [AC-10] Highlighting works with no `lemma` binary on `PATH`.

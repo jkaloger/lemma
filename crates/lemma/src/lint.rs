@@ -530,6 +530,25 @@ pub fn history(
     findings
 }
 
+/// The text lint reports for a ref that does not resolve; `claim` is its id and citation.
+pub fn ref_diagnostic(
+    status: &RefStatus,
+    name: &str,
+    claim: Option<(&str, &str)>,
+) -> Option<String> {
+    let prefix = claim.map_or(String::new(), |(id, _)| format!("{id}: "));
+    match status {
+        RefStatus::Ok => None,
+        RefStatus::Unresolved(why) => {
+            let see = claim.map_or(String::new(), |(_, cited)| format!(" (see lemma refs {cited})"));
+            Some(format!("{prefix}ref {name} does not resolve: {why}; fix the ref{see}"))
+        }
+        RefStatus::NotATest => Some(format!(
+            "{prefix}ref {name} is not in the governing spec's `tests` globs; point it at a test or widen `tests`"
+        )),
+    }
+}
+
 pub fn ref_name(path: &str, symbol: Option<&str>) -> String {
     match symbol {
         Some(symbol) => format!("{path}#{symbol}"),
@@ -630,26 +649,11 @@ fn claims_have_evidence(root: &Path, site: &Site, gate: Option<Gate>) -> Vec<Fin
     let mut findings = Vec::new();
     for claim in site.claims.iter().filter(|c| !c.struck) {
         for r in &claim.receipts {
+            let status = resolve(root, &r.path, r.symbol.as_deref(), &site.tests);
             let name = ref_name(&r.path, r.symbol.as_deref());
-            match resolve(root, &r.path, r.symbol.as_deref(), &site.tests) {
-                RefStatus::Ok => {}
-                RefStatus::Unresolved(why) => findings.push(finding(
-                    true,
-                    r.line,
-                    format!(
-                        "{}: ref {name} does not resolve: {why}; fix the ref (see lemma refs {})",
-                        claim.id,
-                        cite(site.doc, &claim.id)
-                    ),
-                )),
-                RefStatus::NotATest => findings.push(finding(
-                    true,
-                    r.line,
-                    format!(
-                        "{}: ref {name} is not in the governing spec's `tests` globs; point it at a test or widen `tests`",
-                        claim.id
-                    ),
-                )),
+            let cited = cite(site.doc, &claim.id);
+            if let Some(message) = ref_diagnostic(&status, &name, Some((&claim.id, &cited))) {
+                findings.push(finding(true, r.line, message));
             }
         }
         if claim.intent || !claim.receipts.is_empty() {
