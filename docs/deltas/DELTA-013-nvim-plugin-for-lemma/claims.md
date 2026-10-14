@@ -21,4 +21,4 @@
 - [AC-19] When `lemma --version` differs from the plugin version, the first jump warns once and still jumps.
 - [AC-20] The plugin installs with lazy.nvim from this repository and the README shows the spec. [intent]
 - [AC-21] The pack's four parts carry one version. [intent]
-- [AC-22] [proposed] `<Plug>(lemma-jump)` on a doc id whose status is `unknown` notifies lemma's diagnostic and does not move.
+- [AC-22] `<Plug>(lemma-jump)` on a doc id whose status is `unknown` notifies lemma's diagnostic and does not move.
