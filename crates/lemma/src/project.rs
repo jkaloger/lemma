@@ -15,8 +15,22 @@ pub fn find_root(start: &Path) -> Option<PathBuf> {
 }
 
 pub fn load_store(root: &Path) -> Result<Store> {
-    let config = Config::load(root, &RealFileSystem).context("loading .lazyspec.toml")?;
+    let config = load_config(root)?;
     Store::load(root, &config).context("loading lazyspec store")
+}
+
+pub fn load_config(root: &Path) -> Result<Config> {
+    Config::load(root, &RealFileSystem).context("loading .lazyspec.toml")
+}
+
+/// The id prefixes of every configured type, e.g. `SPEC`, `DELTA`.
+pub fn type_prefixes(config: &Config) -> Vec<String> {
+    config
+        .documents
+        .types
+        .iter()
+        .map(|t| t.prefix.clone())
+        .collect()
 }
 
 fn stored_doc(store: &Store, meta: &DocMeta) -> Option<Doc> {

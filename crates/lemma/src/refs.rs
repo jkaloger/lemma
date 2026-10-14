@@ -117,15 +117,99 @@ fn per_entry(line: usize, text: &str) -> Option<Entry> {
     })
 }
 
-/// Every `@ref` and `@per` in the doc at `path` (relative to `root`), in order. A ref's
-/// status is the diagnostic lint gives it, or `ok`.
-pub fn directives(store: &Store, root: &Path, path: &str, source: &str) -> Vec<Entry> {
+/// Byte spans of every doc id in `text`: a configured prefix, `-` and digits, not
+/// inside `[...]` and not part of a longer word.
+fn doc_id_spans(text: &str, prefixes: &[String]) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let bracketed = bracket_depths(text);
+    let mut spans = Vec::new();
+    let mut skip_until = 0;
+    for (at, _) in text.char_indices() {
+        if at < skip_until {
+            continue;
+        }
+        let Some(end) = doc_id_end(text, at, prefixes) else {
+            continue;
+        };
+        let after_word = at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+        if after_word && bracketed[at] == 0 {
+            spans.push((at, end));
+        }
+        skip_until = end;
+    }
+    spans
+}
+
+fn doc_id_end(text: &str, at: usize, prefixes: &[String]) -> Option<usize> {
+    let rest = &text[at..];
+    let prefix = prefixes
+        .iter()
+        .filter(|p| !p.is_empty())
+        .find(|p| rest.starts_with(p.as_str()) && rest[p.len()..].starts_with('-'))?;
+    let digits_at = prefix.len() + 1;
+    let digits = rest[digits_at..]
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count();
+    (digits > 0).then_some(at + digits_at + digits)
+}
+
+fn bracket_depths(text: &str) -> Vec<usize> {
+    let mut depth = 0usize;
+    text.bytes()
+        .map(|b| {
+            match b {
+                b'[' => depth += 1,
+                b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            depth
+        })
+        .collect()
+}
+
+fn doc_entry(store: &Store, line: usize, text: &str, span: (usize, usize)) -> Entry {
+    let id = &text[span.0..span.1];
+    let target = store
+        .all_docs()
+        .into_iter()
+        .find(|meta| meta.id == id)
+        .map(|meta| Target {
+            path: meta.path.to_string_lossy().into_owned(),
+            line: 1,
+        });
+    Entry {
+        kind: "doc",
+        line,
+        col: span.0,
+        end_col: span.1,
+        text: id.to_string(),
+        status: match target {
+            Some(_) => "ok",
+            None => "unknown",
+        }
+        .to_string(),
+        target,
+    }
+}
+
+/// Every `@ref`, `@per` and doc id in the doc at `path` (relative to `root`), in order.
+/// A ref's status is the diagnostic lint gives it, or `ok`; a doc id with no such
+/// document is `unknown`.
+pub fn directives(
+    store: &Store,
+    root: &Path,
+    prefixes: &[String],
+    path: &str,
+    source: &str,
+) -> Vec<Entry> {
     let world = World::load(store, None);
     let doc = owner(&world, path);
     let tests = tests_for(&world, doc);
     let claims = parse(source).claims;
     let mut entries = Vec::new();
     for (line, text) in live_lines(source) {
+        let first = entries.len();
         for r in parse_refs(text) {
             let claim = claim_at(&claims, line).map(|c| {
                 let cited = doc.map_or(c.id.clone(), |d| cite(d, &c.id));
@@ -149,6 +233,12 @@ pub fn directives(store: &Store, root: &Path, path: &str, source: &str) -> Vec<E
             });
         }
         entries.extend(per_entry(line, text));
+        entries.extend(
+            doc_id_spans(text, prefixes)
+                .into_iter()
+                .map(|span| doc_entry(store, line, text, span)),
+        );
+        entries[first..].sort_by_key(|e| e.col);
     }
     entries
 }

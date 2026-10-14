@@ -7,7 +7,10 @@
 - [AC-3] A resolving ref with a symbol targets the symbol's first line; without a symbol, line 1.
   @ref crates/lemma/tests/refs.rs#json_target_is_the_symbols_first_line_or_line_one_without_a_symbol
 - [AC-4] A doc id is a configured type prefix, `-` and digits, outside `[...]`; rule ids and claim ids are not listed as doc ids.
+  @ref crates/lemma/tests/refs.rs#json_lists_doc_ids_with_a_configured_prefix_outside_brackets_only
+  @ref crates/lemma/tests/refs.rs#json_doc_id_span_is_in_bytes_after_a_multibyte_character
 - [AC-5] A doc id targets that doc's `index.md` line 1; a configured prefix with no such doc has status `unknown`.
+  @ref crates/lemma/tests/refs.rs#json_doc_id_targets_its_index_line_one_or_is_unknown
 - [AC-6] `lemma refs --json` exits 0 when it prints the listing, whatever the entries' status, and exits 2 on a missing file or a file outside the lazyspec root.
   @ref crates/lemma/tests/refs.rs#json_exits_zero_whatever_the_status_and_two_on_bad_input
 - [AC-7] `lemma refs <claim>` output is unchanged.

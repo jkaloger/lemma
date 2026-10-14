@@ -246,7 +246,11 @@ fn refs_json_command(file: &Path) -> ExitCode {
     let Some(rel) = rel else {
         return fail(format!("{} is outside the lazyspec root", file.display()));
     };
-    let entries = refs::directives(&store, &root, &rel.to_string_lossy(), &source);
+    let prefixes = match project::load_config(&root) {
+        Ok(config) => project::type_prefixes(&config),
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    let entries = refs::directives(&store, &root, &prefixes, &rel.to_string_lossy(), &source);
     println!("{}", serde_json::json!({ "entries": entries }));
     ExitCode::SUCCESS
 }

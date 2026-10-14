@@ -198,3 +198,73 @@ fn json_exits_zero_whatever_the_status_and_two_on_bad_input() {
     assert_eq!(outside.stdout, "");
     assert!(outside.stderr.contains("outside the lazyspec root"));
 }
+
+#[test]
+fn json_lists_doc_ids_with_a_configured_prefix_outside_brackets_only() {
+    let repo = repo();
+    repo.delta_claims(
+        1,
+        "- [AC-1] Per TEST-1 see SPEC-001, [SPEC-002], DECISION-003, XSPEC-001 and DELTA-002.\n  @ref tests/store_test.rs#other_test\n```\nSPEC-001 in a fence\n```\n",
+    );
+
+    let run = refs_json(&repo, CLAIMS);
+
+    assert_eq!(run.code, 0);
+    let docs: Vec<serde_json::Value> = entries(&run)
+        .into_iter()
+        .filter(|e| e["kind"] == "doc")
+        .map(|e| serde_json::json!({"line": e["line"], "col": e["col"], "end_col": e["end_col"], "text": e["text"]}))
+        .collect();
+    assert_eq!(
+        docs,
+        vec![
+            serde_json::json!({"line": 1, "col": 24, "end_col": 32, "text": "SPEC-001"}),
+            serde_json::json!({"line": 1, "col": 74, "end_col": 83, "text": "DELTA-002"}),
+        ]
+    );
+}
+
+#[test]
+fn json_doc_id_targets_its_index_line_one_or_is_unknown() {
+    let repo = repo();
+    repo.delta_claims(1, "- [AC-1] See SPEC-001, DELTA-002 and SPEC-009.\n");
+
+    let run = refs_json(&repo, CLAIMS);
+
+    assert_eq!(run.code, 0);
+    let docs: Vec<serde_json::Value> = entries(&run)
+        .into_iter()
+        .map(|e| serde_json::json!({"text": e["text"], "status": e["status"], "target": e["target"]}))
+        .collect();
+    assert_eq!(
+        docs,
+        vec![
+            serde_json::json!({"text": "SPEC-001", "status": "ok",
+                "target": {"path": "docs/specs/SPEC-001-s/index.md", "line": 1}}),
+            serde_json::json!({"text": "DELTA-002", "status": "ok",
+                "target": {"path": "docs/deltas/DELTA-002-d/index.md", "line": 1}}),
+            serde_json::json!({"text": "SPEC-009", "status": "unknown", "target": null}),
+        ]
+    );
+}
+
+#[test]
+fn json_doc_id_span_is_in_bytes_after_a_multibyte_character() {
+    let repo = repo();
+    repo.delta_claims(
+        1,
+        "- [AC-1] `draft` → `in-progress` → `complete`; see SPEC-001.\n",
+    );
+
+    let run = refs_json(&repo, CLAIMS);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let docs: Vec<serde_json::Value> = entries(&run)
+        .into_iter()
+        .map(|e| serde_json::json!({"col": e["col"], "end_col": e["end_col"], "text": e["text"]}))
+        .collect();
+    assert_eq!(
+        docs,
+        vec![serde_json::json!({"col": 55, "end_col": 63, "text": "SPEC-001"})]
+    );
+}
