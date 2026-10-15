@@ -37,7 +37,9 @@
 - [AC-17] `<Plug>(lemma-jump)` on a ref in a modified buffer warns to save first and does not move.
   @ref nvim/tests/test_jump.lua#modified_buffer_warns_to_save_first_and_stays
 - [AC-18] With no `lemma` on `PATH`, the first jump on a ref or doc id notifies once and later jumps on refs or doc ids do nothing.
+  @ref nvim/tests/test_jump.lua#missing_binary_notifies_once_then_ref_and_doc_jumps_do_nothing
 - [AC-19] When `lemma --version` differs from the plugin version, the first jump warns once and still jumps.
+  @ref nvim/tests/test_jump.lua#version_mismatch_warns_once_and_still_jumps
 - [AC-20] The plugin installs with lazy.nvim from this repository and the README shows the spec. [intent]
 - [AC-21] The pack's four parts carry one version. [intent]
 - [AC-22] `<Plug>(lemma-jump)` on a doc id whose status is `unknown` notifies lemma's diagnostic and does not move.

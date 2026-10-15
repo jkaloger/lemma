@@ -38,6 +38,8 @@ local function entry(kind, line, col, text, status, target)
   }
 end
 
+local PLUGIN_VERSION = require('lemma.version')
+
 local LISTING = {
   entries = {
     entry(
@@ -60,11 +62,20 @@ local LISTING = {
   },
 }
 
-local calls, notices
+local calls, version_calls, notices
 local saved = {}
 
-local function stub_lemma(listing)
+local function stub_lemma(listing, binary_version)
   vim.system = function(cmd, opts, on_exit)
+    if cmd[2] == '--version' then
+      version_calls = version_calls + 1
+      on_exit({
+        code = 0,
+        stdout = 'lemma ' .. (binary_version or PLUGIN_VERSION) .. '\n',
+        stderr = '',
+      })
+      return
+    end
     calls[#calls + 1] = { cmd = cmd, cwd = opts and opts.cwd }
     on_exit({ code = 0, stdout = vim.json.encode(listing), stderr = '' })
   end
@@ -97,7 +108,8 @@ local T = MiniTest.new_set({
   hooks = {
     pre_case = function()
       vim.cmd('silent! %bwipeout!')
-      calls, notices = {}, {}
+      package.loaded['lemma.jump'] = nil
+      calls, version_calls, notices = {}, 0, {}
       saved.system, saved.notify, saved.path = vim.system, vim.notify, vim.env.PATH
       vim.notify = function(message, level)
         notices[#notices + 1] = { message = message, level = level }
@@ -196,6 +208,61 @@ T['modified_buffer_warns_to_save_first_and_stays'] = function()
   eq(notices[1].message:find('save', 1, true) ~= nil, true, notices[1].message)
   eq(vim.api.nvim_get_current_buf(), buf)
   eq(vim.api.nvim_win_get_cursor(0), cursor)
+end
+
+T['missing_binary_notifies_once_then_ref_and_doc_jumps_do_nothing'] = function()
+  local _, buf = fixture()
+  vim.env.PATH = vim.fn.tempname()
+  eq(vim.fn.executable('lemma'), 0)
+  vim.api.nvim_win_set_cursor(0, { 2, 12 })
+
+  press_jump()
+
+  eq(#notices, 1)
+  eq(notices[1].message:find('PATH', 1, true) ~= nil, true, notices[1].message)
+
+  for _, cursor in ipairs({ { 2, 12 }, { 4, 7 }, { 4, 20 } }) do
+    vim.api.nvim_win_set_cursor(0, cursor)
+    press_jump()
+    vim.wait(50)
+    eq(#notices, 1)
+    eq(vim.api.nvim_get_current_buf(), buf)
+    eq(vim.api.nvim_win_get_cursor(0), cursor)
+  end
+
+  vim.api.nvim_win_set_cursor(0, { 5, 5 })
+  press_jump()
+  eq(vim.api.nvim_win_get_cursor(0), { 4, 30 })
+end
+
+T['version_mismatch_warns_once_and_still_jumps'] = function()
+  local dir, buf = fixture()
+  stub_lemma(LISTING, '0.0.1')
+  vim.api.nvim_win_set_cursor(0, { 2, 12 })
+
+  press_jump()
+  wait_for(function()
+    return vim.api.nvim_get_current_buf() ~= buf
+  end)
+
+  eq(#notices, 1)
+  eq(notices[1].level, vim.log.levels.WARN)
+  eq(notices[1].message:find('0.0.1', 1, true) ~= nil, true, notices[1].message)
+  eq(notices[1].message:find(PLUGIN_VERSION, 1, true) ~= nil, true, notices[1].message)
+  eq(vim.api.nvim_buf_get_name(0), dir .. '/tests/ledger.rs')
+  eq(vim.api.nvim_win_get_cursor(0), { 4, 0 })
+
+  vim.cmd.edit(dir .. '/docs/claims.md')
+  local claims = vim.api.nvim_get_current_buf()
+  vim.api.nvim_win_set_cursor(0, { 4, 7 })
+  press_jump()
+  wait_for(function()
+    return vim.api.nvim_get_current_buf() ~= claims
+  end)
+
+  eq(#notices, 1)
+  eq(version_calls, 1)
+  eq(vim.api.nvim_buf_get_name(0), dir .. '/docs/specs/SPEC-004-pack/index.md')
 end
 
 local LAZYSPEC_TOML = {

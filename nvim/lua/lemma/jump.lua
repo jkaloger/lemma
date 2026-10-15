@@ -1,11 +1,46 @@
 local highlight = require('lemma.highlight')
+local plugin_version = require('lemma.version')
 
 local M = {}
 
 local JUMPABLE = { ref = true, doc = true }
 
+-- nil until the first jump on a ref or doc id probes `lemma --version`; then 'ok' or 'missing'.
+local binary
+
 local function notify(message, level)
   vim.notify('lemma: ' .. message, level or vim.log.levels.ERROR)
+end
+
+local function warn_if_version_differs(stdout)
+  local found = (stdout or ''):match('%d+%.%d+%.%d+')
+  if found == plugin_version then
+    return
+  end
+  notify(
+    ('binary is %s, plugin is %s; versions should match'):format(found or 'unknown', plugin_version),
+    vim.log.levels.WARN
+  )
+end
+
+-- vim.system raises when the executable is not on PATH.
+local function with_binary(on_ready)
+  if binary == 'ok' then
+    on_ready()
+    return
+  end
+  local spawned = pcall(vim.system, { 'lemma', '--version' }, { text = true }, function(out)
+    vim.schedule(function()
+      binary = 'ok'
+      warn_if_version_differs(out.stdout)
+      on_ready()
+    end)
+  end)
+  if spawned then
+    return
+  end
+  binary = 'missing'
+  notify('no `lemma` on PATH; ref and doc id jumps are off this session')
 end
 
 -- The ref or doc id span under the cursor, or nil. Lexical, so a plain word costs no process.
@@ -63,6 +98,9 @@ function M.jump()
     vim.cmd('normal! gd')
     return
   end
+  if binary == 'missing' then
+    return
+  end
   local buf = vim.api.nvim_get_current_buf()
   if vim.bo[buf].modified then
     notify('save the buffer first; lemma reads the file on disk', vim.log.levels.WARN)
@@ -74,9 +112,11 @@ function M.jump()
     notify('not a file under a lazyspec root')
     return
   end
-  vim.system({ 'lemma', 'refs', '--json', file }, { cwd = root, text = true }, function(out)
-    vim.schedule(function()
-      on_listing(root, row, col, out)
+  with_binary(function()
+    vim.system({ 'lemma', 'refs', '--json', file }, { cwd = root, text = true }, function(out)
+      vim.schedule(function()
+        on_listing(root, row, col, out)
+      end)
     end)
   end)
 end
