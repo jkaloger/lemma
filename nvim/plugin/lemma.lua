@@ -21,3 +21,7 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 })
 
 require('lemma.highlight').define_groups()
+
+vim.keymap.set('n', '<Plug>(lemma-jump)', function()
+  require('lemma.jump').jump()
+end, { desc = 'Jump to the lemma ref or doc id under the cursor' })
