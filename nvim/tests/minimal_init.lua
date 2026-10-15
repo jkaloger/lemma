@@ -5,6 +5,8 @@ local mini_dir = vim.fs.joinpath(tests_dir, 'deps', 'mini.nvim')
 vim.opt.runtimepath:append(plugin_dir)
 vim.opt.runtimepath:append(mini_dir)
 
+vim.o.swapfile = false
+
 vim.cmd('runtime plugin/lemma.lua')
 
 require('mini.test').setup({

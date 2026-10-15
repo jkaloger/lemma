@@ -16,10 +16,15 @@
 - [AC-7] `lemma refs <claim>` output is unchanged.
   @ref crates/lemma/tests/refs.rs#each_ref_gets_its_own_status_and_any_failure_exits_two
 - [AC-8] In a markdown buffer under a lazyspec root, claim ids, struck ids, directives and their targets, `[intent]`/`[proposed]` markers, `> review:` lines and doc ids with a pack prefix get their `Lemma*` highlight group.
+  @ref nvim/tests/test_highlight.lua#highlights_lemma_syntax_under_a_lazyspec_root
 - [AC-9] Markdown buffers outside a lazyspec root get no lemma highlights.
+  @ref nvim/tests/test_highlight.lua#no_highlights_outside_a_lazyspec_root
 - [AC-10] Highlighting works with no `lemma` binary on `PATH`.
+  @ref nvim/tests/test_highlight.lua#highlights_with_no_lemma_binary_on_path
 - [AC-11] Every `Lemma*` group is a default link to a standard group, so a user's highlight overrides it.
+  @ref nvim/tests/test_highlight.lua#every_group_is_a_default_link_a_user_override_wins
 - [AC-12] Highlights follow edits to the buffer.
+  @ref nvim/tests/test_highlight.lua#highlights_follow_edits_to_the_buffer
 - [AC-13] `<Plug>(lemma-jump)` on a resolving ref opens the target file at the target line.
 - [AC-14] `<Plug>(lemma-jump)` on a doc id opens that doc.
 - [AC-15] `<Plug>(lemma-jump)` on an unresolved ref notifies lemma's diagnostic and does not move.
