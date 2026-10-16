@@ -42,7 +42,7 @@ Lemma checks change coverage, document shape and the links between claims and te
 
 ## Workflow
 
-![Lemma workflow](docs/assets/workflow.svg)
+![Lemma workflow](docs/assets/workflow.png)
 
 A **delta** is the unit of change. You write it: the intent, what is out of scope, the design, and the claims that say how you will know it works. `lemma review` annotates the draft with findings; you resolve them and review again until none remain. `lemma plan` assigns claim ids, proposes missing behaviour and breaks the delta into tasks; you accept or reject each proposal. `lemma build` works through the tasks one at a time: a fresh runner attempts each task, Lemma checks the result and gets a task review, then commits it. When every task is done, you mark the delta complete with `lazyspec update <id> --status complete`.
 
