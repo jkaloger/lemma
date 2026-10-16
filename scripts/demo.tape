@@ -3,7 +3,7 @@
 Output docs/assets/demo.gif
 
 Set Shell "bash"
-Set FontSize 48
+Set FontSize 64
 Set Width 2640
 Set Height 1640
 Set Padding 48
