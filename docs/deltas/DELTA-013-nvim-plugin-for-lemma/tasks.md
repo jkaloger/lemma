@@ -6,4 +6,4 @@
 - [x] T5 Highlight lemma syntax in lazyspec markdown buffers (settles AC-8, AC-9, AC-10, AC-11, AC-12)
 - [x] T6 Jump from ref or doc id to its target (settles AC-13, AC-14, AC-15, AC-16, AC-17, AC-22)
 - [x] T7 Check lemma binary presence and version on first jump (settles AC-18, AC-19)
-- [ ] T8 Document nvim install and amend SPEC-001 and SPEC-004 (settles AC-20, AC-21)
+- [x] T8 Document nvim install and amend SPEC-001 and SPEC-004 (settles AC-20, AC-21)

@@ -24,11 +24,13 @@ lemma session-start | lemma signal | lemma stop
 
 ## Description
 
-Lemma has three parts:
+Lemma has four parts, released together on one version, 3.2.0:
 
 - The **pack** contains `.lazyspec.toml`, document templates, prompt files, seed convention documents and a `[[hooks]]` table. `lazyspec init --template` copies the pack into a project.
 
 - The **plugin** is a Claude Code plugin that registers hooks.
+
+- The **nvim plugin** in `nvim/` highlights lemma syntax in lazyspec markdown and jumps from a ref or doc id to its target. See [nvim](#nvim).
 
 - The **binary** is a Rust executable named `lemma` that links the lazyspec engine as a crate. Lifecycle transitions are configured in `.lazyspec.toml`; Lemma does not define lifecycle rules. For a task, the binary invokes a configured runner or reviewer as a child process and reads its JSON response directly, without a shell layer.
 
@@ -295,6 +297,36 @@ Each message is emitted once per session using a stable identity and recorded in
 `lemma stop` reports error findings on stderr and exits 2 when any exist. It checks coverage and dictums against the session base, and evidence on documents touched in the session: changed specs and dictums, plus in-flight deltas whose files changed or whose specs govern a changed file. It also reports a delta moved to `complete` after the session base, once per session. When `stop_hook_active` is set, it exits 0.
 
 A delta with a valid build stop record has its findings reported as warnings. Each message ends `<id> has a stopped build task, run` followed by `lemma build <id> --resume`. A record is valid when its task is the first unticked task, or the ticked task for `ending: ticked`, and its `head` is an ancestor of `HEAD`. An invalid record leaves the delta's findings as errors. Findings for other deltas or documents are unaffected.
+
+## nvim
+
+The nvim plugin lives in `nvim/` in this repository. Install it with [lazy.nvim](https://github.com/folke/lazy.nvim):
+
+```lua
+{
+  'jkaloger/lemma',
+  lazy = false,
+  config = function(plugin)
+    vim.opt.rtp:append(plugin.dir .. '/nvim')
+    vim.cmd.runtime('plugin/lemma.lua')
+  end,
+}
+```
+
+Highlighting applies to markdown buffers under a `.lazyspec.toml` and needs no `lemma` binary. Each `Lemma*` group (`LemmaClaimId`, `LemmaDirective`, `LemmaRefTarget`, `LemmaMarker`, `LemmaReview`, `LemmaDocId`, `LemmaStruck`) is a default link, so a colour scheme or `vim.api.nvim_set_hl` overrides it.
+
+`<Plug>(lemma-jump)` has no default mapping. To use `gd` in markdown:
+
+```lua
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'markdown',
+  callback = function(ev)
+    vim.keymap.set('n', 'gd', '<Plug>(lemma-jump)', { buffer = ev.buf })
+  end,
+})
+```
+
+On a ref or doc id, the jump runs `lemma refs --json` on the saved file and opens the target. An unresolved ref notifies lemma's diagnostic; a modified buffer warns to save first. Anywhere else it runs builtin `gd` without calling `lemma`. The first jump checks `lemma --version` and warns once when it differs from the plugin's version.
 
 ## Checks
 

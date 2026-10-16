@@ -40,7 +40,8 @@
   @ref nvim/tests/test_jump.lua#missing_binary_notifies_once_then_ref_and_doc_jumps_do_nothing
 - [AC-19] When `lemma --version` differs from the plugin version, the first jump warns once and still jumps.
   @ref nvim/tests/test_jump.lua#version_mismatch_warns_once_and_still_jumps
-- [AC-20] The plugin installs with lazy.nvim from this repository and the README shows the spec. [intent]
-- [AC-21] The pack's four parts carry one version. [intent]
+- [AC-20] The plugin installs with lazy.nvim from this repository and the README shows the spec.
+  @ref nvim/tests/test_install.lua#readme_lazy_spec_installs_the_plugin_from_this_repository
+- [AC-21] [intent] The pack's four parts carry one version.
 - [AC-22] `<Plug>(lemma-jump)` on a doc id whose status is `unknown` notifies lemma's diagnostic and does not move.
   @ref nvim/tests/test_jump.lua#unknown_doc_id_notifies_the_diagnostic_and_stays

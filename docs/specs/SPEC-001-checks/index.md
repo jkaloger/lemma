@@ -37,7 +37,8 @@ The same checks back every surface: the lazyspec `validate` and `pre-transition`
 - Specs hold no claims. A completed delta is the record of why its tests say what they say; nothing folds (DECISION-003).
 - One `governs` area alone needs no delta, so chores stay free. Crossing areas needs an in-flight delta per touched spec (DECISION-009, CHG-3).
 - Invariants are errors; drift is a warning. A changed test that a landed delta refs is a warning naming the delta; a changed test that a dictum rule refs is an error unless the dictum strikes the rule and adds a new id in the same range.
-- Output is diagnostics: `path:line: severity: message`, silent when clean, exit 2 on error. Same shape as a compiler so agents treat lemma like the rest of the stack.
+- Check output is diagnostics: `path:line: severity: message`, silent when clean, exit 2 on error. Same shape as a compiler so agents treat lemma like the rest of the stack.
+- `refs` prints a listing, not diagnostics: plain for a claim id, or `--json` for a file. Status comes from the same resolver lint uses, so the editor (SPEC-005) and lint cannot disagree.
 - lemma holds no lifecycle knowledge. Transitions and which gate runs on which are `.lazyspec.toml` config (DECISION-001).
 - Base resolution must work on branches and on direct-to-main repos. This repository works on main.
 
