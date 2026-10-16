@@ -1,7 +1,7 @@
 ---
 title: "nvim plugin for lemma"
 type: delta
-status: in-progress
+status: complete
 author: "Jack Kaloger"
 date: 2026-10-10
 tags: []
@@ -9,7 +9,7 @@ related:
 - changes: SPEC-005
 - changes: SPEC-004
 - changes: SPEC-001
-reviewed: da3235e16cfd355fd417b5aa11f6e925037e4dcc
+reviewed: 52d4d0714f809414bd97bd194c5679c38c2cf3b8
 ---
 
 ## Intent
