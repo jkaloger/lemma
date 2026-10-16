@@ -3,7 +3,7 @@
   <br>λῆμμα
 </h1>
 
-<img alt="terminal recording of lemma build working through a delta's tasks, checking each one off with its review result and commit" src="docs/assets/build.gif" />
+<img alt="terminal recording of lemma lint reporting a warning, lemma plan writing a delta's claims and tasks, then lemma build checking each task off with its review result and commit" src="docs/assets/demo.gif" width="1320" />
 
 Stepping stones for LLM-assisted development.
 

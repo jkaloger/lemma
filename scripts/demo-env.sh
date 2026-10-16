@@ -1,6 +1,6 @@
-# Sourced by demo-build.tape: fake lemma alias and a starship-style prompt.
+# Sourced by demo.tape: fake lemma alias and a starship-style prompt.
 
-alias lemma="$PWD/scripts/demo-build.sh"
+alias lemma="$PWD/scripts/demo.sh"
 
 __demo_rust=$(rustc --version 2>/dev/null | awk '{ print $2 }')
 __demo_branch=$(git branch --show-current 2>/dev/null)

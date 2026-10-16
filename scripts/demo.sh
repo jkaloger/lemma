@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Fake `lemma build <DELTA>` for README screenshots. Mirrors the live-mode
-# output of crates/lemma/src/build.rs, output.rs and runner.rs's spinner.
+# Fake `lemma lint`, `lemma plan <DELTA>` and `lemma build <DELTA>` for README
+# screenshots. Mirrors the live-mode output of crates/lemma/src/lint.rs,
+# plan.rs, build.rs, output.rs and runner.rs's spinner.
 # Any other subcommand is passed through to the real lemma.
 #
-#   alias lemma="$PWD/scripts/demo-build.sh"
+#   alias lemma="$PWD/scripts/demo.sh"
 #   LEMMA_DEMO_PACE=2 lemma build DELTA-123   # slower playback
 #   LEMMA_DEMO_HOLD=1 lemma build DELTA-123   # skip the collapse, keep every step on screen
 
 set -euo pipefail
 export LC_ALL=${LC_ALL:-en_US.UTF-8}
 
-if [[ ${1:-} != build ]]; then
-  exec "$(type -P lemma)" "$@"
-fi
+case ${1:-} in
+  lint | plan | build) ;;
+  *) exec "$(type -P lemma)" "$@" ;;
+esac
 
 DELTA=${2:-DELTA-123}
 PACE=${LEMMA_DEMO_PACE:-1}
@@ -85,6 +87,25 @@ collapse() {
   printf '%s %s %s  %s · %s · %s\n' "${GREEN}✓${RESET}" "$id" "$title" "$elapsed" "$review" "$sha"
   rows=0
 }
+
+next() { printf '%s %s\n' "${DIM}next:${RESET}" "$1"; }
+
+if [[ $1 == lint ]]; then
+  pause 0.4
+  printf '%s\n' "docs/deltas/DELTA-098-transfers/claims.md:7: warning: test crates/ledger/tests/transfer.rs::moves_funds changed; DELTA-098/AC-2 claims it; confirm intended"
+  exit 0
+fi
+
+if [[ $1 == plan ]]; then
+  run "plan" 47 \
+    "Read docs/deltas/$DELTA-balances/design.md" \
+    "Read crates/ledger/src/account.rs" \
+    "Grep fn transfer" \
+    "Read crates/ledger/src/transfer.rs"
+  printf '%s\n' "review clean, planning" "claims.md: 3 claims tagged AC-1..AC-3" "tasks.md: 3 tasks written"
+  next "read the diff, accept or reject each [proposed] claim, then lemma build $DELTA"
+  exit 0
+fi
 
 T1='add `Balance` type and the `SUM` query'
 T2='reject a transfer that overdraws the account'
