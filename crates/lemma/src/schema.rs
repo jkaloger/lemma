@@ -99,6 +99,18 @@ pub fn plan(known_ids: &[String]) -> Value {
     }))
 }
 
+pub fn vibe(spec_ids: &[String]) -> Value {
+    let text = json!({"type": "string"});
+    object(json!({
+        "title": text,
+        "changes": array_of(json!({"enum": spec_ids})),
+        "intent": text,
+        "out_of_scope": text,
+        "design": text,
+        "claims": array_of(text),
+    }))
+}
+
 pub fn review_task(bases: &[String]) -> Value {
     object(json!({
         "stop": {"type": "string"},

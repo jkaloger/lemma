@@ -127,6 +127,19 @@ pub fn assemble(store: &Store, root: &Path, delta: &Doc) -> BTreeMap<&'static st
     ])
 }
 
+/// What a vibe draft reads before any delta exists: every spec and dictum.
+pub fn for_draft(store: &Store, prompt: &str) -> BTreeMap<&'static str, String> {
+    let world = World::load(store, None);
+    let of_type =
+        |t: &str| -> Vec<&Doc> { world.docs().iter().filter(|d| d.doc_type == t).collect() };
+    BTreeMap::from([
+        ("convention", convention_body(store)),
+        ("dictums", rendered(&of_type("dictum"))),
+        ("spec_intent", rendered(&of_type("spec"))),
+        ("prompt", prompt.to_string()),
+    ])
+}
+
 pub fn diff_base(root: &Path, delta: &Doc) -> String {
     let inputs = Inputs {
         delta_index: Some(Path::new(&delta.path)),

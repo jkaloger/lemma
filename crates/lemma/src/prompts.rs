@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const KEYS: [&str; 13] = [
+pub const KEYS: [&str; 14] = [
     "convention",
     "dictums",
     "spec_intent",
@@ -17,6 +17,7 @@ pub const KEYS: [&str; 13] = [
     "delta_diff",
     "resolved",
     "findings",
+    "prompt",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,15 +27,17 @@ pub enum Prompt {
     Build,
     ReviewTask,
     Fix,
+    Vibe,
 }
 
 impl Prompt {
-    pub const ALL: [Prompt; 5] = [
+    pub const ALL: [Prompt; 6] = [
         Prompt::ReviewDoc,
         Prompt::Plan,
         Prompt::Build,
         Prompt::ReviewTask,
         Prompt::Fix,
+        Prompt::Vibe,
     ];
 
     pub fn file_name(self) -> &'static str {
@@ -44,6 +47,7 @@ impl Prompt {
             Prompt::Build => "build.md",
             Prompt::ReviewTask => "review-task.md",
             Prompt::Fix => "fix.md",
+            Prompt::Vibe => "vibe.md",
         }
     }
 
@@ -58,6 +62,7 @@ impl Prompt {
             Prompt::Build => include_str!("../../../.lazyspec/prompts/build.md"),
             Prompt::ReviewTask => include_str!("../../../.lazyspec/prompts/review-task.md"),
             Prompt::Fix => include_str!("../../../.lazyspec/prompts/fix.md"),
+            Prompt::Vibe => include_str!("../../../.lazyspec/prompts/vibe.md"),
         }
     }
 }

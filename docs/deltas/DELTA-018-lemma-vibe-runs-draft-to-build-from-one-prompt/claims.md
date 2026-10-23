@@ -3,8 +3,11 @@
 - [AC-1] `lemma vibe -m <prompt>` on a dirty tree exits 2 without calling a runner.
   @ref crates/lemma/tests/vibe.rs#a_dirty_tree_exits_2_without_calling_a_runner
 - [AC-2] The draft stage creates a new draft delta whose parts hold the runner reply's intent, out of scope, design and claims, linked `changes` to each spec in the reply.
+  @ref crates/lemma/tests/vibe.rs#the_draft_creates_a_delta_holding_the_reply_linked_to_its_specs
 - [AC-3] A draft reply with no `changes` spec, or an unknown one, stops the run before any delta is created.
+  @ref crates/lemma/tests/vibe.rs#a_draft_reply_with_no_or_an_unknown_spec_stops_before_any_delta_is_created
 - [AC-4] A draft stage that fails after the delta is created deletes it before exiting.
+  @ref crates/lemma/tests/vibe.rs#a_draft_that_fails_after_create_deletes_the_delta
 - [AC-5] Every review call that writes findings, except the last, is followed by a revise call whose replacement parts lemma writes, keeping the index frontmatter as it was.
 - [AC-6] Review stops early on the first clean round.
 - [AC-7] When the last review call writes findings, lemma does not revise; it removes every review line, prints each as a warning, and runs plan.

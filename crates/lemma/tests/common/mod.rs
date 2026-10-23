@@ -112,6 +112,14 @@ impl Repo {
         repo
     }
 
+    /// Replaces the `lazyspec` on PATH with `script`.
+    pub fn fake_lazyspec(&self, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.fake_bin.path().join("lazyspec");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     pub fn root(&self) -> PathBuf {
         self.dir.path().join(self.sub)
     }

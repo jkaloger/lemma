@@ -472,12 +472,19 @@ fn build_command(id: &str, task: Option<&str>, resume: bool, dry_run: bool) -> E
     print_prompt(prompts::Prompt::Build, &root, &values)
 }
 
-fn vibe_command() -> ExitCode {
-    let (root, _) = match cli_store() {
+fn vibe_command(prompt: &str) -> ExitCode {
+    let (root, store) = match cli_store() {
         Ok(found) => found,
         Err(message) => return fail(message),
     };
-    match vibe::run(&root) {
+    let config = match runner::load(&root) {
+        Ok(config) => runner::Config {
+            mode: output::Mode::pick(),
+            ..config
+        },
+        Err(message) => return fail(message),
+    };
+    match vibe::run(&root, &store, prompt, &config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => fail(message),
     }
@@ -549,7 +556,7 @@ fn main() -> ExitCode {
             resume,
             dry_run,
         } => build_command(&delta, task.as_deref(), resume, dry_run),
-        Command::Vibe { .. } => vibe_command(),
+        Command::Vibe { prompt } => vibe_command(&prompt),
         Command::Refs { claim, json } => match (claim, json) {
             (_, Some(file)) => refs_json_command(&file),
             (Some(claim), None) => refs_command(&claim),
