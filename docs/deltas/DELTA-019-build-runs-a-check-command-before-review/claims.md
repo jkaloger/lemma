@@ -8,4 +8,4 @@
 - [AC-6] A check that times out is one fix-round finding whose text holds `check: <command> timed out after <n>s` and the last 40 lines of output.
 - [AC-7] A check command that cannot start stops the build with that message and no fix round.
 - [AC-8] A resumed task runs the check before its review.
-- [AC-9] [proposed] A check that exits 0 prints the step `check: pass` and the task proceeds to review.
+- [AC-9] A check that exits 0 prints the step `check: pass` and the task proceeds to review.
