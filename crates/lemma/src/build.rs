@@ -20,10 +20,16 @@ const LINT_CONTINUATION: &str = "         ";
 
 pub enum Outcome {
     Complete,
-    Stopped,
+    #[allow(dead_code)]
+    Stopped {
+        task: String,
+        ending: Ending,
+        base: String,
+    },
 }
 
-enum Ending {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ending {
     Unticked,
     /// Unticked because a runner or check command could not start.
     Unstarted,
@@ -1169,7 +1175,7 @@ pub fn run(
             _ => build_task(root, &store, &delta, task, stopped.as_ref(), config, &block),
         };
         if let Err(failure) = built {
-            record_stop(root, &delta, task, base, &failure);
+            record_stop(root, &delta, task, base.clone(), &failure);
             let look = Look::current(config.mode);
             if let Some(collapsed) = block.finish(&look, Finish::Stopped) {
                 println!("{collapsed}");
@@ -1178,7 +1184,11 @@ pub fn run(
             if failure.is_environment() {
                 return Err(environment_error(task, &failure));
             }
-            return Ok(Outcome::Stopped);
+            return Ok(Outcome::Stopped {
+                task: task.id.clone(),
+                ending: failure.ending,
+                base,
+            });
         }
         if only.is_some() {
             return Ok(Outcome::Complete);

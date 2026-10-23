@@ -448,7 +448,7 @@ fn build_command(id: &str, task: Option<&str>, resume: bool, dry_run: bool) -> E
                 next_after_build(&start.delta.id);
                 ExitCode::SUCCESS
             }
-            Ok(build::Outcome::Stopped) => ExitCode::from(2),
+            Ok(build::Outcome::Stopped { .. }) => ExitCode::from(2),
             Err(message) => fail(message),
         };
     }

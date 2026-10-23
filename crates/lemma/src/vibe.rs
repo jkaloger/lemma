@@ -429,7 +429,7 @@ fn in_progress(root: &Path, id: &str) -> Result<(), String> {
 fn run_build(root: &Path, id: &str, config: &runner::Config) -> Result<(), Stopped> {
     let message = match build::run(root, id, None, false, config) {
         Ok(build::Outcome::Complete) => return Ok(()),
-        Ok(build::Outcome::Stopped) => None,
+        Ok(build::Outcome::Stopped { .. }) => None,
         Err(message) => Some(message),
     };
     let next = match builds::read(root, id) {

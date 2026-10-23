@@ -14,6 +14,7 @@
 - [AC-7] Under vibe, a build task that stops for any reason other than an environment error (rounds run out, reviewer stop verdict, left unticked) has its tracked changes reset and the untracked files it created removed, keeping untracked files that were there before it started, and is replaced in `tasks.md` by re-planned tasks that settle the same claims. Build then continues.
 - [AC-8] Re-planned tasks get ids after the highest existing task id, and ticked tasks are unchanged.
 - [AC-9] Plain `lemma build` still stops on a task that runs out of review rounds.
+  @ref crates/lemma/tests/build.rs#plain_build_stops_on_a_task_that_runs_out_of_review_rounds
 - [AC-10] A vibe draft, plan or gate stage stops after `vibe_repairs` re-asks (default 3).
 - [AC-11] vibe build stops when a task at re-plan depth `vibe_repairs` stops, whatever its ending. Tasks from the first plan are at depth 0, so with the default a task line is re-planned at most 3 times. A replacement task has its parent's depth plus one, chores included.
 - [AC-12] A re-plan proposes no new claims; its tasks settle exactly the stopped task's claims.

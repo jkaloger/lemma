@@ -1459,6 +1459,24 @@ fn findings_left_after_review_rounds_record_the_ending_reviewed() {
 }
 
 #[test]
+fn plain_build_stops_on_a_task_that_runs_out_of_review_rounds() {
+    let repo = project("in-progress", single_task());
+    one_task_fixtures(&repo);
+    review_round(&repo, "T1", 1, &[HELPER]);
+    review_round(&repo, "T1", 2, &[ATOMIC]);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(run.stdout.contains("   stopped. T1 "), "{}", run.stdout);
+    assert_eq!(tasks(&repo), single_task());
+    assert_eq!(repo.head(), before);
+    assert_eq!(record(&repo)["task"], "T1");
+}
+
+#[test]
 fn a_reviewer_stop_records_the_ending_reviewed() {
     let repo = project("in-progress", single_task());
     one_task_fixtures(&repo);
