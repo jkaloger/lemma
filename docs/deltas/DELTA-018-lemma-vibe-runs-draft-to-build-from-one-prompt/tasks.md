@@ -5,5 +5,5 @@
 - [x] T4 Run plan and accept proposed claims (settles AC-9)
 - [x] T5 Move delta to in-progress and run build (settles AC-10, AC-11, AC-12)
 - [x] T6 Print each stage's next line when it fails (settles AC-13)
-- [ ] T7 Colour stage banners and end-of-run summary in live mode (settles AC-14, AC-15)
+- [x] T7 Colour stage banners and end-of-run summary in live mode (settles AC-14, AC-15)
 - [ ] T8 Qualify SPEC-002 for vibe and add README section (chore)

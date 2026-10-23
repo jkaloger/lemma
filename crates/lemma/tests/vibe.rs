@@ -563,3 +563,14 @@ fn a_failing_stage_exits_2_and_prints_its_next_line() {
         run.stdout
     );
 }
+
+#[test]
+fn plain_mode_vibe_output_carries_no_ansi_colour_codes() {
+    let repo = vibing(&["Intent is vague."]);
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains('\u{1b}'), "{:?}", run.stdout);
+    assert!(!run.stderr.contains('\u{1b}'), "{:?}", run.stderr);
+}

@@ -28,6 +28,10 @@ pub enum Tone {
     Red,
     Dim,
     Bold,
+    Magenta,
+    Cyan,
+    Blue,
+    Yellow,
 }
 
 impl Glyph {
@@ -55,6 +59,10 @@ fn styled(tone: Tone, text: &str) -> console::StyledObject<String> {
         Tone::Red => text.red(),
         Tone::Dim => text.dim(),
         Tone::Bold => text.bold(),
+        Tone::Magenta => text.magenta(),
+        Tone::Cyan => text.cyan(),
+        Tone::Blue => text.blue(),
+        Tone::Yellow => text.yellow(),
     }
 }
 

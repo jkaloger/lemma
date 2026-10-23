@@ -4,18 +4,21 @@ use crate::build;
 use crate::builds;
 use crate::claims::{accept_proposed, review_lines};
 use crate::context;
-use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART};
+use crate::output::{self, Look, Mode, Tone};
+use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART, TASKS_PART};
 use crate::plan;
 use crate::prompts::{self, Prompt};
 use crate::review::{self, part_file, Outcome, PARTS};
 use crate::reviews;
 use crate::runner;
 use crate::schema;
+use crate::tasks;
 use crate::world::World;
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 const LAZYSPEC: &str = "lazyspec";
 
@@ -58,6 +61,79 @@ impl From<String> for Stopped {
     }
 }
 
+const STAGES: usize = 5;
+
+/// What the live-mode summary reports; plain mode prints none of it.
+struct Ledger {
+    look: Look,
+    stages: Vec<(&'static str, Duration)>,
+    rounds: u32,
+    accepted: usize,
+    tasks: usize,
+}
+
+impl Ledger {
+    fn stage<T, E>(
+        &mut self,
+        n: usize,
+        name: &'static str,
+        tone: Tone,
+        body: impl FnOnce(&mut Ledger) -> Result<T, E>,
+    ) -> Result<T, (&'static str, E)> {
+        self.banner(n, name, tone);
+        let started = Instant::now();
+        let result = body(self);
+        self.stages.push((name, started.elapsed()));
+        result.map_err(|e| (name, e))
+    }
+
+    fn banner(&self, n: usize, name: &str, tone: Tone) {
+        if self.look.mode != Mode::Live {
+            return;
+        }
+        let (_, cols) = console::Term::stdout().size_checked().unwrap_or((0, 80));
+        let head = format!("── ◆ [{n}/{STAGES}] {name} ");
+        let fill = (cols as usize).saturating_sub(head.chars().count());
+        let line = format!("{head}{}", "─".repeat(fill));
+        println!("{}", self.look.tone(tone, &line));
+    }
+
+    fn summary(&self, id: Option<&str>, failed: Option<&str>) {
+        if self.look.mode != Mode::Live {
+            return;
+        }
+        let tone = match failed {
+            Some(_) => Tone::Red,
+            None => Tone::Green,
+        };
+        let title = match (id, failed) {
+            (Some(id), Some(stage)) => format!("{id} stopped at {stage}"),
+            (Some(id), None) => format!("{id} done"),
+            (None, Some(stage)) => format!("stopped at {stage}"),
+            (None, None) => "done".to_string(),
+        };
+        println!("{}", self.look.tone(tone, &format!("── summary: {title}")));
+        for (name, elapsed) in &self.stages {
+            println!("  {name:<8} {:.1}s", elapsed.as_secs_f64());
+        }
+        println!(
+            "  {} · {} accepted · {} committed",
+            output::counted(self.rounds as usize, "review round"),
+            output::counted(self.accepted, "claim"),
+            output::counted(self.tasks, "task"),
+        );
+    }
+
+    fn ticked(&mut self, root: &Path, id: &str) {
+        if let Ok((_, delta)) = build::load_delta(root, id) {
+            self.tasks = tasks::parse(delta.part_body(TASKS_PART))
+                .main()
+                .filter(|t| t.ticked)
+                .count();
+        }
+    }
+}
+
 /// Returns the id of the delta it drafted and built.
 pub fn run(
     root: &Path,
@@ -67,19 +143,61 @@ pub fn run(
     config: &runner::Config,
 ) -> Result<String, Stopped> {
     build::require_clean(root)?;
-    let delta = draft(root, store, prompt, config).map_err(|m| stopped(m, "lemma vibe -m …"))?;
+    let mut ledger = Ledger {
+        look: Look::current(config.mode),
+        stages: Vec::new(),
+        rounds: 0,
+        accepted: 0,
+        tasks: 0,
+    };
+    let mut id = None;
+    let result = stages(root, store, prompt, rounds, config, &mut ledger, &mut id);
+    ledger.summary(
+        id.as_deref(),
+        result.as_ref().err().map(|(stage, _)| *stage),
+    );
+    result.map_err(|(_, stopped)| stopped)?;
+    Ok(id.unwrap_or_default())
+}
+
+type StageResult = Result<(), (&'static str, Stopped)>;
+
+fn stages(
+    root: &Path,
+    store: &Store,
+    prompt: &str,
+    rounds: u32,
+    config: &runner::Config,
+    ledger: &mut Ledger,
+    drafted: &mut Option<String>,
+) -> StageResult {
+    let delta = ledger.stage(1, "draft", Tone::Magenta, |_| {
+        draft(root, store, prompt, config).map_err(|m| stopped(m, "lemma vibe -m …"))
+    })?;
     let id = &delta.id;
+    *drafted = Some(id.clone());
     println!("draft: {id} {}", delta.title);
     let review = format!("lemma review {id}");
-    review_rounds(root, id, rounds, config).map_err(|m| stopped(m, &review))?;
-    strip_review_lines(root, id).map_err(|m| stopped(m, &review))?;
-    plan(root, id, config).map_err(|m| stopped(m, &format!("lemma plan {id}")))?;
+    ledger.stage(2, "review", Tone::Cyan, |ledger| {
+        review_rounds(root, id, rounds, config, &mut ledger.rounds)
+            .map_err(|m| stopped(m, &review))?;
+        strip_review_lines(root, id).map_err(|m| stopped(m, &review))
+    })?;
+    ledger.stage(3, "plan", Tone::Blue, |_| {
+        plan(root, id, config).map_err(|m| stopped(m, &format!("lemma plan {id}")))
+    })?;
     let accepting = format!("accept or reject each [proposed] claim, then lemma build {id}");
-    accept(root, id).map_err(|m| stopped(m, &accepting))?;
+    ledger.stage(4, "accept", Tone::Yellow, |ledger| {
+        ledger.accepted = accept(root, id).map_err(|m| stopped(m, &accepting))?;
+        Ok(())
+    })?;
     let moving = format!("lazyspec update {id} --status in-progress");
-    in_progress(root, id).map_err(|m| stopped(m, &moving))?;
-    run_build(root, id, config)?;
-    Ok(delta.id)
+    ledger.stage(5, "build", Tone::Green, |ledger| {
+        in_progress(root, id).map_err(|m| stopped(m, &moving))?;
+        let built = run_build(root, id, config);
+        ledger.ticked(root, id);
+        built
+    })
 }
 
 fn spec_ids(store: &Store) -> Vec<String> {
@@ -198,8 +316,10 @@ fn review_rounds(
     id: &str,
     rounds: u32,
     config: &runner::Config,
+    used: &mut u32,
 ) -> Result<(), String> {
     for round in 1..=rounds {
+        *used = round;
         let (store, delta) = build::load_delta(root, id)?;
         let mut values = context::assemble(&store, root, &delta);
         let resolved = reviews::resolved(root, &delta);
@@ -293,12 +413,12 @@ fn plan(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> {
     Ok(())
 }
 
-fn accept(root: &Path, id: &str) -> Result<(), String> {
+fn accept(root: &Path, id: &str) -> Result<usize, String> {
     let (_, delta) = build::load_delta(root, id)?;
     let (claims, accepted) = accept_proposed(&plan::read(root, &delta, CLAIMS_PART));
     write(root, &delta, CLAIMS_PART, &claims)?;
     println!("accepted {accepted} [proposed] claims");
-    Ok(())
+    Ok(accepted)
 }
 
 fn in_progress(root: &Path, id: &str) -> Result<(), String> {
