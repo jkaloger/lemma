@@ -1,12 +1,13 @@
 ---
 title: "plan settles every claim by construction and vibe repairs instead of stopping"
 type: delta
-status: draft
+status: in-progress
 author: "Jack Kaloger"
 date: 2026-10-23
 tags: []
 related:
   - changes: SPEC-002
+reviewed: 000ad137abe1f106226032788bd45f108b37b389
 ---
 
 ## Intent
