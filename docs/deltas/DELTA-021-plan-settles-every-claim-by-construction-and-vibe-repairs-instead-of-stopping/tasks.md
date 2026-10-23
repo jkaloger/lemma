@@ -5,7 +5,7 @@
 - [x] T4 Describe settled_by in the plan prompt (chore)
 - [x] T5 Return environment failures from build as errors (settles AC-16)
 - [x] T6 Carry stopped task id, ending and base in build stop (settles AC-9)
-- [ ] T7 Add vibe_repairs and re-ask draft replies fill rejects (settles AC-5)
+- [x] T7 Add vibe_repairs and re-ask draft replies fill rejects (settles AC-5)
 - [ ] T8 Re-ask plan errors under vibe (settles AC-17)
 - [ ] T9 Send gate findings to revise and rerun gate under vibe (settles AC-6, AC-10)
 - [ ] T10 Add re-plan mode for one stopped task (settles AC-8, AC-12, AC-15)

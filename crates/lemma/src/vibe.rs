@@ -213,19 +213,31 @@ fn draft(root: &Path, store: &Store, prompt: &str, config: &runner::Config) -> R
     let specs = spec_ids(store);
     let values = context::for_draft(store, prompt);
     let rendered = prompts::rendered(Prompt::Vibe, root, &values)?;
-    let reply = runner::tracked(
-        "draft",
-        &config.runner,
-        &rendered,
-        root,
-        &[],
-        config.timeout,
-        Some(&schema::vibe(&specs)),
-        config.mode,
-    )?;
-    let reply: Draft =
-        serde_json::from_value(reply.json()?).map_err(|e| format!("draft reply: {e}"))?;
-    require_known_changes(&reply.changes, &specs)?;
+    let schema = schema::vibe(&specs);
+    let ask = |prompt: &str| -> Result<Draft, String> {
+        let reply = runner::tracked(
+            "draft",
+            &config.runner,
+            prompt,
+            root,
+            &[],
+            config.timeout,
+            Some(&schema),
+            config.mode,
+        )?;
+        serde_json::from_value(reply.json()?).map_err(|e| format!("draft reply: {e}"))
+    };
+    let mut reply = ask(&rendered)?;
+    let mut repairs = 0;
+    while let Err(rejection) = require_known_changes(&reply.changes, &specs) {
+        if repairs == config.vibe_repairs {
+            return Err(rejection);
+        }
+        repairs += 1;
+        reply = ask(&format!(
+            "{rendered}\n\nYour last reply was rejected: {rejection}. Reply again.\n"
+        ))?;
+    }
     let delta = create(root, &reply.title)?;
     if let Err(message) = fill(root, &delta, &reply) {
         delete(root, &delta);

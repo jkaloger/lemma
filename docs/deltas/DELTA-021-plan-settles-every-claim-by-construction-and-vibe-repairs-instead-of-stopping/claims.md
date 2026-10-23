@@ -10,6 +10,7 @@
 - [AC-4] A planned new claim is written with its settling task, and no new claim is left unsettled.
   @ref crates/lemma/tests/plan.rs#a_new_claim_is_written_with_its_settling_task
 - [AC-5] Under vibe, a draft reply that `fill` rejects is asked again with the rejection message.
+  @ref crates/lemma/tests/vibe.rs#a_draft_reply_fill_rejects_is_asked_again_with_the_rejection
 - [AC-6] Under vibe, draft → in-progress gate findings go to a revise call and the gate runs again.
 - [AC-7] Under vibe, a build task that stops for any reason other than an environment error (rounds run out, reviewer stop verdict, left unticked) has its tracked changes reset and the untracked files it created removed, keeping untracked files that were there before it started, and is replaced in `tasks.md` by re-planned tasks that settle the same claims. Build then continues.
 - [AC-8] Re-planned tasks get ids after the highest existing task id, and ticked tasks are unchanged.

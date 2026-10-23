@@ -14,6 +14,7 @@ const DEFAULT_RUNNER: &str =
 const DEFAULT_RESUME: &str =
     "claude -p --resume {session} --output-format json --json-schema {schema}";
 const DEFAULT_REVIEW_ROUNDS: u32 = 1;
+const DEFAULT_VIBE_REPAIRS: u32 = 3;
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;
 const SCHEMA: &str = "{schema}";
 const SCHEMA_FILE: &str = "{schema_file}";
@@ -28,6 +29,7 @@ pub struct Config {
     pub reviewer: String,
     pub resume: String,
     pub review_rounds: u32,
+    pub vibe_repairs: u32,
     pub timeout: Duration,
     pub mode: Mode,
     pub check: Option<String>,
@@ -40,6 +42,7 @@ struct Raw {
     reviewer: Option<String>,
     resume: Option<String>,
     review_rounds: Option<u32>,
+    vibe_repairs: Option<u32>,
     timeout: Option<u64>,
     check: Option<String>,
 }
@@ -52,6 +55,7 @@ pub fn load(root: &Path) -> Result<Config, String> {
             reviewer: None,
             resume: None,
             review_rounds: None,
+            vibe_repairs: None,
             timeout: None,
             check: None,
         },
@@ -63,6 +67,7 @@ pub fn load(root: &Path) -> Result<Config, String> {
         runner,
         resume: raw.resume.unwrap_or_else(|| DEFAULT_RESUME.to_string()),
         review_rounds: raw.review_rounds.unwrap_or(DEFAULT_REVIEW_ROUNDS),
+        vibe_repairs: raw.vibe_repairs.unwrap_or(DEFAULT_VIBE_REPAIRS),
         timeout: Duration::from_secs(raw.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
         mode: Mode::Plain,
         check: raw.check,
@@ -1047,6 +1052,7 @@ printf '{"result": "ok", "usage": {}}'"#,
             "claude -p --resume {session} --output-format json --json-schema {schema}"
         );
         assert_eq!(config.review_rounds, 1);
+        assert_eq!(config.vibe_repairs, 3);
         assert_eq!(config.timeout, Duration::from_secs(1800));
         assert_eq!(config.check, None);
     }

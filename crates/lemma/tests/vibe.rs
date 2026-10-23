@@ -163,6 +163,45 @@ fn a_draft_reply_with_no_or_an_unknown_spec_stops_before_any_delta_is_created() 
     }
 }
 
+/// Saves draft prompt n as `prompt-n.txt` and replies `rejected.json` first, `draft.json` after.
+/// Any later stage fails, so the run ends once the draft is written.
+const DRAFT_TWICE: &str = r#"#!/bin/sh
+cat > prompt.txt
+head -1 prompt.txt | grep -q '^You are drafting' || exit 1
+n=$(ls prompt-*.txt 2>/dev/null | wc -l | tr -d ' ')
+cp prompt.txt prompt-$((n + 1)).txt
+if [ "$n" = 0 ]; then cat rejected.json; else cat draft.json; fi
+"#;
+
+#[test]
+fn a_draft_reply_fill_rejects_is_asked_again_with_the_rejection() {
+    let repo = drafting(&["SPEC-001"]);
+    repo.write("rejected.json", &draft_reply(&["SPEC-009"]));
+    repo.write("runner.sh", DRAFT_TWICE);
+    repo.commit("first draft names an unknown spec");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert!(!repo.path("prompt-3.txt").exists(), "{}", run.stderr);
+    let first = repo.read("prompt-1.txt");
+    let second = repo.read("prompt-2.txt");
+    assert!(
+        second.starts_with(&first),
+        "the re-ask keeps the prompt: {second}"
+    );
+    assert!(
+        second.contains("Your last reply was rejected: draft reply changes unknown spec SPEC-009"),
+        "{second}"
+    );
+    assert_eq!(
+        lazyspec_calls(&repo)[..2],
+        [
+            "create delta Add a thing",
+            "link DELTA-001 changes SPEC-001"
+        ]
+    );
+}
+
 #[test]
 fn a_draft_that_fails_after_create_deletes_the_delta() {
     let repo = drafting(&["SPEC-001"]);
