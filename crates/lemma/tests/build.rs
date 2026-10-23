@@ -1820,6 +1820,28 @@ fn a_resume_whose_checks_pass_reviews_then_ticks_and_commits() {
 }
 
 #[test]
+fn a_resumed_task_runs_the_check_before_its_review() {
+    let repo = project("in-progress", single_task());
+    with_check(&repo, "");
+    stop_t1(&repo);
+    repo.write(CLAIMS_PATH, &claims(true, false));
+    let _ = std::fs::remove_file(repo.path(".fixture/check.log"));
+
+    let run = build(&repo, &["--resume"]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let root = std::fs::canonicalize(repo.path(".")).unwrap();
+    assert_eq!(
+        repo.read(".fixture/check.log"),
+        format!("{} fixes=0 rcalls=0\n", root.display())
+    );
+    let passed = run.stdout.find("   check: pass\n").expect(&run.stdout);
+    let reviewed = run.stdout.find("   review: clean\n").expect(&run.stdout);
+    assert!(passed < reviewed, "{}", run.stdout);
+    assert_eq!(tasks(&repo), "- [x] T1 reopen (settles AC-1)\n");
+}
+
+#[test]
 fn a_resume_after_the_cap_gets_a_fresh_review_rounds_budget() {
     let repo = project("in-progress", single_task());
     one_task_fixtures(&repo);

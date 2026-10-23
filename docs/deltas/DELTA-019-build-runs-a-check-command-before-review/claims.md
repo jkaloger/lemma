@@ -15,5 +15,6 @@
 - [AC-7] A check command that cannot start stops the build with that message and no fix round.
   @ref crates/lemma/tests/build.rs#a_check_that_cannot_start_stops_the_build_with_that_message_and_no_fix_round
 - [AC-8] A resumed task runs the check before its review.
+  @ref crates/lemma/tests/build.rs#a_resumed_task_runs_the_check_before_its_review
 - [AC-9] A check that exits 0 prints the step `check: pass` and the task proceeds to review.
   @ref crates/lemma/tests/build.rs#a_passing_check_prints_check_pass_and_proceeds_to_review

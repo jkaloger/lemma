@@ -456,9 +456,10 @@ fn resume_checks(
     delta: &Doc,
     task: &Task,
     stopped: &builds::Stopped,
-    look: &Look,
+    config: &runner::Config,
     block: &Block,
 ) -> Result<(Built, Option<Failure>), Failure> {
+    let look = &Look::current(config.mode);
     block.say(&look.step(
         Glyph::Info,
         &format!(
@@ -478,7 +479,14 @@ fn resume_checks(
         claims: plan::read(root, delta, CLAIMS_PART),
         parts: delta_parts(root, delta),
     };
-    let failed = checked(check_work(root, delta, task, None, look, block))?;
+    let failed = checked(check_work(
+        root,
+        delta,
+        task,
+        config.check.as_deref().map(|check| (check, config.timeout)),
+        look,
+        block,
+    ))?;
     Ok((built, failed))
 }
 
@@ -915,7 +923,7 @@ fn build_task(
     let started = std::time::Instant::now();
     block.say(&look.tone(Tone::Bold, &heading(task)));
     let (mut built, failed) = match stopped {
-        Some(stopped) => resume_checks(root, store, delta, task, stopped, look, block)
+        Some(stopped) => resume_checks(root, store, delta, task, stopped, config, block)
             .map_err(|f| f.in_session(stopped.session.as_deref()))?,
         None => run_runner(root, store, delta, task, config, block)?,
     };

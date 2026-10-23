@@ -4,4 +4,4 @@
 - [x] T3 Turn check failures into task-basis fix-round findings (settles AC-3, AC-4, AC-5)
 - [x] T4 Report check timeouts as fix-round findings (settles AC-6)
 - [x] T5 Stop build when check command cannot start (settles AC-7)
-- [ ] T6 Run check on resumed tasks (settles AC-8)
+- [x] T6 Run check on resumed tasks (settles AC-8)
