@@ -27,4 +27,4 @@ The workflow is chosen by judgement. Nothing classifies the change.
 - [CHG-8] [intent] Spike: agree the question, the cost boundary and the evidence first. Keep experimental code isolated and disposable.
 - ~~[CHG-9]~~ [intent] Build: the delta records what is known going in and preserves unknowns as assumptions; its claims name the verification as they settle.
 - ~~[CHG-10]~~ [intent] Adopt: the first delta into an empty spec over tested code claims, as `[observed]`, what would be expensive or surprising to rediscover, and refs those tests; the suite owns the rest; characterisation tests only where a claim has none; no production change.
-- [CHG-11] [intent] Build: the human writes intent, design and behaviour; the plan step names tasks; the build loop produces evidence.
+- [CHG-11] [intent] Build: the human writes intent, design and behaviour, except under `lemma vibe` (DECISION-015); the plan step names tasks; the build loop produces evidence.
