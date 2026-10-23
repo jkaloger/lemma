@@ -615,6 +615,90 @@ fn a_passing_check_prints_check_pass_and_proceeds_to_review() {
     );
 }
 
+const FAILING_CHECK: &str = "#!/bin/sh\nfixes=$(cat .fixture/T1.fixes 2>/dev/null || echo 0)\n[ \"$fixes\" -ge \"$(cat .fixture/check.passes-at)\" ] && exit 0\ni=1\nwhile [ $i -le 45 ]; do echo \"line $i\"; i=$((i+1)); done\necho 'AC-1 still fails' >&2\nexit 3\n";
+
+fn with_failing_check(repo: &Repo, passes_at: u32, extra: &str) -> String {
+    repo.write(".fixture/fake-check.sh", FAILING_CHECK);
+    repo.write(".fixture/check.passes-at", &passes_at.to_string());
+    let check = repo.path(".fixture/fake-check.sh");
+    std::fs::set_permissions(&check, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let command = check.display().to_string();
+    install_fakes_with(repo, "", &format!("check = \"{command}\"\n{extra}"));
+    repo.commit("check");
+    command
+}
+
+#[test]
+fn a_failing_check_is_one_task_finding_with_the_exit_code_and_output_tail() {
+    let repo = project("in-progress", single_task());
+    let command = with_failing_check(&repo, 1, "review_rounds = 2\n");
+    one_task_fixtures(&repo);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    let tail: String = (7..=45).map(|i| format!("\nline {i}")).collect();
+    assert_eq!(
+        fix_findings(&repo),
+        format!("- [task] check: {command} exited 3{tail}\nAC-1 still fails")
+    );
+    assert_eq!(repo.read(".fixture/T1.rcalls").trim(), "1");
+}
+
+#[test]
+fn a_claim_id_in_the_check_output_does_not_pin_the_finding_to_that_claim() {
+    let repo = project("in-progress", single_task());
+    with_failing_check(&repo, 1, "review_rounds = 2\n");
+    one_task_fixtures(&repo);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let findings = fix_findings(&repo);
+    assert!(findings.contains("\nAC-1 still fails"), "{findings}");
+    assert!(findings.starts_with("- [task] check: "), "{findings}");
+    assert!(!findings.contains("- [AC-1]"), "{findings}");
+}
+
+#[test]
+fn a_check_failure_spends_review_rounds_and_stops_unticked_when_they_run_out() {
+    let repo = project("in-progress", single_task());
+    with_failing_check(&repo, 99, "review_rounds = 1\n");
+    one_task_fixtures(&repo);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .ends_with("   stopped. T1 left unticked; working tree kept.\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(repo.read(".fixture/T1.fixes").trim(), "1");
+    assert!(!repo.path(".fixture/T1.rcalls").exists());
+    assert_eq!(tasks(&repo), single_task());
+    assert_eq!(repo.head(), before);
+    let record = record(&repo);
+    assert_eq!(record["ending"], "unticked");
+    assert_eq!(record["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(record["findings"][0]["basis"], "task");
+}
+
 #[test]
 fn a_blocked_reply_stops_at_once_without_a_fix_round() {
     let repo = project("in-progress", single_task());
@@ -850,6 +934,19 @@ fn the_reviewer_sees_earlier_work_as_read_only_context() {
 
 fn fix_prompt(repo: &Repo) -> String {
     repo.read(".fixture/T1.prompt.1")
+}
+
+fn fix_findings(repo: &Repo) -> String {
+    let fix = fix_prompt(repo);
+    let start = fix.find("and found the following.").unwrap();
+    let end = start + fix[start..].find("\nRules:").unwrap();
+    fix[start..end]
+        .lines()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn fix_reply(repo: &Repo, task: &str, round: u32, refs: &[(&str, &str, &str)]) {

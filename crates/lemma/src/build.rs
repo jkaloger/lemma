@@ -64,9 +64,12 @@ impl Failure {
             .collect()
     }
 
-    /// Check failures carry no basis of their own; a diagnostic that names a
-    /// claim rests on it, any other on the task.
+    /// Findings a failure already carries stand; otherwise each diagnostic
+    /// that names a claim rests on it, any other on the task.
     fn with_check_findings(self, claim_ids: &[String]) -> Failure {
+        if !self.findings.is_empty() {
+            return self;
+        }
         let findings = self
             .detail
             .iter()
@@ -689,21 +692,55 @@ fn check_work(
 }
 
 fn check_command(root: &Path, command: &str, look: &Look, block: &Block) -> Result<(), Failure> {
-    let passed = runner::split(command)
-        .ok()
-        .and_then(|argv| {
-            Command::new(&argv[0])
-                .args(&argv[1..])
-                .current_dir(root)
-                .output()
-                .ok()
-        })
-        .is_some_and(|out| out.status.success());
-    if !passed {
+    let output = runner::split(command).ok().and_then(|argv| {
+        Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(root)
+            .output()
+            .ok()
+    });
+    let Some(out) = output else {
         return Err(check_failed(vec![format!("   check: {command} failed")]));
+    };
+    if !out.status.success() {
+        let code = out
+            .status
+            .code()
+            .map_or("by signal".to_string(), |code| code.to_string());
+        return Err(command_failed(
+            format!("check: {command} exited {code}"),
+            &out,
+        ));
     }
     block.say(&look.step_toned(Glyph::Pass, "   check: pass", Some(Tone::Green)));
     Ok(())
+}
+
+const CHECK_TAIL: usize = 40;
+
+/// One finding on the task, so a claim id in the output never pins it.
+fn command_failed(header: String, out: &std::process::Output) -> Failure {
+    let combined = [
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    ]
+    .concat();
+    let lines: Vec<&str> = combined.lines().collect();
+    let tail = &lines[lines.len().saturating_sub(CHECK_TAIL)..];
+    let text = std::iter::once(header.as_str())
+        .chain(tail.iter().copied())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detail = std::iter::once(format!("   {header}"))
+        .chain(tail.iter().map(|line| format!("   {line}")))
+        .collect();
+    Failure {
+        findings: vec![gate::Finding {
+            text,
+            basis: "task".to_string(),
+        }],
+        ..check_failed(detail)
+    }
 }
 
 fn print_fix_round(look: &Look, block: &Block, source: &str, count: usize, round: u32) {
