@@ -516,3 +516,50 @@ fn vibe_leaves_the_delta_in_progress_and_ends_naming_the_complete_step() {
         .read(&format!("{DIR}/tasks.md"))
         .contains("- [x] T1 Build it (settles AC-1, AC-2)\n"));
 }
+
+fn failing(repo: &Repo, arm: &str) {
+    let script = DISPATCH.replace(arm, "exit 1");
+    repo.write("runner.sh", &script);
+    repo.commit("fail the stage");
+}
+
+#[test]
+fn a_failing_stage_exits_2_and_prints_its_next_line() {
+    let draft_next = "next: lemma vibe -m …\n";
+    let review_next = "next: lemma review DELTA-001\n";
+    let plan_next = "next: lemma plan DELTA-001\n";
+
+    let repo = vibing(&[]);
+    repo.write("draft.json", &draft_reply(&[]));
+    repo.commit("draft names no spec");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "draft: {}{}", run.stdout, run.stderr);
+    assert!(run.stdout.ends_with(draft_next), "draft: {}", run.stdout);
+
+    let repo = vibing(&[]);
+    failing(&repo, "echo review >> calls.log");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "review: {}{}", run.stdout, run.stderr);
+    assert!(run.stdout.ends_with(review_next), "review: {}", run.stdout);
+
+    let repo = vibing(&[]);
+    failing(&repo, "echo plan >> calls.log; cat planned.json");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "plan: {}{}", run.stdout, run.stderr);
+    assert!(run.stdout.ends_with(plan_next), "plan: {}", run.stdout);
+
+    let repo = vibing(&[]);
+    repo.write(
+        "planned.json",
+        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it", "settles": ["AC-1"]}]})),
+    );
+    repo.commit("plan leaves AC-2 unsettled");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "in-progress: {}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .ends_with("next: lazyspec update DELTA-001 --status in-progress\n"),
+        "in-progress: {}",
+        run.stdout
+    );
+}

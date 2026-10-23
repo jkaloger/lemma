@@ -42,6 +42,13 @@ pub struct Stopped {
     pub next: Option<String>,
 }
 
+fn stopped(message: String, next: &str) -> Stopped {
+    Stopped {
+        message: Some(message),
+        next: Some(next.to_string()),
+    }
+}
+
 impl From<String> for Stopped {
     fn from(message: String) -> Self {
         Stopped {
@@ -60,14 +67,18 @@ pub fn run(
     config: &runner::Config,
 ) -> Result<String, Stopped> {
     build::require_clean(root)?;
-    let delta = draft(root, store, prompt, config)?;
-    println!("draft: {} {}", delta.id, delta.title);
-    review_rounds(root, &delta.id, rounds, config)?;
-    strip_review_lines(root, &delta.id)?;
-    plan(root, &delta.id, config)?;
-    accept(root, &delta.id)?;
-    in_progress(root, &delta.id)?;
-    run_build(root, &delta.id, config)?;
+    let delta = draft(root, store, prompt, config).map_err(|m| stopped(m, "lemma vibe -m …"))?;
+    let id = &delta.id;
+    println!("draft: {id} {}", delta.title);
+    let review = format!("lemma review {id}");
+    review_rounds(root, id, rounds, config).map_err(|m| stopped(m, &review))?;
+    strip_review_lines(root, id).map_err(|m| stopped(m, &review))?;
+    plan(root, id, config).map_err(|m| stopped(m, &format!("lemma plan {id}")))?;
+    let accepting = format!("accept or reject each [proposed] claim, then lemma build {id}");
+    accept(root, id).map_err(|m| stopped(m, &accepting))?;
+    let moving = format!("lazyspec update {id} --status in-progress");
+    in_progress(root, id).map_err(|m| stopped(m, &moving))?;
+    run_build(root, id, config)?;
     Ok(delta.id)
 }
 

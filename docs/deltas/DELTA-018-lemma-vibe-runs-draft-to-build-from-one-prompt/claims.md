@@ -27,5 +27,6 @@
 - [AC-12] Vibe never moves the delta to complete; a successful run ends with `next: lazyspec update <id> --status complete`.
   @ref crates/lemma/tests/vibe.rs#vibe_leaves_the_delta_in_progress_and_ends_naming_the_complete_step
 - [AC-13] A stage that fails exits 2 and prints the `next:` line its row in the design table gives.
+  @ref crates/lemma/tests/vibe.rs#a_failing_stage_exits_2_and_prints_its_next_line
 - [AC-14] In plain mode vibe output carries no ANSI colour codes.
 - [AC-15] [intent] In live mode each stage opens with a coloured banner, and the run ends with a summary of per-stage time, rounds, accepted claims and committed tasks.
