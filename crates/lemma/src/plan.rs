@@ -5,6 +5,7 @@ use crate::prompts::{self, Prompt};
 use crate::review::part_file;
 use crate::runner;
 use crate::schema;
+use crate::shape;
 use crate::tasks::{self, Tasks, FOLLOW_UPS};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -436,7 +437,25 @@ fn ask_planner(
             "{prompt}\n\nYour last reply was rejected: {error}. Reply again with every task position inside `tasks`.\n"
         ))?;
     }
-    draft(files, parsed, tagged, reply)
+    let drafted = draft(files, parsed, tagged, reply)?;
+    refuse_uncovered(&drafted)?;
+    Ok(drafted)
+}
+
+fn refuse_uncovered(drafted: &Drafted) -> Result<(), String> {
+    let claims = claims::parse(&drafted.claims).claims;
+    let found = shape::uncovered(&claims, &tasks::parse(&drafted.tasks));
+    match found.is_empty() {
+        true => Ok(()),
+        false => Err(format!(
+            "plan refuses to write tasks the gate rejects: {}",
+            found
+                .into_iter()
+                .map(|(_, message)| message)
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+    }
 }
 
 pub fn plan(

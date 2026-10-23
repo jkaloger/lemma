@@ -5,6 +5,8 @@
   @ref crates/lemma/tests/plan.rs#an_out_of_range_position_is_asked_again_once_with_the_error
   @ref crates/lemma/tests/plan.rs#a_second_out_of_range_reply_fails_without_writing
 - [AC-3] Plan never writes a `tasks.md` that the draft → in-progress gate's claim-coverage rule rejects.
+  @ref crates/lemma/tests/plan.rs#a_draft_leaving_a_claim_unsettled_is_refused_without_writing
+  @ref crates/lemma/tests/plan.rs#a_draft_settling_a_claim_twice_is_refused_without_writing
 - [AC-4] A planned new claim is written with its settling task, and no new claim is left unsettled.
   @ref crates/lemma/tests/plan.rs#a_new_claim_is_written_with_its_settling_task
 - [AC-5] Under vibe, a draft reply that `fill` rejects is asked again with the rejection message.

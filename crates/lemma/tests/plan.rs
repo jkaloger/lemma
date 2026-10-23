@@ -664,3 +664,49 @@ fn a_marked_bullet_matches_the_planner_by_its_text_without_the_marker() {
         ""
     );
 }
+
+#[test]
+fn a_draft_leaving_a_claim_unsettled_is_refused_without_writing() {
+    let repo = project("- Alpha.\n- [intent] Feels fast.\n", "");
+    plan_reply(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
+    );
+    let before = snapshot(&repo);
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stderr.contains(
+            "lemma: plan refuses to write tasks the gate rejects: AC-2 is settled by no task"
+        ),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(snapshot(&repo), before);
+}
+
+#[test]
+fn a_draft_settling_a_claim_twice_is_refused_without_writing() {
+    let repo = project(
+        "- [AC-1] Alpha.\n- Beta.\n",
+        "- [ ] T1 kept (settles AC-1)\n",
+    );
+    plan_reply(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1, "AC-2": 1}}),
+    );
+    let before = snapshot(&repo);
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 2);
+    assert!(
+        run.stderr
+            .contains("AC-1 is settled by T1, T2; exactly one task settles a claim"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(snapshot(&repo), before);
+}

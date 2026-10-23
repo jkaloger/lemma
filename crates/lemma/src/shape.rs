@@ -180,23 +180,8 @@ fn at_any_gate(delta: &Delta) -> Vec<Finding> {
             "claim has no id; run `lemma review` to plan".to_string(),
         ));
     }
-    for claim in delta.live_claims() {
-        let settling: Vec<&str> = delta
-            .tasks
-            .main()
-            .filter(|t| t.settles.contains(&claim.id))
-            .map(|t| t.id.as_str())
-            .collect();
-        let message = match settling.as_slice() {
-            [_] => continue,
-            [] => format!("{} is settled by no task", claim.id),
-            many => format!(
-                "{} is settled by {}; exactly one task settles a claim",
-                claim.id,
-                many.join(", ")
-            ),
-        };
-        found.push(delta.at(CLAIMS_PART, Some(claim.line), message));
+    for (line, message) in uncovered(&delta.claims, &delta.tasks) {
+        found.push(delta.at(CLAIMS_PART, Some(line), message));
     }
     for part in PARTS {
         for line in review_lines(delta.doc.part_text(part)) {
@@ -216,6 +201,29 @@ fn at_any_gate(delta: &Delta) -> Vec<Finding> {
                 claim.id
             ),
         ));
+    }
+    found
+}
+
+/// The claim-coverage rule: every live claim is settled by exactly one main task.
+pub fn uncovered(claims: &[Claim], tasks: &tasks::Tasks) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    for claim in claims.iter().filter(|c| !c.struck) {
+        let settling: Vec<&str> = tasks
+            .main()
+            .filter(|t| t.settles.contains(&claim.id))
+            .map(|t| t.id.as_str())
+            .collect();
+        let message = match settling.as_slice() {
+            [_] => continue,
+            [] => format!("{} is settled by no task", claim.id),
+            many => format!(
+                "{} is settled by {}; exactly one task settles a claim",
+                claim.id,
+                many.join(", ")
+            ),
+        };
+        found.push((claim.line, message));
     }
     found
 }

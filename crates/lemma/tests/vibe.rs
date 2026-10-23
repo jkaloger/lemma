@@ -435,20 +435,35 @@ fn vibe_moves_the_delta_to_in_progress_and_commits_it_without_asking() {
     );
 }
 
+/// A gate-only shape error: plan succeeds, the in-progress gate does not.
+fn draft_without_intent(repo: &Repo) {
+    let reply = json!({
+        "title": "Add a thing",
+        "changes": ["SPEC-001"],
+        "intent": "",
+        "out_of_scope": "- Removing things.",
+        "design": "Add the thing to the list.",
+        "claims": ["A thing can be added.", "An added thing is listed."],
+    });
+    repo.write("draft.json", &wrapped(reply));
+    repo.commit("draft has no intent");
+}
+
 #[test]
 fn vibe_refuses_the_move_when_the_gate_lint_has_errors() {
     let repo = vibing(&[]);
-    repo.write(
-        "planned.json",
-        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1}})),
-    );
-    repo.commit("plan leaves AC-2 unsettled");
+    draft_without_intent(&repo);
 
     let run = repo.run(&["vibe", "-m", "add a thing"], "");
 
     assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stderr.contains("AC-2 is settled by no task"),
+        run.stdout.contains("tasks.md: 1 task written\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stderr.contains("missing or empty `## Intent` section"),
         "{}",
         run.stderr
     );
@@ -558,6 +573,16 @@ fn a_failing_stage_exits_2_and_prints_its_next_line() {
         &wrapped(json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1}})),
     );
     repo.commit("plan leaves AC-2 unsettled");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "uncovered plan: {}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with(plan_next),
+        "uncovered plan: {}",
+        run.stdout
+    );
+
+    let repo = vibing(&[]);
+    draft_without_intent(&repo);
     let run = repo.run(&["vibe", "-m", "add a thing"], "");
     assert_eq!(run.code, 2, "in-progress: {}{}", run.stdout, run.stderr);
     assert!(
