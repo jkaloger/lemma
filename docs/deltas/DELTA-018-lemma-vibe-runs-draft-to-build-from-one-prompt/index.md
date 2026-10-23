@@ -13,7 +13,7 @@ related:
 
 Today one change takes four human steps, each one waiting on the last: write the delta, `lemma review` until clean, `lemma plan` then accept or reject `[proposed]` claims, `lemma build`. For small or throwaway changes that wait costs more than the review is worth. `lemma vibe -m "<prompt>"` runs the whole loop unattended from one sentence: an agent drafts the delta, review and revise run for up to N rounds, plan runs, `[proposed]` claims are accepted, and build runs to the last task. Output is colourful so a long run is watchable.
 
-Vibe is an opt-in exception to principle 3 (humans write documents; a human deletes an annotation to accept it) and to the README's "not a vibe coding tool". The other gates stay: every task still passes the review gate and commits only when clean, and completion is still the human's step (DECISION-009).
+Vibe is an opt-in exception to principle 3, recorded in DECISION-015. The other gates stay: every task still passes the check command (DECISION-016, built in DELTA-019, which lands first) and the task review gate before it commits, and completion is still the human's step (DECISION-009).
 
 ## Out of scope
 
