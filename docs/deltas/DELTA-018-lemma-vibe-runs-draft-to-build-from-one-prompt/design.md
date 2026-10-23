@@ -13,7 +13,7 @@ New `vibe.rs`, with stages run in order. A stage that fails stops the run, exits
 | plan | `next: lemma plan <id>` |
 | accept | `next: accept or reject each [proposed] claim, then lemma build <id>` |
 | in-progress | `next: lazyspec update <id> --status in-progress` |
-| build | `next: lemma build <id> --resume` |
+| build | `next: lemma build <id> --resume` when a task stopped (a stop record exists), else `next: lemma build <id>` |
 
 
 ## Stages

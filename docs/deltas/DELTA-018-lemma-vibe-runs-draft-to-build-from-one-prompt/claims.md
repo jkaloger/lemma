@@ -10,7 +10,7 @@
 - `--rounds` defaults to 3 review calls.
 - After plan, no claim in `claims.md` carries `[proposed]`, and the count accepted is printed.
 - Vibe moves the delta to in-progress and commits it without asking, refusing if the gate lint has errors.
-- A build that stops exits 2 and prints `lemma build <id> --resume`.
+- A build that stops a task exits 2 and prints `lemma build <id> --resume`; a build that fails without a stopped task prints `lemma build <id>`.
 - Vibe never moves the delta to complete; a successful run ends with `next: lazyspec update <id> --status complete`.
 - A stage that fails exits 2 and prints the `next:` line its row in the design table gives.
 - In plain mode vibe output carries no ANSI colour codes.
