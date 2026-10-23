@@ -1,12 +1,13 @@
 ---
 title: "vibe opts out of human authorship per run"
 type: decision
-status: proposed
+status: accepted
 author: "Jack Kaloger"
 date: 2026-10-23
 tags: []
 related:
   - constrains: SPEC-002
+reviewed: fc2ec39f706eac74158be81342cfa7ceb84f77fb
 ---
 
 ## Context
