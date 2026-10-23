@@ -487,10 +487,21 @@ fn vibe_command(prompt: &str, rounds: u32) -> ExitCode {
         },
         Err(message) => return fail(message),
     };
-    match vibe::run(&root, &store, prompt, rounds, &config) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => fail(message),
+    let stopped = match vibe::run(&root, &store, prompt, rounds, &config) {
+        Ok(id) => {
+            next_after_build(&id);
+            return ExitCode::SUCCESS;
+        }
+        Err(stopped) => stopped,
+    };
+    let code = match stopped.message {
+        Some(message) => fail(message),
+        None => ExitCode::from(2),
+    };
+    if let Some(step) = stopped.next {
+        next(step);
     }
+    code
 }
 
 fn stop_command() -> ExitCode {

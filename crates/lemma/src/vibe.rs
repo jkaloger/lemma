@@ -1,5 +1,7 @@
+use crate::advance;
 use crate::annotate::frontmatter_len;
 use crate::build;
+use crate::builds;
 use crate::claims::{accept_proposed, review_lines};
 use crate::context;
 use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART};
@@ -34,20 +36,39 @@ struct Revision {
     claims: String,
 }
 
+/// A run that stopped: the error, if any, and the command that picks it up by hand.
+pub struct Stopped {
+    pub message: Option<String>,
+    pub next: Option<String>,
+}
+
+impl From<String> for Stopped {
+    fn from(message: String) -> Self {
+        Stopped {
+            message: Some(message),
+            next: None,
+        }
+    }
+}
+
+/// Returns the id of the delta it drafted and built.
 pub fn run(
     root: &Path,
     store: &Store,
     prompt: &str,
     rounds: u32,
     config: &runner::Config,
-) -> Result<(), String> {
+) -> Result<String, Stopped> {
     build::require_clean(root)?;
     let delta = draft(root, store, prompt, config)?;
     println!("draft: {} {}", delta.id, delta.title);
     review_rounds(root, &delta.id, rounds, config)?;
     strip_review_lines(root, &delta.id)?;
     plan(root, &delta.id, config)?;
-    accept(root, &delta.id)
+    accept(root, &delta.id)?;
+    in_progress(root, &delta.id)?;
+    run_build(root, &delta.id, config)?;
+    Ok(delta.id)
 }
 
 fn spec_ids(store: &Store) -> Vec<String> {
@@ -267,4 +288,25 @@ fn accept(root: &Path, id: &str) -> Result<(), String> {
     write(root, &delta, CLAIMS_PART, &claims)?;
     println!("accepted {accepted} [proposed] claims");
     Ok(())
+}
+
+fn in_progress(root: &Path, id: &str) -> Result<(), String> {
+    let (store, delta) = build::load_delta(root, id)?;
+    advance::unasked(root, &store, &delta)
+}
+
+fn run_build(root: &Path, id: &str, config: &runner::Config) -> Result<(), Stopped> {
+    let message = match build::run(root, id, None, false, config) {
+        Ok(build::Outcome::Complete) => return Ok(()),
+        Ok(build::Outcome::Stopped) => None,
+        Err(message) => Some(message),
+    };
+    let next = match builds::read(root, id) {
+        Some(_) => format!("lemma build {id} --resume"),
+        None => format!("lemma build {id}"),
+    };
+    Err(Stopped {
+        message,
+        next: Some(next),
+    })
 }

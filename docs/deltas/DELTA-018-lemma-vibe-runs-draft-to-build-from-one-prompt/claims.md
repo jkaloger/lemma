@@ -19,8 +19,13 @@
 - [AC-9] After plan, no claim in `claims.md` carries `[proposed]`, and the count accepted is printed.
   @ref crates/lemma/tests/vibe.rs#after_plan_no_claim_is_proposed_and_the_count_accepted_is_printed
 - [AC-10] Vibe moves the delta to in-progress and commits it without asking, refusing if the gate lint has errors.
+  @ref crates/lemma/tests/vibe.rs#vibe_moves_the_delta_to_in_progress_and_commits_it_without_asking
+  @ref crates/lemma/tests/vibe.rs#vibe_refuses_the_move_when_the_gate_lint_has_errors
 - [AC-11] A build that stops a task exits 2 and prints `lemma build <id> --resume`; a build that fails without a stopped task prints `lemma build <id>`.
+  @ref crates/lemma/tests/vibe.rs#a_build_that_stops_a_task_exits_2_and_names_the_resume
+  @ref crates/lemma/tests/vibe.rs#a_build_that_fails_without_a_stopped_task_names_the_plain_build
 - [AC-12] Vibe never moves the delta to complete; a successful run ends with `next: lazyspec update <id> --status complete`.
+  @ref crates/lemma/tests/vibe.rs#vibe_leaves_the_delta_in_progress_and_ends_naming_the_complete_step
 - [AC-13] A stage that fails exits 2 and prints the `next:` line its row in the design table gives.
 - [AC-14] In plain mode vibe output carries no ANSI colour codes.
 - [AC-15] [intent] In live mode each stage opens with a coloured banner, and the run ends with a summary of per-stage time, rounds, accepted claims and committed tasks.

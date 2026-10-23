@@ -58,6 +58,12 @@ delete)
   echo "delete $2" >> lazyspec.log
   rm $dir/index.md
   ;;
+update)
+  echo "update $2 $3 $4" >> lazyspec.log
+  [ -e update-strays ] && echo stray > stray.txt
+  sed "s/^status: draft$/status: $4/" $dir/index.md > $dir/index.tmp
+  mv $dir/index.tmp $dir/index.md
+  ;;
 esac
 "#;
 
@@ -179,7 +185,8 @@ fn a_draft_that_fails_after_create_deletes_the_delta() {
 }
 
 /// Answers each prompt by its opening line, logging `draft`, `review`, `revise` or `plan` to
-/// `calls.log`. Review call n replies `review-n.json`, or clean when there is none.
+/// `calls.log`. Review call n replies `review-n.json`, or clean when there is none. A build
+/// task replies `built.json`; its task review is clean.
 const DISPATCH: &str = r#"#!/bin/sh
 cat > prompt.txt
 case "$(head -1 prompt.txt)" in
@@ -190,6 +197,8 @@ case "$(head -1 prompt.txt)" in
   if [ -e review-$n.json ]; then cat review-$n.json; else cat clean.json; fi ;;
 "You are revising"*) echo revise >> calls.log; cat revised.json ;;
 "You are planning"*) echo plan >> calls.log; cat planned.json ;;
+"You are carrying out"*) cat built.json ;;
+"You are reviewing one task"*) echo '{"structured_output": {"stop": "", "findings": []}}' ;;
 esac
 "#;
 
@@ -225,6 +234,15 @@ fn vibing(findings: &[&str]) -> Repo {
             json!({"claims": [], "tasks": [{"text": "Build it", "settles": ["AC-1", "AC-2"]}]}),
         ),
     );
+    repo.write(
+        "built.json",
+        &json!({"structured_output": {"outcome": "done", "reason": "", "refs": [
+            {"claim": "AC-1", "path": TEST_FILE, "symbol": "reopen_keeps_prior"},
+            {"claim": "AC-2", "path": TEST_FILE, "symbol": "other_test"},
+        ]}})
+        .to_string(),
+    );
+    repo.write(".gitignore", "calls.log\nprompt.txt\nlazyspec.log\n");
     repo.write("runner.sh", DISPATCH);
     std::fs::set_permissions(
         repo.path("runner.sh"),
@@ -266,7 +284,7 @@ fn each_review_with_findings_but_the_last_is_revised_and_lemma_writes_the_parts(
     );
     let index = repo.read(&format!("{DIR}/index.md"));
     assert!(
-        index.starts_with("---\ntitle: \"Add a thing\"\ntype: delta\nstatus: draft\n"),
+        index.starts_with("---\ntitle: \"Add a thing\"\ntype: delta\nstatus: in-progress\n"),
         "{index}"
     );
     assert!(index.contains("- changes: SPEC-001\n---\n"), "{index}");
@@ -319,7 +337,7 @@ fn findings_from_the_last_review_are_not_revised_but_stripped_warned_and_planned
     no_review_lines(&repo);
     assert!(repo
         .read(&format!("{DIR}/tasks.md"))
-        .contains("- [ ] T1 Build it (settles AC-1, AC-2)"));
+        .contains("- [x] T1 Build it (settles AC-1, AC-2)"));
 }
 
 #[test]
@@ -343,8 +361,15 @@ fn after_plan_no_claim_is_proposed_and_the_count_accepted_is_printed() {
         "planned.json",
         &wrapped(json!({
             "claims": [{"text": "A thing can be removed."}, {"text": "A removed thing is gone."}],
-            "tasks": [{"text": "Build it", "settles": ["AC-1", 1, 2]}],
+            "tasks": [{"text": "Build it", "settles": ["AC-1", "AC-2", 1, 2]}],
         })),
+    );
+    let refs: Vec<_> = (1..=4)
+        .map(|n| json!({"claim": format!("AC-{n}"), "path": TEST_FILE, "symbol": "other_test"}))
+        .collect();
+    repo.write(
+        "built.json",
+        &json!({"structured_output": {"outcome": "done", "reason": "", "refs": refs}}).to_string(),
     );
     repo.commit("plan proposes claims");
 
@@ -366,4 +391,128 @@ fn after_plan_no_claim_is_proposed_and_the_count_accepted_is_printed() {
         claims.contains("- [AC-4] A removed thing is gone.\n"),
         "{claims}"
     );
+}
+
+const NEXT_COMPLETE: &str = "next: lazyspec update DELTA-001 --status complete\n";
+
+fn status(repo: &Repo) -> String {
+    let index = repo.read(&format!("{DIR}/index.md"));
+    index
+        .lines()
+        .find_map(|l| l.strip_prefix("status: "))
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn subjects(repo: &Repo) -> Vec<String> {
+    repo.git(&["log", "--format=%s"])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn vibe_moves_the_delta_to_in_progress_and_commits_it_without_asking() {
+    let repo = vibing(&[]);
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        subjects(&repo).contains(&"DELTA-001: in-progress".to_string()),
+        "{:?}",
+        subjects(&repo)
+    );
+    assert!(lazyspec_calls(&repo).contains(&"update DELTA-001 --status in-progress".to_string()));
+    assert!(
+        !run.stderr.contains("move it to in-progress?"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn vibe_refuses_the_move_when_the_gate_lint_has_errors() {
+    let repo = vibing(&[]);
+    repo.write(
+        "planned.json",
+        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it", "settles": ["AC-1"]}]})),
+    );
+    repo.commit("plan leaves AC-2 unsettled");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("AC-2 is settled by no task"),
+        "{}",
+        run.stderr
+    );
+    assert!(!lazyspec_calls(&repo)
+        .iter()
+        .any(|c| c.starts_with("update")));
+    assert_eq!(status(&repo), "draft");
+    assert!(!subjects(&repo).contains(&"DELTA-001: in-progress".to_string()));
+}
+
+#[test]
+fn a_build_that_stops_a_task_exits_2_and_names_the_resume() {
+    let repo = vibing(&[]);
+    repo.write(
+        "built.json",
+        &json!({"structured_output": {"outcome": "blocked", "reason": "cannot", "refs": []}})
+            .to_string(),
+    );
+    repo.commit("block the task");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .ends_with("next: lemma build DELTA-001 --resume\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_build_that_fails_without_a_stopped_task_names_the_plain_build() {
+    let repo = vibing(&[]);
+    repo.write("update-strays", "");
+    repo.write(
+        ".gitignore",
+        "calls.log\nprompt.txt\nlazyspec.log\nupdate-strays\n",
+    );
+    repo.commit("the move leaves a stray file");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr
+            .contains("lemma: build needs a clean working tree; commit or stash first"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stdout.ends_with("next: lemma build DELTA-001\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn vibe_leaves_the_delta_in_progress_and_ends_naming_the_complete_step() {
+    let repo = vibing(&[]);
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.ends_with(NEXT_COMPLETE), "{}", run.stdout);
+    assert_eq!(status(&repo), "in-progress");
+    assert!(!lazyspec_calls(&repo).iter().any(|c| c.contains("complete")));
+    assert!(repo
+        .read(&format!("{DIR}/tasks.md"))
+        .contains("- [x] T1 Build it (settles AC-1, AC-2)\n"));
 }

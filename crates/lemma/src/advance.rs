@@ -143,7 +143,13 @@ fn status_now(root: &Path, id: &str) -> Option<String> {
         .map(|d| d.status.clone())
 }
 
-pub fn offer(root: &Path, store: &Store, delta: &Doc) -> Result<(), String> {
+fn advance_delta(
+    root: &Path,
+    store: &Store,
+    delta: &Doc,
+    interactive: bool,
+    ask: impl FnOnce() -> bool,
+) -> Result<(), String> {
     let dir = Path::new(&delta.path)
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
@@ -156,11 +162,20 @@ pub fn offer(root: &Path, store: &Store, delta: &Doc) -> Result<(), String> {
     };
     advance_with(
         &step,
-        interactive(),
-        || confirmed(&delta.id),
+        interactive,
+        ask,
         || gate_findings(store, root, &delta.id),
         || status_now(root, &delta.id),
     )
+}
+
+pub fn offer(root: &Path, store: &Store, delta: &Doc) -> Result<(), String> {
+    advance_delta(root, store, delta, interactive(), || confirmed(&delta.id))
+}
+
+/// `lemma vibe` moves the delta it drafted without asking (DECISION-015).
+pub fn unasked(root: &Path, store: &Store, delta: &Doc) -> Result<(), String> {
+    advance_delta(root, store, delta, true, || true)
 }
 
 #[cfg(test)]
