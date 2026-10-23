@@ -685,6 +685,42 @@ fn a_timed_out_check_is_one_task_finding_with_the_timeout_and_output_tail() {
 }
 
 #[test]
+fn a_check_that_cannot_start_stops_the_build_with_that_message_and_no_fix_round() {
+    let repo = project("in-progress", single_task());
+    let command = repo.path(".fixture/missing-check").display().to_string();
+    install_fakes_with(
+        &repo,
+        "",
+        &format!("check = \"{command}\"\nreview_rounds = 2\n"),
+    );
+    repo.commit("check");
+    one_task_fixtures(&repo);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+    let before = repo.head();
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains(&format!("   check: cannot start `{command}`: ")),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("fix round"), "{}", run.stdout);
+    assert!(
+        run.stdout
+            .ends_with("   stopped. T1 left unticked; working tree kept.\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(!repo.path(".fixture/T1.fixes").exists());
+    assert!(!repo.path(".fixture/T1.rcalls").exists());
+    assert_eq!(tasks(&repo), single_task());
+    assert_eq!(repo.head(), before);
+}
+
+#[test]
 fn a_claim_id_in_the_check_output_does_not_pin_the_finding_to_that_claim() {
     let repo = project("in-progress", single_task());
     with_failing_check(&repo, 1, "review_rounds = 2\n");

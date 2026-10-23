@@ -13,6 +13,7 @@
 - [AC-6] A check that times out is one fix-round finding whose text holds `check: <command> timed out after <n>s` and the last 40 lines of output.
   @ref crates/lemma/tests/build.rs#a_timed_out_check_is_one_task_finding_with_the_timeout_and_output_tail
 - [AC-7] A check command that cannot start stops the build with that message and no fix round.
+  @ref crates/lemma/tests/build.rs#a_check_that_cannot_start_stops_the_build_with_that_message_and_no_fix_round
 - [AC-8] A resumed task runs the check before its review.
 - [AC-9] A check that exits 0 prints the step `check: pass` and the task proceeds to review.
   @ref crates/lemma/tests/build.rs#a_passing_check_prints_check_pass_and_proceeds_to_review

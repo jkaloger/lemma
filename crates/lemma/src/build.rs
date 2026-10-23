@@ -698,9 +698,8 @@ fn check_command(
     look: &Look,
     block: &Block,
 ) -> Result<(), Failure> {
-    let Some(ran) = run_check(root, command, timeout) else {
-        return Err(check_failed(vec![format!("   check: {command} failed")]));
-    };
+    let ran = run_check(root, command, timeout)
+        .map_err(|message| unticked(vec![format!("   check: {message}")]))?;
     let header = match ran.status {
         None => format!("check: {command} timed out after {}s", timeout.as_secs()),
         Some(status) if status.success() => {
@@ -724,21 +723,27 @@ struct CheckRun {
 }
 
 /// Output goes to files, not pipes, so a killed check's children holding them open can't hang the read.
-fn run_check(root: &Path, command: &str, timeout: Duration) -> Option<CheckRun> {
-    let argv = runner::split(command).ok()?;
-    let mut stdout = tempfile::tempfile().ok()?;
-    let mut stderr = tempfile::tempfile().ok()?;
+/// An error is a check that could not run, which the runner can't fix, so it stops the build.
+fn run_check(root: &Path, command: &str, timeout: Duration) -> Result<CheckRun, String> {
+    let argv = runner::split(command)?;
+    let output_file = || tempfile::tempfile().map_err(|e| format!("cannot capture output: {e}"));
+    let mut stdout = output_file()?;
+    let mut stderr = output_file()?;
+    let cannot_start = |e: std::io::Error| format!("cannot start `{}`: {e}", argv[0]);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(root)
         .stdin(std::process::Stdio::null())
-        .stdout(stdout.try_clone().ok()?)
-        .stderr(stderr.try_clone().ok()?)
+        .stdout(stdout.try_clone().map_err(cannot_start)?)
+        .stderr(stderr.try_clone().map_err(cannot_start)?)
         .spawn()
-        .ok()?;
+        .map_err(cannot_start)?;
     let started = std::time::Instant::now();
     let status = loop {
-        match child.try_wait().ok()? {
+        match child
+            .try_wait()
+            .map_err(|e| format!("cannot wait on `{}`: {e}", argv[0]))?
+        {
             Some(status) => break Some(status),
             None if started.elapsed() >= timeout => {
                 let _ = child.kill();
@@ -749,7 +754,7 @@ fn run_check(root: &Path, command: &str, timeout: Duration) -> Option<CheckRun> 
         }
     };
     let output = [read_back(&mut stdout), read_back(&mut stderr)].concat();
-    Some(CheckRun { status, output })
+    Ok(CheckRun { status, output })
 }
 
 fn read_back(file: &mut std::fs::File) -> String {
