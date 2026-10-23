@@ -28,6 +28,7 @@ mod tasks;
 #[cfg(test)]
 mod testgit;
 mod version;
+mod vibe;
 mod world;
 
 use clap::{Parser, Subcommand};
@@ -96,6 +97,12 @@ enum Command {
         /// Print the assembled prompt and exit
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Draft, review, plan and build a new delta from one prompt
+    Vibe {
+        /// What the change should do
+        #[arg(short = 'm', long = "message")]
+        prompt: String,
     },
     /// List the refs of a claim and whether each resolves
     Refs {
@@ -465,6 +472,17 @@ fn build_command(id: &str, task: Option<&str>, resume: bool, dry_run: bool) -> E
     print_prompt(prompts::Prompt::Build, &root, &values)
 }
 
+fn vibe_command() -> ExitCode {
+    let (root, _) = match cli_store() {
+        Ok(found) => found,
+        Err(message) => return fail(message),
+    };
+    match vibe::run(&root) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => fail(message),
+    }
+}
+
 fn stop_command() -> ExitCode {
     let input: StopInput = serde_json::from_str(&read_stdin()).unwrap_or_default();
     if input.stop_hook_active {
@@ -531,6 +549,7 @@ fn main() -> ExitCode {
             resume,
             dry_run,
         } => build_command(&delta, task.as_deref(), resume, dry_run),
+        Command::Vibe { .. } => vibe_command(),
         Command::Refs { claim, json } => match (claim, json) {
             (_, Some(file)) => refs_json_command(&file),
             (Some(claim), None) => refs_command(&claim),

@@ -1,5 +1,5 @@
 <!-- Written by `lemma review` once the review is clean; tasks you add by hand are kept. Each task settles claims or is a chore: `- [ ] T1 <text> (settles AC-1, AC-2)` or `- [ ] T2 <text> (chore)`. -->
-- [ ] T1 Add vibe command that refuses a dirty tree (settles AC-1)
+- [x] T1 Add vibe command that refuses a dirty tree (settles AC-1)
 - [ ] T2 Draft a new delta from the runner's vibe reply (settles AC-2, AC-3, AC-4)
 - [ ] T3 Review and revise the draft for bounded rounds (settles AC-5, AC-6, AC-7, AC-8)
 - [ ] T4 Run plan and accept proposed claims (settles AC-9)
