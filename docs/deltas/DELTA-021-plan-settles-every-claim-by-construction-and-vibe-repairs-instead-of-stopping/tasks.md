@@ -1,0 +1,13 @@
+<!-- Written by `lemma review` once the review is clean; tasks you add by hand are kept. Each task settles claims or is a chore: `- [ ] T1 <text> (settles AC-1, AC-2)` or `- [ ] T2 <text> (chore)`. -->
+- [ ] T1 Replace per-task settles with required settled_by in plan reply (settles AC-1, AC-4, AC-18)
+- [ ] T2 Re-ask planner once on out-of-range task position (settles AC-2)
+- [ ] T3 Refuse to write tasks the claim-coverage rule rejects (settles AC-3)
+- [ ] T4 Describe settled_by in the plan prompt (chore)
+- [ ] T5 Return environment failures from build as errors (settles AC-16)
+- [ ] T6 Carry stopped task id, ending and base in build stop (settles AC-9)
+- [ ] T7 Add vibe_repairs and re-ask draft replies fill rejects (settles AC-5)
+- [ ] T8 Re-ask plan errors under vibe (settles AC-17)
+- [ ] T9 Send gate findings to revise and rerun gate under vibe (settles AC-6, AC-10)
+- [ ] T10 Add re-plan mode for one stopped task (settles AC-8, AC-12, AC-15)
+- [ ] T11 Reset and re-plan stopped build tasks under vibe (settles AC-7, AC-11, AC-13)
+- [ ] T12 Re-ask invalid re-plan replies up to the cap (settles AC-14)
