@@ -538,6 +538,83 @@ fn a_check_failure_goes_to_a_fix_round_and_a_clean_review_commits() {
     assert_eq!(repo.git(&["status", "--porcelain"]), "");
 }
 
+const CHECK: &str = "#!/bin/sh\nfixes=$(cat .fixture/T1.fixes 2>/dev/null || echo 0)\nrcalls=$(cat .fixture/T1.rcalls 2>/dev/null || echo 0)\necho \"$(pwd) fixes=$fixes rcalls=$rcalls\" >> .fixture/check.log\n";
+
+fn with_check(repo: &Repo, extra: &str) {
+    repo.write(".fixture/fake-check.sh", CHECK);
+    let check = repo.path(".fixture/fake-check.sh");
+    std::fs::set_permissions(&check, std::fs::Permissions::from_mode(0o755)).unwrap();
+    install_fakes_with(
+        repo,
+        "",
+        &format!("check = \"{}\"\n{extra}", check.display()),
+    );
+    repo.commit("check");
+}
+
+#[test]
+fn without_a_check_build_runs_no_check_command() {
+    let repo = project("in-progress", single_task());
+    repo.write(".fixture/fake-check.sh", CHECK);
+    one_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("check:"), "{}", run.stdout);
+    assert!(!repo.path(".fixture/check.log").exists());
+}
+
+#[test]
+fn the_check_runs_in_the_repo_root_after_lint_and_evidence_pass_and_before_review() {
+    let repo = project("in-progress", single_task());
+    with_check(&repo, "review_rounds = 2\n");
+    fixture(&repo, "T1", "src/one.rs", "pub fn one() {}\n");
+    done(&repo, "T1", &[MISSING]);
+    fix_reply(&repo, "T1", 1, &[]);
+    fix_reply(&repo, "T1", 2, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let root = std::fs::canonicalize(repo.path(".")).unwrap();
+    assert_eq!(
+        repo.read(".fixture/check.log"),
+        format!("{} fixes=2 rcalls=0\n", root.display())
+    );
+    let lint_failed = run.stdout.find("   lint: ").unwrap();
+    let evidence_failed = run.stdout.find("AC-1 has no @ref").unwrap();
+    let passed = run.stdout.find("   check: pass").unwrap();
+    let reviewed = run.stdout.find("   review: clean").unwrap();
+    assert!(
+        lint_failed < evidence_failed && evidence_failed < passed && passed < reviewed,
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_passing_check_prints_check_pass_and_proceeds_to_review() {
+    let repo = project("in-progress", single_task());
+    with_check(&repo, "");
+    one_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    assert_eq!(
+        lines[3..6],
+        [
+            "   AC-1 @ref tests/store_test.rs#reopen_keeps_prior resolves",
+            "   check: pass",
+            "   review: clean",
+        ],
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn a_blocked_reply_stops_at_once_without_a_fix_round() {
     let repo = project("in-progress", single_task());

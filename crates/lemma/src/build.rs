@@ -402,6 +402,7 @@ fn reply_and_check(
         root,
         delta,
         task,
+        config.check.as_deref(),
         &Look::current(config.mode),
         block,
     ))
@@ -474,7 +475,7 @@ fn resume_checks(
         claims: plan::read(root, delta, CLAIMS_PART),
         parts: delta_parts(root, delta),
     };
-    let failed = checked(check_work(root, delta, task, look, block))?;
+    let failed = checked(check_work(root, delta, task, None, look, block))?;
     Ok((built, failed))
 }
 
@@ -675,11 +676,34 @@ fn check_work(
     root: &Path,
     delta: &Doc,
     task: &Task,
+    check: Option<&str>,
     look: &Look,
     block: &Block,
 ) -> Result<(), Failure> {
     check_lint(root, &delta.id, look, block)?;
-    check_settled(root, &delta.id, task, look, block)
+    check_settled(root, &delta.id, task, look, block)?;
+    match check {
+        Some(command) => check_command(root, command, look, block),
+        None => Ok(()),
+    }
+}
+
+fn check_command(root: &Path, command: &str, look: &Look, block: &Block) -> Result<(), Failure> {
+    let passed = runner::split(command)
+        .ok()
+        .and_then(|argv| {
+            Command::new(&argv[0])
+                .args(&argv[1..])
+                .current_dir(root)
+                .output()
+                .ok()
+        })
+        .is_some_and(|out| out.status.success());
+    if !passed {
+        return Err(check_failed(vec![format!("   check: {command} failed")]));
+    }
+    block.say(&look.step_toned(Glyph::Pass, "   check: pass", Some(Tone::Green)));
+    Ok(())
 }
 
 fn print_fix_round(look: &Look, block: &Block, source: &str, count: usize, round: u32) {
