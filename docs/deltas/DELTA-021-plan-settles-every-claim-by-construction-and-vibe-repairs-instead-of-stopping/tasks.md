@@ -2,7 +2,7 @@
 - [x] T1 Replace per-task settles with required settled_by in plan reply (settles AC-1, AC-4, AC-18)
 - [x] T2 Re-ask planner once on out-of-range task position (settles AC-2)
 - [x] T3 Refuse to write tasks the claim-coverage rule rejects (settles AC-3)
-- [ ] T4 Describe settled_by in the plan prompt (chore)
+- [x] T4 Describe settled_by in the plan prompt (chore)
 - [ ] T5 Return environment failures from build as errors (settles AC-16)
 - [ ] T6 Carry stopped task id, ending and base in build stop (settles AC-9)
 - [ ] T7 Add vibe_repairs and re-ask draft replies fill rejects (settles AC-5)
