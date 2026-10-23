@@ -3,6 +3,7 @@
 - `lemma vibe -m <prompt>` on a dirty tree exits 2 without calling a runner.
 - The draft stage creates a new draft delta whose parts hold the runner reply's intent, out of scope, design and claims, linked `changes` to each spec in the reply.
 - A draft reply with no `changes` spec, or an unknown one, stops the run before any delta is created.
+- A draft stage that fails after the delta is created deletes it before exiting.
 - Every review call that writes findings, except the last, is followed by a revise call whose replacement parts lemma writes, keeping the index frontmatter as it was.
 - Review stops early on the first clean round.
 - When the last review call writes findings, lemma does not revise; it removes every review line, prints each as a warning, and runs plan.
