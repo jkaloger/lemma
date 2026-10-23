@@ -476,6 +476,60 @@ fn settling_an_unknown_claim_errors_and_writes_nothing() {
     assert_eq!(snapshot(&repo), before);
 }
 
+fn replies_in_turn(repo: &Repo, first: Value, second: Value) {
+    plan_reply(repo, first);
+    repo.write("plan2.json", &envelope(second));
+    repo.write(
+        "reviewer.sh",
+        &format!(
+            "#!/bin/sh\ncat > stdin.txt\nif grep -q '{PLAN_MARKER}' stdin.txt; then\n  echo called >> plan-calls\n  cp stdin.txt \"plan-prompt-$(wc -l < plan-calls | tr -d ' ')\"\n  if [ \"$(wc -l < plan-calls)\" -gt 1 ]; then cat plan2.json; else cat plan.json; fi\nelse\n  cat review.json\nfi\n"
+        ),
+    );
+}
+
+#[test]
+fn an_out_of_range_position_is_asked_again_once_with_the_error() {
+    let repo = project("- Alpha.\n", "");
+    replies_in_turn(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 3}}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
+    );
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(plan_calls(&repo), 2);
+    let again = repo.read("plan-prompt-2");
+    assert!(
+        again.contains("plan settles AC-1 by task 3, but the reply has 1 task"),
+        "{again}"
+    );
+    assert_eq!(tasks_of(&repo), "- [ ] T1 Do (settles AC-1)\n");
+}
+
+#[test]
+fn a_second_out_of_range_reply_fails_without_writing() {
+    let repo = project("- Alpha.\n", "");
+    replies_in_turn(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 2}}),
+        json!({"claims": [claim("Beta.", 4)], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
+    );
+    let before = snapshot(&repo);
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 2);
+    assert_eq!(plan_calls(&repo), 2);
+    assert!(
+        run.stderr.contains("by task 4, but the reply has 1 task"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(snapshot(&repo), before);
+}
+
 #[test]
 fn the_planner_prompt_shows_the_assigned_ids() {
     let repo = project("- First.\n- [AC-4] Second.\n- Third.\n", "");

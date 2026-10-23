@@ -2,6 +2,8 @@
 - [AC-1] The plan reply schema requires a `settled_by` entry for every live claim no kept task settles, including `[intent]` claims.
   @ref crates/lemma/tests/plan.rs#the_plan_schema_requires_settled_by_for_every_claim_no_kept_task_settles
 - [AC-2] A planner reply that settles a claim with a task position outside the reply's tasks is asked again once with the error, then plan fails without writing.
+  @ref crates/lemma/tests/plan.rs#an_out_of_range_position_is_asked_again_once_with_the_error
+  @ref crates/lemma/tests/plan.rs#a_second_out_of_range_reply_fails_without_writing
 - [AC-3] Plan never writes a `tasks.md` that the draft → in-progress gate's claim-coverage rule rejects.
 - [AC-4] A planned new claim is written with its settling task, and no new claim is left unsettled.
   @ref crates/lemma/tests/plan.rs#a_new_claim_is_written_with_its_settling_task

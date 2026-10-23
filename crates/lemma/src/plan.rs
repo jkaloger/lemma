@@ -217,6 +217,22 @@ fn add_proposed(
     added
 }
 
+/// The first settling position outside the reply's tasks, which the schema cannot bound.
+fn out_of_range(reply: &Reply) -> Option<String> {
+    let tasks = reply.tasks.len();
+    reply
+        .settled_by
+        .iter()
+        .map(|(id, position)| (id.clone(), *position))
+        .chain(
+            reply
+                .claims
+                .iter()
+                .map(|claim| (format!("new claim \"{}\"", claim.text), claim.task)),
+        )
+        .find_map(|(id, position)| task_index(&id, position, tasks).err())
+}
+
 fn task_index(id: &str, position: usize, tasks: usize) -> Result<usize, String> {
     match (1..=tasks).contains(&position) {
         true => Ok(position - 1),
@@ -401,17 +417,25 @@ fn ask_planner(
     let prompt = prompts::rendered(Prompt::Plan, root, &values)?;
     let env = [("LEMMA_DELTA", delta.id.as_str())];
     let schema = schema::plan(&unsettled(&tagged.claims_text, parsed));
-    let reply = runner::tracked(
-        "plan",
-        &config.reviewer,
-        &prompt,
-        root,
-        &env,
-        config.timeout,
-        Some(&schema),
-        config.mode,
-    )?;
-    let reply = serde_json::from_value(reply.json()?).map_err(|e| format!("planner reply: {e}"))?;
+    let ask = |prompt: &str| -> Result<Reply, String> {
+        let reply = runner::tracked(
+            "plan",
+            &config.reviewer,
+            prompt,
+            root,
+            &env,
+            config.timeout,
+            Some(&schema),
+            config.mode,
+        )?;
+        serde_json::from_value(reply.json()?).map_err(|e| format!("planner reply: {e}"))
+    };
+    let mut reply = ask(&prompt)?;
+    if let Some(error) = out_of_range(&reply) {
+        reply = ask(&format!(
+            "{prompt}\n\nYour last reply was rejected: {error}. Reply again with every task position inside `tasks`.\n"
+        ))?;
+    }
     draft(files, parsed, tagged, reply)
 }
 
