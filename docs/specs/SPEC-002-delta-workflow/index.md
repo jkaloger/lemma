@@ -36,13 +36,13 @@ related: []
 
 ## Intent
 
-`lemma review`, `lemma plan` and `lemma build`: the loop that turns a human-written delta into committed, evidenced work. A human writes intent, design and behaviour. An agent reviews the draft and the human resolves each finding by deleting it. The planner assigns claim ids and names tasks. The build loop runs each task in a fresh runner, reviews the task's diff and commits it once its claims have refs and the review is clean.
+`lemma review`, `lemma plan` and `lemma build`: the loop that turns a human-written delta into committed, evidenced work. A human writes intent, design and behaviour, except under `lemma vibe` (DECISION-015). An agent reviews the draft and the human resolves each finding by deleting it. The planner assigns claim ids and names tasks. The build loop runs each task in a fresh runner, reviews the task's diff and commits it once its claims have refs and the review is clean.
 
 The human types four commands: `lemma review`, `lemma plan`, `lemma build`, and `lazyspec update --status complete`.
 
 ## Constraints
 
-- Humans write documents; agents annotate; a human deletes an annotation to accept it (CONVENTION principle 3, DECISION-003).
+- Humans write documents; agents annotate; a human deletes an annotation to accept it, except under `lemma vibe` (DECISION-015) (CONVENTION principle 3, DECISION-003).
 - Review never plans. Plan runs only on a draft delta with no review lines left.
 - The runner never edits a delta part. lemma writes ids, tasks and refs from the runner's JSON reply.
 - Every review-gate finding cites a written basis: the task, the design, the convention, a claim, a dictum rule or a related document. Fix rounds are bounded by `review_rounds`, and nothing commits around a finding (DECISION-004).
