@@ -1,12 +1,13 @@
 ---
 title: "build runs a check command before review"
 type: delta
-status: draft
+status: in-progress
 author: "Jack Kaloger"
 date: 2026-10-23
 tags: []
 related:
   - changes: SPEC-002
+reviewed: 340e8297661358b550ace6a6d88e4c251f069c04
 ---
 
 ## Intent
