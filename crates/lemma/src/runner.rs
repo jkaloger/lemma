@@ -30,6 +30,7 @@ pub struct Config {
     pub review_rounds: u32,
     pub timeout: Duration,
     pub mode: Mode,
+    pub check: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -40,6 +41,7 @@ struct Raw {
     resume: Option<String>,
     review_rounds: Option<u32>,
     timeout: Option<u64>,
+    check: Option<String>,
 }
 
 pub fn load(root: &Path) -> Result<Config, String> {
@@ -51,6 +53,7 @@ pub fn load(root: &Path) -> Result<Config, String> {
             resume: None,
             review_rounds: None,
             timeout: None,
+            check: None,
         },
         Ok(text) => toml::from_str(&text).map_err(|e| format!("lemma.toml: {e}"))?,
     };
@@ -62,6 +65,7 @@ pub fn load(root: &Path) -> Result<Config, String> {
         review_rounds: raw.review_rounds.unwrap_or(DEFAULT_REVIEW_ROUNDS),
         timeout: Duration::from_secs(raw.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
         mode: Mode::Plain,
+        check: raw.check,
     })
 }
 
@@ -1041,6 +1045,7 @@ printf '{"result": "ok", "usage": {}}'"#,
         );
         assert_eq!(config.review_rounds, 1);
         assert_eq!(config.timeout, Duration::from_secs(1800));
+        assert_eq!(config.check, None);
     }
 
     #[test]
@@ -1067,6 +1072,17 @@ printf '{"result": "ok", "usage": {}}'"#,
         std::fs::write(root.path().join("lemma.toml"), "reviewer = \"other\"\n").unwrap();
 
         assert_eq!(load(root.path()).unwrap().reviewer, "other");
+    }
+
+    #[test]
+    fn a_check_command_is_read_from_lemma_toml() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("lemma.toml"), "check = \"cargo test\"\n").unwrap();
+
+        assert_eq!(
+            load(root.path()).unwrap().check.as_deref(),
+            Some("cargo test")
+        );
     }
 
     #[test]
