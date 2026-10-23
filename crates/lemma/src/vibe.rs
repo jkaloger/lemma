@@ -1,10 +1,12 @@
 use crate::annotate::frontmatter_len;
 use crate::build;
+use crate::claims::review_lines;
 use crate::context;
 use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART};
 use crate::plan;
 use crate::prompts::{self, Prompt};
-use crate::review::part_file;
+use crate::review::{self, part_file, Outcome, PARTS};
+use crate::reviews;
 use crate::runner;
 use crate::schema;
 use crate::world::World;
@@ -25,16 +27,26 @@ struct Draft {
     claims: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct Revision {
+    index: String,
+    design: String,
+    claims: String,
+}
+
 pub fn run(
     root: &Path,
     store: &Store,
     prompt: &str,
+    rounds: u32,
     config: &runner::Config,
 ) -> Result<(), String> {
     build::require_clean(root)?;
     let delta = draft(root, store, prompt, config)?;
     println!("draft: {} {}", delta.id, delta.title);
-    Ok(())
+    review_rounds(root, &delta.id, rounds, config)?;
+    strip_review_lines(root, &delta.id)?;
+    plan(root, &delta.id, config)
 }
 
 fn spec_ids(store: &Store) -> Vec<String> {
@@ -145,4 +157,105 @@ fn delete(root: &Path, delta: &Doc) {
     if let Some(dir) = Path::new(&delta.path).parent() {
         let _ = std::fs::remove_dir_all(root.join(dir));
     }
+}
+
+/// Every revision is reviewed again; findings from the last call are left for the strip.
+fn review_rounds(
+    root: &Path,
+    id: &str,
+    rounds: u32,
+    config: &runner::Config,
+) -> Result<(), String> {
+    for round in 1..=rounds {
+        let (store, delta) = build::load_delta(root, id)?;
+        let mut values = context::assemble(&store, root, &delta);
+        let resolved = reviews::resolved(root, &delta);
+        values.insert("resolved", reviews::render(&resolved));
+        let prompt = prompts::rendered(Prompt::ReviewDoc, root, &values)?;
+        println!("review round {round}/{rounds}");
+        match review::review_draft(root, &delta, &prompt, &resolved, config)? {
+            Outcome::Clean(_) => {
+                println!("review clean");
+                return Ok(());
+            }
+            Outcome::Written(n) => println!("{n} review lines written"),
+        }
+        if round < rounds {
+            revise(root, id, config)?;
+        }
+    }
+    Ok(())
+}
+
+fn revise(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> {
+    let (store, delta) = build::load_delta(root, id)?;
+    let values = context::assemble(&store, root, &delta);
+    let prompt = prompts::rendered(Prompt::Revise, root, &values)?;
+    let env = [("LEMMA_DELTA", id)];
+    let reply = runner::tracked(
+        "revise",
+        &config.runner,
+        &prompt,
+        root,
+        &env,
+        config.timeout,
+        Some(&schema::revise()),
+        config.mode,
+    )?;
+    let reply: Revision =
+        serde_json::from_value(reply.json()?).map_err(|e| format!("revise reply: {e}"))?;
+    let index = plan::read(root, &delta, INDEX_PART);
+    let front = &index[..frontmatter_len(&index)];
+    write(
+        root,
+        &delta,
+        INDEX_PART,
+        &format!("{front}\n{}\n", reply.index.trim()),
+    )?;
+    write(
+        root,
+        &delta,
+        DESIGN_PART,
+        &format!("{}\n", reply.design.trim()),
+    )?;
+    write(
+        root,
+        &delta,
+        CLAIMS_PART,
+        &format!("{}\n", reply.claims.trim()),
+    )
+}
+
+/// Proceeds anyway past findings the rounds left (DECISION-015), so plan's no-review-lines rule holds.
+fn strip_review_lines(root: &Path, id: &str) -> Result<(), String> {
+    let (_, delta) = build::load_delta(root, id)?;
+    for part in PARTS {
+        let file = plan::read(root, &delta, part);
+        let front = match part {
+            INDEX_PART => frontmatter_len(&file),
+            _ => 0,
+        };
+        let (front, body) = file.split_at(front);
+        let review = review_lines(body);
+        if review.is_empty() {
+            continue;
+        }
+        let mut kept = String::from(front);
+        for (n, line) in body.split_inclusive('\n').enumerate() {
+            match review.contains(&(n + 1)) {
+                true => eprintln!("warning: {id} {part}: unresolved {}", line.trim()),
+                false => kept.push_str(line),
+            }
+        }
+        write(root, &delta, part, &kept)?;
+    }
+    Ok(())
+}
+
+fn plan(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> {
+    let (store, delta) = build::load_delta(root, id)?;
+    let values = context::assemble(&store, root, &delta);
+    let report = plan::plan(root, &delta, &values, config)?;
+    report.lines().iter().for_each(|line| println!("{line}"));
+    Ok(())
 }

@@ -9,9 +9,13 @@
 - [AC-4] A draft stage that fails after the delta is created deletes it before exiting.
   @ref crates/lemma/tests/vibe.rs#a_draft_that_fails_after_create_deletes_the_delta
 - [AC-5] Every review call that writes findings, except the last, is followed by a revise call whose replacement parts lemma writes, keeping the index frontmatter as it was.
+  @ref crates/lemma/tests/vibe.rs#each_review_with_findings_but_the_last_is_revised_and_lemma_writes_the_parts
 - [AC-6] Review stops early on the first clean round.
+  @ref crates/lemma/tests/vibe.rs#review_stops_at_the_first_clean_round
 - [AC-7] When the last review call writes findings, lemma does not revise; it removes every review line, prints each as a warning, and runs plan.
+  @ref crates/lemma/tests/vibe.rs#findings_from_the_last_review_are_not_revised_but_stripped_warned_and_planned
 - [AC-8] `--rounds` defaults to 3 review calls.
+  @ref crates/lemma/tests/vibe.rs#rounds_defaults_to_three_review_calls
 - [AC-9] After plan, no claim in `claims.md` carries `[proposed]`, and the count accepted is printed.
 - [AC-10] Vibe moves the delta to in-progress and commits it without asking, refusing if the gate lint has errors.
 - [AC-11] A build that stops a task exits 2 and prints `lemma build <id> --resume`; a build that fails without a stopped task prints `lemma build <id>`.

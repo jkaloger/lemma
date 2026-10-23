@@ -111,6 +111,11 @@ pub fn vibe(spec_ids: &[String]) -> Value {
     }))
 }
 
+pub fn revise() -> Value {
+    let text = json!({"type": "string"});
+    object(json!({"index": text, "design": text, "claims": text}))
+}
+
 pub fn review_task(bases: &[String]) -> Value {
     object(json!({
         "stop": {"type": "string"},

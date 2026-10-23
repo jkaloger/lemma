@@ -115,7 +115,10 @@ fn checked(result: Result<(), Failure>) -> Result<Option<Failure>, Failure> {
     }
 }
 
-fn load_delta(root: &Path, id: &str) -> Result<(lazyspec::engine::store::Store, Doc), String> {
+pub(crate) fn load_delta(
+    root: &Path,
+    id: &str,
+) -> Result<(lazyspec::engine::store::Store, Doc), String> {
     let store = project::load_store(root).map_err(|e| format!("{e:#}"))?;
     let delta = World::load(&store, None)
         .docs()

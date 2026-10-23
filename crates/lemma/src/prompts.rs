@@ -28,16 +28,18 @@ pub enum Prompt {
     ReviewTask,
     Fix,
     Vibe,
+    Revise,
 }
 
 impl Prompt {
-    pub const ALL: [Prompt; 6] = [
+    pub const ALL: [Prompt; 7] = [
         Prompt::ReviewDoc,
         Prompt::Plan,
         Prompt::Build,
         Prompt::ReviewTask,
         Prompt::Fix,
         Prompt::Vibe,
+        Prompt::Revise,
     ];
 
     pub fn file_name(self) -> &'static str {
@@ -48,6 +50,7 @@ impl Prompt {
             Prompt::ReviewTask => "review-task.md",
             Prompt::Fix => "fix.md",
             Prompt::Vibe => "vibe.md",
+            Prompt::Revise => "revise.md",
         }
     }
 
@@ -63,6 +66,7 @@ impl Prompt {
             Prompt::ReviewTask => include_str!("../../../.lazyspec/prompts/review-task.md"),
             Prompt::Fix => include_str!("../../../.lazyspec/prompts/fix.md"),
             Prompt::Vibe => include_str!("../../../.lazyspec/prompts/vibe.md"),
+            Prompt::Revise => include_str!("../../../.lazyspec/prompts/revise.md"),
         }
     }
 }

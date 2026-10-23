@@ -103,6 +103,9 @@ enum Command {
         /// What the change should do
         #[arg(short = 'm', long = "message")]
         prompt: String,
+        /// How many review calls to make before planning anyway
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
+        rounds: u32,
     },
     /// List the refs of a claim and whether each resolves
     Refs {
@@ -472,7 +475,7 @@ fn build_command(id: &str, task: Option<&str>, resume: bool, dry_run: bool) -> E
     print_prompt(prompts::Prompt::Build, &root, &values)
 }
 
-fn vibe_command(prompt: &str) -> ExitCode {
+fn vibe_command(prompt: &str, rounds: u32) -> ExitCode {
     let (root, store) = match cli_store() {
         Ok(found) => found,
         Err(message) => return fail(message),
@@ -484,7 +487,7 @@ fn vibe_command(prompt: &str) -> ExitCode {
         },
         Err(message) => return fail(message),
     };
-    match vibe::run(&root, &store, prompt, &config) {
+    match vibe::run(&root, &store, prompt, rounds, &config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => fail(message),
     }
@@ -556,7 +559,7 @@ fn main() -> ExitCode {
             resume,
             dry_run,
         } => build_command(&delta, task.as_deref(), resume, dry_run),
-        Command::Vibe { prompt } => vibe_command(&prompt),
+        Command::Vibe { prompt, rounds } => vibe_command(&prompt, rounds),
         Command::Refs { claim, json } => match (claim, json) {
             (_, Some(file)) => refs_json_command(&file),
             (Some(claim), None) => refs_command(&claim),
