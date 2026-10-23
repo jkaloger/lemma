@@ -1,12 +1,13 @@
 ---
 title: "lemma vibe runs draft to build from one prompt"
 type: delta
-status: draft
+status: in-progress
 author: "Jack Kaloger"
 date: 2026-10-23
 tags: []
 related:
   - changes: SPEC-002
+reviewed: 0ddb676375456662014a04ec1ec07884d5099dc0
 ---
 
 ## Intent
