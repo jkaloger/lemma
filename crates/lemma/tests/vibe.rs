@@ -231,7 +231,7 @@ fn vibing(findings: &[&str]) -> Repo {
     repo.write(
         "planned.json",
         &wrapped(
-            json!({"claims": [], "tasks": [{"text": "Build it", "settles": ["AC-1", "AC-2"]}]}),
+            json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1, "AC-2": 1}}),
         ),
     );
     repo.write(
@@ -360,8 +360,12 @@ fn after_plan_no_claim_is_proposed_and_the_count_accepted_is_printed() {
     repo.write(
         "planned.json",
         &wrapped(json!({
-            "claims": [{"text": "A thing can be removed."}, {"text": "A removed thing is gone."}],
-            "tasks": [{"text": "Build it", "settles": ["AC-1", "AC-2", 1, 2]}],
+            "claims": [
+                {"text": "A thing can be removed.", "task": 1},
+                {"text": "A removed thing is gone.", "task": 1}
+            ],
+            "tasks": [{"text": "Build it"}],
+            "settled_by": {"AC-1": 1, "AC-2": 1},
         })),
     );
     let refs: Vec<_> = (1..=4)
@@ -436,7 +440,7 @@ fn vibe_refuses_the_move_when_the_gate_lint_has_errors() {
     let repo = vibing(&[]);
     repo.write(
         "planned.json",
-        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it", "settles": ["AC-1"]}]})),
+        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1}})),
     );
     repo.commit("plan leaves AC-2 unsettled");
 
@@ -551,7 +555,7 @@ fn a_failing_stage_exits_2_and_prints_its_next_line() {
     let repo = vibing(&[]);
     repo.write(
         "planned.json",
-        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it", "settles": ["AC-1"]}]})),
+        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1}})),
     );
     repo.commit("plan leaves AC-2 unsettled");
     let run = repo.run(&["vibe", "-m", "add a thing"], "");

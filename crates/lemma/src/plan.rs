@@ -20,34 +20,18 @@ const HEADINGS: [(&str, &str); 2] = [("intent", "## Intent"), ("out of scope", "
 struct Reply {
     claims: Vec<PlanClaim>,
     tasks: Vec<PlanTask>,
+    settled_by: BTreeMap<String, usize>,
 }
 
 #[derive(Deserialize)]
 struct PlanClaim {
     text: String,
+    task: usize,
 }
 
 #[derive(Deserialize)]
 struct PlanTask {
     text: String,
-    #[serde(default)]
-    settles: Vec<Settle>,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Settle {
-    Number(usize),
-    Name(String),
-}
-
-impl std::fmt::Display for Settle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Settle::Number(n) => write!(f, "{n}"),
-            Settle::Name(name) => write!(f, "{name}"),
-        }
-    }
 }
 
 type Known = Vec<(String, String)>;
@@ -158,6 +142,20 @@ fn is_planned(claims_text: &str, parsed: &Tasks) -> bool {
             .all(|c| settled.contains(c.id.as_str()))
 }
 
+/// Live claims no kept task settles: each needs a `settled_by` entry in the reply.
+fn unsettled(claims_text: &str, parsed: &Tasks) -> Vec<String> {
+    let settled: HashSet<&str> = parsed
+        .main()
+        .flat_map(|t| t.settles.iter().map(String::as_str))
+        .collect();
+    claims::parse(claims_text)
+        .claims
+        .into_iter()
+        .filter(|c| !c.struck && !settled.contains(c.id.as_str()))
+        .map(|c| c.id)
+        .collect()
+}
+
 struct Tagged {
     claims_text: String,
     known: Known,
@@ -192,59 +190,64 @@ fn tag_bullets(claims_text: &str) -> Tagged {
     }
 }
 
+/// Appends the reply's new claims, each with the position of its settling task. A claim
+/// echoing a known one is dropped: `settled_by` or a kept task already settles it.
 fn add_proposed(
     text: &mut String,
     known: &mut Known,
     claims: &[PlanClaim],
-) -> (Vec<String>, usize) {
+) -> Vec<(String, usize)> {
     let mut next = next_number(known.iter().filter_map(|(id, _)| id_number(id)));
-    let mut ids = Vec::new();
-    let mut proposed = 0;
+    let mut added = Vec::new();
     for claim in claims {
-        let matched = known
+        let claim_text = collapsed(&claim.text);
+        if known
             .iter()
-            .find(|(_, known_text)| known_text == claim.text.trim());
-        if let Some((id, _)) = matched {
-            ids.push(id.clone());
+            .any(|(_, known_text)| collapsed(known_text) == claim_text)
+        {
             continue;
         }
         let id = format!("{ID_PREFIX}{next}");
         next += 1;
-        let claim_text = collapsed(&claim.text);
         ensure_newline(text);
         text.push_str(&format!("- [{id}] [proposed] {claim_text}\n"));
         known.push((id.clone(), claim_text));
-        ids.push(id);
-        proposed += 1;
+        added.push((id, claim.task));
     }
-    (ids, proposed)
+    added
 }
 
-fn resolve(entry: &Settle, plan_ids: &[String], known: &Known) -> Option<String> {
-    match entry {
-        Settle::Number(n) => plan_ids.get(n.checked_sub(1)?).cloned(),
-        Settle::Name(name) => known
-            .iter()
-            .find(|(id, _)| id == name)
-            .map(|(id, _)| id.clone()),
+fn task_index(id: &str, position: usize, tasks: usize) -> Result<usize, String> {
+    match (1..=tasks).contains(&position) {
+        true => Ok(position - 1),
+        false => Err(format!(
+            "plan settles {id} by task {position}, but the reply has {tasks} {}",
+            if tasks == 1 { "task" } else { "tasks" }
+        )),
     }
 }
 
-fn task_line(
-    number: u32,
-    task: &PlanTask,
-    plan_ids: &[String],
+fn settles_by_task(
+    reply: &Reply,
     known: &Known,
-) -> Result<String, String> {
-    let mut settles: Vec<String> = Vec::new();
-    for entry in &task.settles {
-        let id = resolve(entry, plan_ids, known)
-            .ok_or_else(|| format!("plan task `{}` settles unknown claim `{entry}`", task.text))?;
-        if !settles.contains(&id) {
-            settles.push(id);
-        }
+    added: &[(String, usize)],
+) -> Result<Vec<Vec<String>>, String> {
+    if let Some(unknown) = reply
+        .settled_by
+        .keys()
+        .find(|key| !known.iter().any(|(id, _)| id == *key))
+    {
+        return Err(format!("plan settles unknown claim `{unknown}`"));
     }
-    Ok(task_entry(number, &task.text, &settles))
+    let mut settles = vec![Vec::new(); reply.tasks.len()];
+    let settled = known
+        .iter()
+        .filter_map(|(id, _)| Some((id, *reply.settled_by.get(id)?)))
+        .chain(added.iter().map(|(id, task)| (id, *task)));
+    for (id, position) in settled {
+        settles[task_index(id, position, reply.tasks.len())?].push(id.clone());
+    }
+    Ok(settles)
 }
 
 fn task_entry(number: u32, text: &str, settles: &[String]) -> String {
@@ -295,19 +298,20 @@ fn draft(
         mut known,
         tagged,
     } = tagged_claims;
-    let (plan_ids, proposed) = add_proposed(&mut claims_text, &mut known, &reply.claims);
+    let added = add_proposed(&mut claims_text, &mut known, &reply.claims);
+    let settles = settles_by_task(&reply, &known, &added)?;
     let first = next_number(parsed.tasks.iter().map(|t| t.number));
-    let lines = (first..)
-        .zip(&reply.tasks)
-        .map(|(number, task)| task_line(number, task, &plan_ids, &known))
-        .collect::<Result<Vec<_>, _>>()?;
+    let lines: Vec<String> = (first..)
+        .zip(reply.tasks.iter().zip(&settles))
+        .map(|(number, (task, settles))| task_entry(number, &task.text, settles))
+        .collect();
     let tasks_text = match lines.is_empty() {
         true => files.tasks.clone(),
         false => insert_tasks(&files.tasks, &lines),
     };
     let report = Report {
         tagged,
-        proposed,
+        proposed: added.len(),
         tasks: lines.len(),
         ..Report::default()
     };
@@ -395,9 +399,8 @@ fn ask_planner(
     let mut values = values.clone();
     values.insert("claims", tagged.claims_text.clone());
     let prompt = prompts::rendered(Prompt::Plan, root, &values)?;
-    let known_ids: Vec<String> = tagged.known.iter().map(|(id, _)| id.clone()).collect();
     let env = [("LEMMA_DELTA", delta.id.as_str())];
-    let schema = schema::plan(&known_ids);
+    let schema = schema::plan(&unsettled(&tagged.claims_text, parsed));
     let reply = runner::tracked(
         "plan",
         &config.reviewer,

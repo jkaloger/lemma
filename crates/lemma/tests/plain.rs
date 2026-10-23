@@ -91,7 +91,7 @@ fn piped_review_plan_and_build_print_the_plain_report_with_watch_lines() {
         &plan,
         &[(
             "You are planning a reviewed delta",
-            json!({"claims": [], "tasks": [{"text": "reopen", "settles": ["AC-1"]}]}),
+            json!({"claims": [], "tasks": [{"text": "reopen"}], "settled_by": {"AC-1": 1}}),
         )],
     );
     let run = plan.run(&["plan", "DELTA-001"], "");

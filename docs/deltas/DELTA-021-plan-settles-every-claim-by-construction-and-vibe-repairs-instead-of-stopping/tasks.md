@@ -1,5 +1,5 @@
 <!-- Written by `lemma review` once the review is clean; tasks you add by hand are kept. Each task settles claims or is a chore: `- [ ] T1 <text> (settles AC-1, AC-2)` or `- [ ] T2 <text> (chore)`. -->
-- [ ] T1 Replace per-task settles with required settled_by in plan reply (settles AC-1, AC-4, AC-18)
+- [x] T1 Replace per-task settles with required settled_by in plan reply (settles AC-1, AC-4, AC-18)
 - [ ] T2 Re-ask planner once on out-of-range task position (settles AC-2)
 - [ ] T3 Refuse to write tasks the claim-coverage rule rejects (settles AC-3)
 - [ ] T4 Describe settled_by in the plan prompt (chore)

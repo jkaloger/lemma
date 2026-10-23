@@ -16,7 +16,10 @@ fn project(claims: &str, tasks: &str) -> Repo {
     repo.delta_claims(1, claims);
     repo.delta_tasks(1, tasks);
     repo.write("review.json", &envelope(json!({"findings": []})));
-    repo.write("plan.json", &envelope(json!({"claims": [], "tasks": []})));
+    repo.write(
+        "plan.json",
+        &envelope(json!({"claims": [], "tasks": [], "settled_by": {}})),
+    );
     let path = repo.path("reviewer.sh");
     repo.write(
         "reviewer.sh",
@@ -40,12 +43,12 @@ fn plan_reply(repo: &Repo, reply: Value) {
     repo.write("plan.json", &envelope(reply));
 }
 
-fn claim(text: &str) -> Value {
-    json!({"text": text})
+fn claim(text: &str, task: usize) -> Value {
+    json!({"text": text, "task": task})
 }
 
-fn task(text: &str, settles: Value) -> Value {
-    json!({"text": text, "settles": settles})
+fn task(text: &str) -> Value {
+    json!({"text": text})
 }
 
 fn plan(repo: &Repo) -> Run {
@@ -83,7 +86,8 @@ fn ids_are_assigned_in_document_order_continuing_from_the_highest() {
         &repo,
         json!({
             "claims": [],
-            "tasks": [task("Build it", json!(["AC-3", "AC-2", "AC-4", "AC-5"]))]
+            "tasks": [task("Build it")],
+            "settled_by": {"AC-2": 1, "AC-3": 1, "AC-4": 1, "AC-5": 1}
         }),
     );
 
@@ -111,7 +115,7 @@ fn a_single_new_id_is_named_alone() {
     let repo = project("- Only.\n", "");
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
     );
 
     let run = plan(&repo);
@@ -132,7 +136,8 @@ fn human_bullet_text_is_preserved_byte_for_byte() {
         &repo,
         json!({
             "claims": [],
-            "tasks": [task("Do", json!(["AC-1"]))]
+            "tasks": [task("Do")],
+            "settled_by": {"AC-1": 1}
         }),
     );
 
@@ -152,8 +157,9 @@ fn proposed_claims_are_appended_with_the_marker() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Writes are atomic."), claim("Invented but not marked.")],
-            "tasks": [task("Do", json!(["AC-1", "AC-2", 1, 2]))]
+            "claims": [claim("Writes are atomic.", 1), claim("Invented but not marked.", 1)],
+            "tasks": [task("Do")],
+            "settled_by": {"AC-1": 1, "AC-2": 1}
         }),
     );
 
@@ -178,8 +184,9 @@ fn only_proposed_claims_are_reported_without_a_tag_count() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Extra.")],
-            "tasks": [task("Do", json!(["AC-1", 1]))]
+            "claims": [claim("Extra.", 1)],
+            "tasks": [task("Do")],
+            "settled_by": {"AC-1": 1}
         }),
     );
 
@@ -200,7 +207,8 @@ fn tasks_are_appended_after_hand_written_ones_and_before_follow_ups() {
         &repo,
         json!({
             "claims": [],
-            "tasks": [task("Build  A", json!(["AC-1"])), task("Wire B", json!([]))]
+            "tasks": [task("Build  A"), task("Wire B")],
+            "settled_by": {"AC-1": 1, "AC-2": 2}
         }),
     );
 
@@ -209,7 +217,7 @@ fn tasks_are_appended_after_hand_written_ones_and_before_follow_ups() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         tasks_of(&repo),
-        "- [ ] T1 hand written (chore)\n- [ ] T3 Build A (settles AC-1)\n- [ ] T4 Wire B (chore)\n\n## Follow-ups\n\n- [ ] T2 later (chore)\n"
+        "- [ ] T1 hand written (chore)\n- [ ] T3 Build A (settles AC-1)\n- [ ] T4 Wire B (settles AC-2)\n\n## Follow-ups\n\n- [ ] T2 later (chore)\n"
     );
     assert!(run.stdout.contains("tasks.md: 2 tasks written\n"));
 }
@@ -219,7 +227,7 @@ fn tasks_follow_a_template_comment_on_a_new_line() {
     let repo = project("- [AC-1] A.\n", "<!-- one task per commit -->");
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
     );
 
     plan(&repo);
@@ -238,7 +246,7 @@ fn a_ticked_task_refuses_and_the_planner_is_not_called() {
     );
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
     );
     let before = snapshot(&repo);
 
@@ -264,7 +272,7 @@ fn frontmatter_keys_are_put_in_canonical_order() {
     );
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
     );
 
     let run = plan(&repo);
@@ -292,7 +300,7 @@ fn headings_are_normalised_outside_fences() {
     );
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
     );
 
     plan(&repo);
@@ -312,7 +320,8 @@ fn rerunning_on_a_planned_delta_changes_nothing() {
         &repo,
         json!({
             "claims": [],
-            "tasks": [task("Do first", json!(["AC-1"])), task("Do second", json!(["AC-2"]))]
+            "tasks": [task("Do first"), task("Do second")],
+            "settled_by": {"AC-1": 1, "AC-2": 2}
         }),
     );
 
@@ -332,16 +341,82 @@ fn rerunning_on_a_planned_delta_changes_nothing() {
 }
 
 #[test]
-fn settles_resolve_by_id_and_by_position_in_the_reply_claims() {
+fn the_plan_schema_requires_settled_by_for_every_claim_no_kept_task_settles() {
+    let repo = project(
+        "- [AC-1] Kept.\n- [intent] Feels fast.\n- Plain.\n- ~~[AC-4]~~ Struck.\n",
+        "- [ ] T1 kept (settles AC-1)\n",
+    );
+    let path = repo.path("reviewer.sh");
+    repo.write(
+        "reviewer.sh",
+        &format!(
+            "#!/bin/sh\ncat > stdin.txt\nif grep -q '{PLAN_MARKER}' stdin.txt; then\n  cp \"$1\" schema.json\n  cat plan.json\nelse\n  cat review.json\nfi\n"
+        ),
+    );
+    repo.write(
+        "lemma.toml",
+        &format!("reviewer = \"{} {{schema_file}}\"\n", path.display()),
+    );
+    plan_reply(
+        &repo,
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-5": 1, "AC-6": 1}}),
+    );
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let schema: Value = serde_json::from_str(&repo.read("schema.json")).unwrap();
+    let settled_by = &schema["properties"]["settled_by"];
+    assert!(schema["required"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("settled_by")));
+    assert_eq!(settled_by["required"], json!(["AC-5", "AC-6"]));
+    assert_eq!(settled_by["additionalProperties"], false);
+    assert_eq!(
+        claims_of(&repo),
+        "- [AC-1] Kept.\n- [AC-5] [intent] Feels fast.\n- [AC-6] Plain.\n- ~~[AC-4]~~ Struck.\n"
+    );
+    assert_eq!(
+        tasks_of(&repo),
+        "- [ ] T1 kept (settles AC-1)\n- [ ] T2 Do (settles AC-5, AC-6)\n"
+    );
+}
+
+#[test]
+fn a_new_claim_is_written_with_its_settling_task() {
     let repo = project("- [AC-1] Alpha.\n- Beta.\n- Gamma.\n", "");
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Delta.")],
-            "tasks": [
-                task("One", json!(["AC-2", "AC-1", "AC-3", "AC-2"])),
-                task("Two", json!([1]))
-            ]
+            "claims": [claim("Delta.", 2)],
+            "tasks": [task("One"), task("Two")],
+            "settled_by": {"AC-3": 1, "AC-1": 1, "AC-2": 1}
+        }),
+    );
+
+    let run = plan(&repo);
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(
+        claims_of(&repo),
+        "- [AC-1] Alpha.\n- [AC-2] Beta.\n- [AC-3] Gamma.\n- [AC-4] [proposed] Delta.\n"
+    );
+    assert_eq!(
+        tasks_of(&repo),
+        "- [ ] T1 One (settles AC-1, AC-2, AC-3)\n- [ ] T2 Two (settles AC-4)\n"
+    );
+}
+
+#[test]
+fn a_task_nothing_points_at_is_written_as_a_chore() {
+    let repo = project("- [AC-1] Alpha.\n", "");
+    plan_reply(
+        &repo,
+        json!({
+            "claims": [claim("Beta.", 2)],
+            "tasks": [task("Build alpha"), task("Build beta"), task("Rename module")],
+            "settled_by": {"AC-1": 1}
         }),
     );
 
@@ -350,29 +425,8 @@ fn settles_resolve_by_id_and_by_position_in_the_reply_claims() {
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert_eq!(
         tasks_of(&repo),
-        "- [ ] T1 One (settles AC-2, AC-1, AC-3)\n- [ ] T2 Two (settles AC-4)\n"
+        "- [ ] T1 Build alpha (settles AC-1)\n- [ ] T2 Build beta (settles AC-2)\n- [ ] T3 Rename module (chore)\n"
     );
-}
-
-#[test]
-fn a_settles_entry_naming_a_claim_by_its_text_is_an_error() {
-    let repo = project("- Alpha.\n", "");
-    plan_reply(
-        &repo,
-        json!({"claims": [], "tasks": [task("Do it", json!(["Alpha."]))]}),
-    );
-    let before = snapshot(&repo);
-
-    let run = plan(&repo);
-
-    assert_eq!(run.code, 2);
-    assert!(
-        run.stderr
-            .contains("lemma: plan task `Do it` settles unknown claim `Alpha.`"),
-        "{}",
-        run.stderr
-    );
-    assert_eq!(snapshot(&repo), before);
 }
 
 #[test]
@@ -381,8 +435,9 @@ fn an_echoed_claim_maps_to_its_id_instead_of_being_appended_again() {
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Alpha."), claim("Beta."), claim("Gamma.")],
-            "tasks": [task("Do", json!([1, 2, 3]))]
+            "claims": [claim("Alpha.", 1), claim("Beta.", 1), claim("Gamma.", 1)],
+            "tasks": [task("Do")],
+            "settled_by": {"AC-2": 1, "AC-3": 1}
         }),
     );
 
@@ -397,13 +452,14 @@ fn an_echoed_claim_maps_to_its_id_instead_of_being_appended_again() {
 }
 
 #[test]
-fn an_unresolvable_settles_entry_errors_and_writes_nothing() {
+fn settling_an_unknown_claim_errors_and_writes_nothing() {
     let repo = project("- Alpha.\n", "");
     plan_reply(
         &repo,
         json!({
-            "claims": [claim("Extra.")],
-            "tasks": [task("Do it", json!(["AC-1", "AC-9"]))]
+            "claims": [],
+            "tasks": [task("Do it")],
+            "settled_by": {"AC-1": 1, "AC-9": 1}
         }),
     );
     let before = snapshot(&repo);
@@ -413,7 +469,7 @@ fn an_unresolvable_settles_entry_errors_and_writes_nothing() {
     assert_eq!(run.code, 2);
     assert!(
         run.stderr
-            .contains("lemma: plan task `Do it` settles unknown claim `AC-9`"),
+            .contains("lemma: plan settles unknown claim `AC-9`"),
         "{}",
         run.stderr
     );
@@ -425,7 +481,11 @@ fn the_planner_prompt_shows_the_assigned_ids() {
     let repo = project("- First.\n- [AC-4] Second.\n- Third.\n", "");
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-5", "AC-4", "AC-6"]))]}),
+        json!({
+            "claims": [],
+            "tasks": [task("Do")],
+            "settled_by": {"AC-4": 1, "AC-5": 1, "AC-6": 1}
+        }),
     );
 
     let run = plan(&repo);
@@ -460,7 +520,7 @@ fn remaining_review_lines_block_planning() {
     let repo = project("- Plain.\n  @review Which one?\n", "");
     plan_reply(
         &repo,
-        json!({"claims": [], "tasks": [task("Do", json!(["AC-1"]))]}),
+        json!({"claims": [], "tasks": [task("Do")], "settled_by": {"AC-1": 1}}),
     );
     let before = snapshot(&repo);
 
@@ -531,7 +591,8 @@ fn a_marked_bullet_matches_the_planner_by_its_text_without_the_marker() {
         &repo,
         json!({
             "claims": [],
-            "tasks": [task("reopen", json!(["AC-1", "AC-2"]))],
+            "tasks": [task("reopen")],
+            "settled_by": {"AC-1": 1, "AC-2": 1},
         }),
     );
 

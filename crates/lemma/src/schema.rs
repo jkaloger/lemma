@@ -84,18 +84,18 @@ fn task_text() -> Value {
     json!({"type": "string", "maxLength": TASK_TEXT_MAX})
 }
 
-pub fn plan(known_ids: &[String]) -> Value {
-    let by_position = json!({"type": "integer", "minimum": 1});
-    let settle = match known_ids.is_empty() {
-        true => by_position,
-        false => json!({"anyOf": [{"enum": known_ids}, by_position]}),
-    };
+/// `unsettled` are the live claims no kept task settles; each is a required key of
+/// `settled_by`, valued by the position of its new task in `tasks`.
+pub fn plan(unsettled: &[String]) -> Value {
+    let position = json!({"type": "integer", "minimum": 1});
+    let settled_by: serde_json::Map<String, Value> = unsettled
+        .iter()
+        .map(|id| (id.clone(), position.clone()))
+        .collect();
     object(json!({
-        "claims": array_of(object(json!({"text": {"type": "string"}}))),
-        "tasks": array_of(object(json!({
-            "text": task_text(),
-            "settles": array_of(settle),
-        }))),
+        "tasks": array_of(object(json!({"text": task_text()}))),
+        "settled_by": object(Value::Object(settled_by)),
+        "claims": array_of(object(json!({"text": {"type": "string"}, "task": position}))),
     }))
 }
 
@@ -218,12 +218,25 @@ mod tests {
     }
 
     #[test]
-    fn plan_settles_take_a_known_id_or_a_position() {
-        let schema = plan(&["AC-1".to_string()]);
+    fn plan_requires_a_task_position_for_every_unsettled_claim() {
+        let schema = plan(&["AC-2".to_string(), "AC-3".to_string()]);
 
-        let settle = &schema["properties"]["tasks"]["items"]["properties"]["settles"]["items"];
-        assert_eq!(settle["anyOf"][0]["enum"], json!(["AC-1"]));
-        assert_eq!(settle["anyOf"][1]["type"], "integer");
+        let settled_by = &schema["properties"]["settled_by"];
+        assert_eq!(settled_by["required"], json!(["AC-2", "AC-3"]));
+        assert_eq!(settled_by["additionalProperties"], false);
+        assert_eq!(
+            settled_by["properties"]["AC-2"],
+            json!({"type": "integer", "minimum": 1})
+        );
+    }
+
+    #[test]
+    fn plan_new_claims_name_their_settling_task() {
+        let schema = plan(&[]);
+
+        let claim = &schema["properties"]["claims"]["items"];
+        assert_eq!(claim["required"], json!(["task", "text"]));
+        assert_eq!(claim["properties"]["task"]["minimum"], 1);
     }
 
     #[test]
