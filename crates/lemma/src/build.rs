@@ -405,7 +405,7 @@ fn reply_and_check(
         root,
         delta,
         task,
-        config.check.as_deref(),
+        config.check.as_deref().map(|check| (check, config.timeout)),
         &Look::current(config.mode),
         block,
     ))
@@ -679,53 +679,91 @@ fn check_work(
     root: &Path,
     delta: &Doc,
     task: &Task,
-    check: Option<&str>,
+    check: Option<(&str, Duration)>,
     look: &Look,
     block: &Block,
 ) -> Result<(), Failure> {
     check_lint(root, &delta.id, look, block)?;
     check_settled(root, &delta.id, task, look, block)?;
     match check {
-        Some(command) => check_command(root, command, look, block),
+        Some((command, timeout)) => check_command(root, command, timeout, look, block),
         None => Ok(()),
     }
 }
 
-fn check_command(root: &Path, command: &str, look: &Look, block: &Block) -> Result<(), Failure> {
-    let output = runner::split(command).ok().and_then(|argv| {
-        Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(root)
-            .output()
-            .ok()
-    });
-    let Some(out) = output else {
+fn check_command(
+    root: &Path,
+    command: &str,
+    timeout: Duration,
+    look: &Look,
+    block: &Block,
+) -> Result<(), Failure> {
+    let Some(ran) = run_check(root, command, timeout) else {
         return Err(check_failed(vec![format!("   check: {command} failed")]));
     };
-    if !out.status.success() {
-        let code = out
-            .status
-            .code()
-            .map_or("by signal".to_string(), |code| code.to_string());
-        return Err(command_failed(
-            format!("check: {command} exited {code}"),
-            &out,
-        ));
-    }
-    block.say(&look.step_toned(Glyph::Pass, "   check: pass", Some(Tone::Green)));
-    Ok(())
+    let header = match ran.status {
+        None => format!("check: {command} timed out after {}s", timeout.as_secs()),
+        Some(status) if status.success() => {
+            block.say(&look.step_toned(Glyph::Pass, "   check: pass", Some(Tone::Green)));
+            return Ok(());
+        }
+        Some(status) => {
+            let code = status
+                .code()
+                .map_or("by signal".to_string(), |code| code.to_string());
+            format!("check: {command} exited {code}")
+        }
+    };
+    Err(command_failed(header, &ran.output))
+}
+
+struct CheckRun {
+    /// `None` when the check outlasted the timeout and was killed.
+    status: Option<std::process::ExitStatus>,
+    output: String,
+}
+
+/// Output goes to files, not pipes, so a killed check's children holding them open can't hang the read.
+fn run_check(root: &Path, command: &str, timeout: Duration) -> Option<CheckRun> {
+    let argv = runner::split(command).ok()?;
+    let mut stdout = tempfile::tempfile().ok()?;
+    let mut stderr = tempfile::tempfile().ok()?;
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout.try_clone().ok()?)
+        .stderr(stderr.try_clone().ok()?)
+        .spawn()
+        .ok()?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(status) => break Some(status),
+            None if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let output = [read_back(&mut stdout), read_back(&mut stderr)].concat();
+    Some(CheckRun { status, output })
+}
+
+fn read_back(file: &mut std::fs::File) -> String {
+    use std::io::{Read, Seek};
+    let mut bytes = Vec::new();
+    let _ = file.rewind().and_then(|()| file.read_to_end(&mut bytes));
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 const CHECK_TAIL: usize = 40;
 
 /// One finding on the task, so a claim id in the output never pins it.
-fn command_failed(header: String, out: &std::process::Output) -> Failure {
-    let combined = [
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-    ]
-    .concat();
-    let lines: Vec<&str> = combined.lines().collect();
+fn command_failed(header: String, output: &str) -> Failure {
+    let lines: Vec<&str> = output.lines().collect();
     let tail = &lines[lines.len().saturating_sub(CHECK_TAIL)..];
     let text = std::iter::once(header.as_str())
         .chain(tail.iter().copied())

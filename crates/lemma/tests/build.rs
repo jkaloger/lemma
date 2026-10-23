@@ -651,6 +651,39 @@ fn a_failing_check_is_one_task_finding_with_the_exit_code_and_output_tail() {
     assert_eq!(repo.read(".fixture/T1.rcalls").trim(), "1");
 }
 
+const HANGING_CHECK: &str = "#!/bin/sh\nfixes=$(cat .fixture/T1.fixes 2>/dev/null || echo 0)\n[ \"$fixes\" -ge 1 ] && exit 0\ni=1\nwhile [ $i -le 45 ]; do echo \"line $i\"; i=$((i+1)); done\nexec sleep 30\n";
+
+#[test]
+fn a_timed_out_check_is_one_task_finding_with_the_timeout_and_output_tail() {
+    let repo = project("in-progress", single_task());
+    repo.write(".fixture/fake-check.sh", HANGING_CHECK);
+    let check = repo.path(".fixture/fake-check.sh");
+    std::fs::set_permissions(&check, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let command = check.display().to_string();
+    install_fakes_with(
+        &repo,
+        "",
+        &format!("check = \"{command}\"\ntimeout = 3\nreview_rounds = 2\n"),
+    );
+    repo.commit("check");
+    one_task_fixtures(&repo);
+    fix_reply(&repo, "T1", 1, &[REOPEN]);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("   check: 1 finding, fix round 1\n"),
+        "{}",
+        run.stdout
+    );
+    let tail: String = (6..=45).map(|i| format!("\nline {i}")).collect();
+    assert_eq!(
+        fix_findings(&repo),
+        format!("- [task] check: {command} timed out after 3s{tail}")
+    );
+}
+
 #[test]
 fn a_claim_id_in_the_check_output_does_not_pin_the_finding_to_that_claim() {
     let repo = project("in-progress", single_task());
