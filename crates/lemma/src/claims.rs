@@ -248,6 +248,37 @@ pub fn split_markers(first_line: &str) -> (Vec<&'static str>, &str) {
     (markers, rest)
 }
 
+/// Deletes the `[proposed]` marker from every claim, as a human accepting each one would.
+pub fn accept_proposed(body: &str) -> (String, usize) {
+    let mut accepted = 0;
+    let text = body
+        .split_inclusive('\n')
+        .map(|line| match without_proposed(line) {
+            Some(kept) => {
+                accepted += 1;
+                kept
+            }
+            None => line.to_string(),
+        })
+        .collect();
+    (text, accepted)
+}
+
+fn without_proposed(line: &str) -> Option<String> {
+    let head = item_pattern().captures(line)?.get(0)?.end();
+    let mut kept = String::from(&line[..head]);
+    let mut rest = line[head..].trim_start();
+    let mut found = false;
+    while let Some((marker, after)) = marker_token(rest) {
+        match marker == PROPOSED_MARKER {
+            true => found = true,
+            false => kept.push_str(&format!("{marker} ")),
+        }
+        rest = after.trim_start();
+    }
+    found.then(|| kept + rest)
+}
+
 pub fn per_text(line: &str) -> Option<&str> {
     line.trim_start()
         .strip_prefix(PER_MARKER)?

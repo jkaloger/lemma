@@ -335,3 +335,35 @@ fn rounds_defaults_to_three_review_calls() {
     );
     no_review_lines(&repo);
 }
+
+#[test]
+fn after_plan_no_claim_is_proposed_and_the_count_accepted_is_printed() {
+    let repo = vibing(&[]);
+    repo.write(
+        "planned.json",
+        &wrapped(json!({
+            "claims": [{"text": "A thing can be removed."}, {"text": "A removed thing is gone."}],
+            "tasks": [{"text": "Build it", "settles": ["AC-1", 1, 2]}],
+        })),
+    );
+    repo.commit("plan proposes claims");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("accepted 2 [proposed] claims"),
+        "{}",
+        run.stdout
+    );
+    let claims = repo.read(&format!("{DIR}/claims.md"));
+    assert!(!claims.contains("[proposed]"), "{claims}");
+    assert!(
+        claims.contains("- [AC-3] A thing can be removed.\n"),
+        "{claims}"
+    );
+    assert!(
+        claims.contains("- [AC-4] A removed thing is gone.\n"),
+        "{claims}"
+    );
+}

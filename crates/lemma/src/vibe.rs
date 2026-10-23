@@ -1,6 +1,6 @@
 use crate::annotate::frontmatter_len;
 use crate::build;
-use crate::claims::review_lines;
+use crate::claims::{accept_proposed, review_lines};
 use crate::context;
 use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART};
 use crate::plan;
@@ -46,7 +46,8 @@ pub fn run(
     println!("draft: {} {}", delta.id, delta.title);
     review_rounds(root, &delta.id, rounds, config)?;
     strip_review_lines(root, &delta.id)?;
-    plan(root, &delta.id, config)
+    plan(root, &delta.id, config)?;
+    accept(root, &delta.id)
 }
 
 fn spec_ids(store: &Store) -> Vec<String> {
@@ -257,5 +258,13 @@ fn plan(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> {
     let values = context::assemble(&store, root, &delta);
     let report = plan::plan(root, &delta, &values, config)?;
     report.lines().iter().for_each(|line| println!("{line}"));
+    Ok(())
+}
+
+fn accept(root: &Path, id: &str) -> Result<(), String> {
+    let (_, delta) = build::load_delta(root, id)?;
+    let (claims, accepted) = accept_proposed(&plan::read(root, &delta, CLAIMS_PART));
+    write(root, &delta, CLAIMS_PART, &claims)?;
+    println!("accepted {accepted} [proposed] claims");
     Ok(())
 }
