@@ -12,11 +12,13 @@
 - [AC-5] Under vibe, a draft reply that `fill` rejects is asked again with the rejection message.
   @ref crates/lemma/tests/vibe.rs#a_draft_reply_fill_rejects_is_asked_again_with_the_rejection
 - [AC-6] Under vibe, draft → in-progress gate findings go to a revise call and the gate runs again.
+  @ref crates/lemma/tests/vibe.rs#gate_findings_go_to_revise_and_the_gate_runs_again
 - [AC-7] Under vibe, a build task that stops for any reason other than an environment error (rounds run out, reviewer stop verdict, left unticked) has its tracked changes reset and the untracked files it created removed, keeping untracked files that were there before it started, and is replaced in `tasks.md` by re-planned tasks that settle the same claims. Build then continues.
 - [AC-8] Re-planned tasks get ids after the highest existing task id, and ticked tasks are unchanged.
 - [AC-9] Plain `lemma build` still stops on a task that runs out of review rounds.
   @ref crates/lemma/tests/build.rs#plain_build_stops_on_a_task_that_runs_out_of_review_rounds
 - [AC-10] A vibe draft, plan or gate stage stops after `vibe_repairs` re-asks (default 3).
+  @ref crates/lemma/tests/vibe.rs#draft_plan_and_gate_stages_stop_after_vibe_repairs_re_asks
 - [AC-11] vibe build stops when a task at re-plan depth `vibe_repairs` stops, whatever its ending. Tasks from the first plan are at depth 0, so with the default a task line is re-planned at most 3 times. A replacement task has its parent's depth plus one, chores included.
 - [AC-12] A re-plan proposes no new claims; its tasks settle exactly the stopped task's claims.
 - [AC-13] vibe stops on an environment error (runner or check command can't start) without a repair attempt.

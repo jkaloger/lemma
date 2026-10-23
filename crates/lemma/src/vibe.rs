@@ -1,9 +1,11 @@
 use crate::advance;
+use crate::annotate::annotate;
 use crate::annotate::frontmatter_len;
 use crate::build;
 use crate::builds;
 use crate::claims::{accept_proposed, review_lines};
 use crate::context;
+use crate::lint;
 use crate::output::{self, Look, Mode, Tone};
 use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART, TASKS_PART};
 use crate::plan;
@@ -193,7 +195,7 @@ fn stages(
     })?;
     let moving = format!("lazyspec update {id} --status in-progress");
     ledger.stage(5, "build", Tone::Green, |ledger| {
-        in_progress(root, id).map_err(|m| stopped(m, &moving))?;
+        in_progress(root, id, config).map_err(|m| stopped(m, &moving))?;
         let built = run_build(root, id, config);
         ledger.ticked(root, id);
         built
@@ -452,9 +454,51 @@ fn accept(root: &Path, id: &str) -> Result<usize, String> {
     Ok(accepted)
 }
 
-fn in_progress(root: &Path, id: &str) -> Result<(), String> {
-    let (store, delta) = build::load_delta(root, id)?;
-    advance::unasked(root, &store, &delta)
+/// Gate errors go to revise as review lines until the gate passes or the repairs run out;
+/// then the move reports whatever errors are left.
+fn in_progress(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> {
+    let mut repairs = 0;
+    loop {
+        let (store, delta) = build::load_delta(root, id)?;
+        let errors: Vec<_> = advance::gate_findings(&store, root, id)
+            .into_iter()
+            .filter(lint::Finding::is_error)
+            .collect();
+        if errors.is_empty() || repairs == config.vibe_repairs {
+            return advance::unasked(root, &store, &delta);
+        }
+        repairs += 1;
+        errors.iter().for_each(|f| eprintln!("{}", f.render()));
+        annotate_gate_errors(root, &delta, &errors)?;
+        revise(root, id, config)?;
+        strip_review_lines(root, id)?;
+    }
+}
+
+fn annotate_gate_errors(root: &Path, delta: &Doc, errors: &[lint::Finding]) -> Result<(), String> {
+    for error in errors {
+        let part = finding_part(delta, error);
+        let file = plan::read(root, delta, part);
+        let annotated = annotate(part, &file, "", &error.message)
+            .ok_or_else(|| format!("cannot annotate {part}: {}", error.message))?;
+        write(root, delta, part, &annotated)?;
+    }
+    Ok(())
+}
+
+/// Revise rewrites index, design and claims, so a finding it cannot place lands in the index.
+fn finding_part(delta: &Doc, finding: &lint::Finding) -> &'static str {
+    let named = |part: &&str| {
+        finding.part.as_deref() == Some(*part)
+            || finding
+                .path
+                .as_deref()
+                .is_some_and(|path| path.ends_with(&part_file(delta, part)))
+    };
+    [DESIGN_PART, CLAIMS_PART]
+        .into_iter()
+        .find(|part| named(part))
+        .unwrap_or(INDEX_PART)
 }
 
 fn run_build(root: &Path, id: &str, config: &runner::Config) -> Result<(), Stopped> {

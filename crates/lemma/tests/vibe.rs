@@ -485,7 +485,124 @@ fn draft_without_intent(repo: &Repo) {
         "claims": ["A thing can be added.", "An added thing is listed."],
     });
     repo.write("draft.json", &wrapped(reply));
+    repo.write("revised.json", &revision(""));
     repo.commit("draft has no intent");
+}
+
+/// A revise reply that keeps the claim ids plan assigned, with `intent` as its intent.
+fn revision(intent: &str) -> String {
+    wrapped(json!({
+        "index": format!("## Intent\n\n{intent}\n\n## Out of scope\n\n- Removing things."),
+        "design": "Add the thing to the list.",
+        "claims": "- [AC-1] A thing can be added.\n- [AC-2] An added thing is listed.",
+    }))
+}
+
+/// Saves revise prompt n as `revise-prompt-n.txt`.
+fn keeping_revise_prompts(repo: &Repo) {
+    let arm = r#"echo revise >> calls.log
+  cp prompt.txt revise-prompt-$(grep -c '^revise$' calls.log).txt
+  cat revised.json ;;"#;
+    repo.write(
+        "runner.sh",
+        &DISPATCH.replace("echo revise >> calls.log; cat revised.json ;;", arm),
+    );
+    repo.write(
+        ".gitignore",
+        "calls.log\nprompt.txt\nlazyspec.log\nrevise-prompt-*.txt\n",
+    );
+    repo.commit("keep revise prompts");
+}
+
+#[test]
+fn gate_findings_go_to_revise_and_the_gate_runs_again() {
+    let repo = vibing(&[]);
+    draft_without_intent(&repo);
+    repo.write("revised.json", &revision("Things are missing."));
+    keeping_revise_prompts(&repo);
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(calls(&repo), ["draft", "review", "plan", "revise"]);
+    let prompt = repo.read("revise-prompt-1.txt");
+    assert!(
+        prompt.contains("> review: missing or empty `## Intent` section"),
+        "{prompt}"
+    );
+    no_review_lines(&repo);
+    assert_eq!(status(&repo), "in-progress");
+    assert!(repo
+        .read(&format!("{DIR}/index.md"))
+        .contains("## Intent\n\nThings are missing.\n"));
+    assert!(repo
+        .read(&format!("{DIR}/tasks.md"))
+        .contains("- [x] T1 Build it (settles AC-1, AC-2)\n"));
+}
+
+#[test]
+fn draft_plan_and_gate_stages_stop_after_vibe_repairs_re_asks() {
+    let draft_next = "next: lemma vibe -m …\n";
+    let plan_next = "next: lemma plan DELTA-001\n";
+    let gate_next = "next: lazyspec update DELTA-001 --status in-progress\n";
+    let repeated = |call: &str, n: usize| vec![call.to_string(); n];
+
+    let repo = vibing(&[]);
+    repo.write("draft.json", &draft_reply(&["SPEC-009"]));
+    repo.commit("every draft names an unknown spec");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "draft: {}{}", run.stdout, run.stderr);
+    assert_eq!(calls(&repo), repeated("draft", 4));
+    assert!(run.stdout.ends_with(draft_next), "draft: {}", run.stdout);
+
+    let repo = vibing(&[]);
+    repo.write(
+        "planned.json",
+        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1}})),
+    );
+    repo.commit("every plan leaves AC-2 unsettled");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "plan: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        [
+            repeated("draft", 1),
+            repeated("review", 1),
+            repeated("plan", 4)
+        ]
+        .concat()
+    );
+    assert!(run.stdout.ends_with(plan_next), "plan: {}", run.stdout);
+
+    let repo = vibing(&[]);
+    draft_without_intent(&repo);
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "gate: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        [
+            repeated("draft", 1),
+            repeated("review", 1),
+            repeated("plan", 1),
+            repeated("revise", 3)
+        ]
+        .concat()
+    );
+    assert!(run.stdout.ends_with(gate_next), "gate: {}", run.stdout);
+    assert_eq!(status(&repo), "draft");
+
+    let repo = vibing(&[]);
+    draft_without_intent(&repo);
+    let toml = repo.read("lemma.toml");
+    repo.write("lemma.toml", &format!("{toml}vibe_repairs = 1\n"));
+    repo.commit("one repair");
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 2, "one repair: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        ["draft", "review", "plan", "revise"],
+        "one repair"
+    );
 }
 
 #[test]

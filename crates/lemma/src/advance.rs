@@ -125,7 +125,7 @@ fn advance_with(
     step.commit()
 }
 
-fn gate_findings(store: &Store, root: &Path, id: &str) -> Vec<lint::Finding> {
+pub fn gate_findings(store: &Store, root: &Path, id: &str) -> Vec<lint::Finding> {
     let options = lint::Options {
         delta: Some(id),
         gate: Some(Gate::InProgress),

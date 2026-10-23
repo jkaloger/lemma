@@ -7,7 +7,7 @@
 - [x] T6 Carry stopped task id, ending and base in build stop (settles AC-9)
 - [x] T7 Add vibe_repairs and re-ask draft replies fill rejects (settles AC-5)
 - [x] T8 Re-ask plan errors under vibe (settles AC-17)
-- [ ] T9 Send gate findings to revise and rerun gate under vibe (settles AC-6, AC-10)
+- [x] T9 Send gate findings to revise and rerun gate under vibe (settles AC-6, AC-10)
 - [ ] T10 Add re-plan mode for one stopped task (settles AC-8, AC-12, AC-15)
 - [ ] T11 Reset and re-plan stopped build tasks under vibe (settles AC-7, AC-11, AC-13)
 - [ ] T12 Re-ask invalid re-plan replies up to the cap (settles AC-14)
