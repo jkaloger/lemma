@@ -37,6 +37,27 @@ struct PlanTask {
 
 type Known = Vec<(String, String)>;
 
+/// A rejected reply, or a runner that ran and failed, can be asked again; a failure (a runner
+/// that can't start, an unreadable delta) cannot.
+pub enum Error {
+    Rejected(String),
+    Failed(String),
+}
+
+impl Error {
+    pub fn message(self) -> String {
+        match self {
+            Error::Rejected(message) | Error::Failed(message) => message,
+        }
+    }
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Error::Failed(message)
+    }
+}
+
 #[derive(Default)]
 pub struct Report {
     already_planned: bool,
@@ -404,6 +425,7 @@ fn write_changed(
     std::fs::write(&path, after).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ask_planner(
     root: &Path,
     delta: &Doc,
@@ -411,14 +433,22 @@ fn ask_planner(
     files: &Files,
     parsed: &Tasks,
     config: &runner::Config,
-) -> Result<Drafted, String> {
+    rejected: Option<&str>,
+    asked: &mut u32,
+) -> Result<Drafted, Error> {
     let tagged = tag_bullets(&files.claims);
     let mut values = values.clone();
     values.insert("claims", tagged.claims_text.clone());
-    let prompt = prompts::rendered(Prompt::Plan, root, &values)?;
+    let mut prompt = prompts::rendered(Prompt::Plan, root, &values)?;
+    if let Some(rejection) = rejected {
+        prompt.push_str(&format!(
+            "\n\nYour last reply was rejected: {rejection}. Reply again.\n"
+        ));
+    }
     let env = [("LEMMA_DELTA", delta.id.as_str())];
     let schema = schema::plan(&unsettled(&tagged.claims_text, parsed));
-    let ask = |prompt: &str| -> Result<Reply, String> {
+    let mut ask = |prompt: &str| -> Result<Reply, Error> {
+        *asked += 1;
         let reply = runner::tracked(
             "plan",
             &config.reviewer,
@@ -428,8 +458,15 @@ fn ask_planner(
             config.timeout,
             Some(&schema),
             config.mode,
+        )
+        .map_err(
+            |failed| match failed.message.starts_with(runner::CANNOT_START) {
+                true => Error::Failed(failed.message),
+                false => Error::Rejected(failed.message),
+            },
         )?;
-        serde_json::from_value(reply.json()?).map_err(|e| format!("planner reply: {e}"))
+        let json = reply.json().map_err(Error::Rejected)?;
+        serde_json::from_value(json).map_err(|e| Error::Rejected(format!("planner reply: {e}")))
     };
     let mut reply = ask(&prompt)?;
     if let Some(error) = out_of_range(&reply) {
@@ -437,8 +474,8 @@ fn ask_planner(
             "{prompt}\n\nYour last reply was rejected: {error}. Reply again with every task position inside `tasks`.\n"
         ))?;
     }
-    let drafted = draft(files, parsed, tagged, reply)?;
-    refuse_uncovered(&drafted)?;
+    let drafted = draft(files, parsed, tagged, reply).map_err(Error::Rejected)?;
+    refuse_uncovered(&drafted).map_err(Error::Rejected)?;
     Ok(drafted)
 }
 
@@ -458,12 +495,15 @@ fn refuse_uncovered(drafted: &Drafted) -> Result<(), String> {
     }
 }
 
+/// `rejected` is the error from the last attempt, shown to the planner; `asked` counts its calls.
 pub fn plan(
     root: &Path,
     delta: &Doc,
     values: &BTreeMap<&str, String>,
     config: &runner::Config,
-) -> Result<Report, String> {
+    rejected: Option<&str>,
+    asked: &mut u32,
+) -> Result<Report, Error> {
     let files = Files {
         index: read(root, delta, INDEX_PART),
         claims: read(root, delta, CLAIMS_PART),
@@ -480,7 +520,9 @@ pub fn plan(
                 ..Report::default()
             },
         },
-        false => ask_planner(root, delta, values, &files, &parsed, config)?,
+        false => ask_planner(
+            root, delta, values, &files, &parsed, config, rejected, asked,
+        )?,
     };
     let index = tidy_index(&files.index);
     drafted.report.index_tidied = index != files.index;

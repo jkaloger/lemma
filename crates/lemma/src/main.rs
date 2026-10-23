@@ -412,7 +412,7 @@ fn plan_command(id: &str, dry_run: bool) -> ExitCode {
     if dry_run {
         return print_prompt(prompts::Prompt::Plan, root, &values);
     }
-    match plan::plan(root, delta, &values, config) {
+    match plan::plan(root, delta, &values, config, None, &mut 0) {
         Ok(report) => {
             report.lines().iter().for_each(|line| println!("{line}"));
             next(format!(
@@ -421,7 +421,7 @@ fn plan_command(id: &str, dry_run: bool) -> ExitCode {
             ));
             ExitCode::SUCCESS
         }
-        Err(message) => fail(message),
+        Err(error) => fail(error.message()),
     }
 }
 

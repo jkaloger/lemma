@@ -27,5 +27,7 @@
   @ref crates/lemma/tests/build.rs#a_check_that_cannot_start_is_an_error_that_leaves_a_resumable_record
   @ref crates/lemma/tests/build.rs#a_failed_commit_is_an_error_and_resume_retries_the_commit
 - [AC-17] Under vibe, a plan stage error is asked again with the error message.
+  @ref crates/lemma/tests/vibe.rs#a_plan_error_is_asked_again_with_the_error_message
+  @ref crates/lemma/tests/vibe.rs#a_planner_that_exits_non_zero_is_asked_again
 - [AC-18] A new task that no `settled_by` value or new claim points at is written to `tasks.md` as a chore.
   @ref crates/lemma/tests/plan.rs#a_task_nothing_points_at_is_written_as_a_chore

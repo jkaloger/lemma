@@ -633,6 +633,73 @@ fn a_failing_stage_exits_2_and_prints_its_next_line() {
 }
 
 #[test]
+fn a_plan_error_is_asked_again_with_the_error_message() {
+    let repo = vibing(&[]);
+    repo.write(
+        "uncovered.json",
+        &wrapped(json!({"claims": [], "tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1}})),
+    );
+    let first_plan_uncovered = r#"echo plan >> calls.log
+  n=$(grep -c '^plan$' calls.log)
+  cp prompt.txt plan-prompt-$n.txt
+  if [ "$n" = 1 ]; then cat uncovered.json; else cat planned.json; fi ;;"#;
+    repo.write(
+        "runner.sh",
+        &DISPATCH.replace(
+            "echo plan >> calls.log; cat planned.json ;;",
+            first_plan_uncovered,
+        ),
+    );
+    repo.write(
+        ".gitignore",
+        "calls.log\nprompt.txt\nlazyspec.log\nplan-prompt-*.txt\n",
+    );
+    repo.commit("first plan leaves AC-2 unsettled");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(calls(&repo), ["draft", "review", "plan", "plan"]);
+    let first = repo.read("plan-prompt-1.txt");
+    let second = repo.read("plan-prompt-2.txt");
+    assert!(
+        second.starts_with(&first),
+        "the re-ask keeps the prompt: {second}"
+    );
+    assert!(
+        second.contains(
+            "Your last reply was rejected: plan refuses to write tasks the gate rejects:"
+        ),
+        "{second}"
+    );
+    assert!(second.contains("AC-2"), "{second}");
+    assert!(repo
+        .read(&format!("{DIR}/tasks.md"))
+        .contains("- [x] T1 Build it (settles AC-1, AC-2)\n"));
+}
+
+#[test]
+fn a_planner_that_exits_non_zero_is_asked_again() {
+    let repo = vibing(&[]);
+    let first_plan_fails = r#"echo plan >> calls.log
+  [ "$(grep -c '^plan$' calls.log)" = 1 ] && exit 1
+  cat planned.json ;;"#;
+    repo.write(
+        "runner.sh",
+        &DISPATCH.replace(
+            "echo plan >> calls.log; cat planned.json ;;",
+            first_plan_fails,
+        ),
+    );
+    repo.commit("first plan call exits 1");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(calls(&repo), ["draft", "review", "plan", "plan"]);
+}
+
+#[test]
 fn plain_mode_vibe_output_carries_no_ansi_colour_codes() {
     let repo = vibing(&["Intent is vague."]);
 

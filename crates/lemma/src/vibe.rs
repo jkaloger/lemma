@@ -420,9 +420,28 @@ fn strip_review_lines(root: &Path, id: &str) -> Result<(), String> {
 fn plan(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> {
     let (store, delta) = build::load_delta(root, id)?;
     let values = context::assemble(&store, root, &delta);
-    let report = plan::plan(root, &delta, &values, config)?;
-    report.lines().iter().for_each(|line| println!("{line}"));
-    Ok(())
+    let mut asked = 0;
+    let mut rejected = None;
+    loop {
+        match plan::plan(
+            root,
+            &delta,
+            &values,
+            config,
+            rejected.as_deref(),
+            &mut asked,
+        ) {
+            Ok(report) => {
+                report.lines().iter().for_each(|line| println!("{line}"));
+                return Ok(());
+            }
+            Err(plan::Error::Failed(message)) => return Err(message),
+            Err(plan::Error::Rejected(message)) if asked > config.vibe_repairs => {
+                return Err(message)
+            }
+            Err(plan::Error::Rejected(message)) => rejected = Some(message),
+        }
+    }
 }
 
 fn accept(root: &Path, id: &str) -> Result<usize, String> {
