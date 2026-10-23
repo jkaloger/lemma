@@ -21,6 +21,9 @@
 - [AC-14] An invalid re-plan reply is re-asked with the error, up to `vibe_repairs` times per re-plan of one task, and then vibe stops at build.
 - [AC-15] A re-plan reply with no tasks is invalid, so a stopped task, chore or not, is never dropped from `tasks.md`.
 - [AC-16] A runner or check command that can't start, or a failed git commit, makes `lemma build` return an error rather than a task stop, and the stop record still lets `--resume` pick it up.
+  @ref crates/lemma/tests/build.rs#a_runner_that_cannot_start_is_an_error_that_leaves_a_resumable_record
+  @ref crates/lemma/tests/build.rs#a_check_that_cannot_start_is_an_error_that_leaves_a_resumable_record
+  @ref crates/lemma/tests/build.rs#a_failed_commit_is_an_error_and_resume_retries_the_commit
 - [AC-17] Under vibe, a plan stage error is asked again with the error message.
 - [AC-18] A new task that no `settled_by` value or new claim points at is written to `tasks.md` as a chore.
   @ref crates/lemma/tests/plan.rs#a_task_nothing_points_at_is_written_as_a_chore

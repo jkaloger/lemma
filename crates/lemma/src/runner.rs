@@ -119,6 +119,9 @@ fn tail(text: &str) -> String {
     lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join("\n")
 }
 
+/// The message prefix of a command that could not be spawned.
+pub const CANNOT_START: &str = "cannot start";
+
 #[derive(Debug)]
 pub struct Failed {
     pub message: String,
@@ -411,7 +414,7 @@ pub fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("cannot start `{}`: {e}", argv[0]))?;
+        .map_err(|e| format!("{CANNOT_START} `{}`: {e}", argv[0]))?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let prompt = prompt.to_string();
     thread::spawn(move || {

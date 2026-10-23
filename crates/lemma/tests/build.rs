@@ -2024,3 +2024,86 @@ fn a_fresh_run_diffs_the_task_against_head() {
     assert!(task_diff.contains("+pub fn two() {}"), "{task_diff}");
     assert!(!task_diff.contains("pub fn one()"), "{task_diff}");
 }
+
+fn fail_commits(repo: &Repo) {
+    repo.write(".git/hooks/pre-commit", "#!/bin/sh\nexit 1\n");
+    std::fs::set_permissions(
+        repo.path(".git/hooks/pre-commit"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_runner_that_cannot_start_is_an_error_that_leaves_a_resumable_record() {
+    let repo = project("in-progress", single_task());
+    let command = repo.path(".fixture/missing-runner").display().to_string();
+    repo.write(
+        "lemma.toml",
+        &format!(
+            "runner = \"{command}\"\nreviewer = \"{} {{schema_file}}\"\n",
+            repo.path("fake-reviewer.sh").display()
+        ),
+    );
+    repo.commit("missing runner");
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stderr.contains(&format!(
+            "lemma: T1 stopped on an environment error: runner: cannot start `{command}`: "
+        )),
+        "{}",
+        run.stderr
+    );
+    let record = record(&repo);
+    assert_eq!(record["task"], "T1");
+    assert_eq!(record["ending"], "unticked");
+}
+
+#[test]
+fn a_check_that_cannot_start_is_an_error_that_leaves_a_resumable_record() {
+    let repo = project("in-progress", single_task());
+    let command = repo.path(".fixture/missing-check").display().to_string();
+    install_fakes_with(&repo, "", &format!("check = \"{command}\"\n"));
+    repo.commit("check");
+    one_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stderr.contains(&format!(
+            "lemma: T1 stopped on an environment error: check: cannot start `{command}`: "
+        )),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(record(&repo)["task"], "T1");
+}
+
+#[test]
+fn a_failed_commit_is_an_error_and_resume_retries_the_commit() {
+    let repo = project("in-progress", single_task());
+    fail_commits(&repo);
+    one_task_fixtures(&repo);
+
+    let run = build(&repo, &[]);
+
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert!(
+        run.stderr
+            .contains("lemma: T1 stopped on an environment error: commit failed"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(record(&repo)["ending"], "ticked");
+
+    std::fs::remove_file(repo.path(".git/hooks/pre-commit")).unwrap();
+    let resumed = build(&repo, &["--resume"]);
+
+    assert_eq!(resumed.code, 0, "{}{}", resumed.stdout, resumed.stderr);
+    assert_eq!(subjects(&repo)[0], "DELTA-001 T1: reopen");
+    assert!(!repo.path(RECORD).exists());
+}

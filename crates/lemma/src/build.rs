@@ -25,6 +25,8 @@ pub enum Outcome {
 
 enum Ending {
     Unticked,
+    /// Unticked because a runner or check command could not start.
+    Unstarted,
     /// Unticked by a check failure, which a fix round may clear.
     Checked,
     Ticked,
@@ -42,6 +44,18 @@ struct Failure {
 impl Failure {
     fn at(self, transcript: Option<String>) -> Failure {
         Failure { transcript, ..self }
+    }
+
+    fn environmental(self) -> Failure {
+        Failure {
+            ending: Ending::Unstarted,
+            ..self
+        }
+    }
+
+    /// No fix round or re-plan can clear it, so `build::run` returns it as an error.
+    fn is_environment(&self) -> bool {
+        matches!(self.ending, Ending::Unstarted | Ending::Ticked)
     }
 
     fn in_session(self, session: Option<&str>) -> Failure {
@@ -347,9 +361,13 @@ fn runner_reply(
 }
 
 fn failed_call(name: &str, failed: runner::Failed) -> Failure {
-    unticked(vec![format!("   {name}: {}", failed.message)])
+    let failure = unticked(vec![format!("   {name}: {}", failed.message)])
         .at(failed.transcript)
-        .in_session(failed.session.as_deref())
+        .in_session(failed.session.as_deref());
+    match failed.message.starts_with(runner::CANNOT_START) {
+        true => failure.environmental(),
+        false => failure,
+    }
 }
 
 fn accept(
@@ -710,7 +728,7 @@ fn check_command(
     block: &Block,
 ) -> Result<(), Failure> {
     let ran = run_check(root, command, timeout)
-        .map_err(|message| unticked(vec![format!("   check: {message}")]))?;
+        .map_err(|message| unticked(vec![format!("   check: {message}")]).environmental())?;
     let header = match ran.status {
         None => format!("check: {command} timed out after {}s", timeout.as_secs()),
         Some(status) if status.success() => {
@@ -971,7 +989,7 @@ const RETRIED_TRAILER: &str = "Lemma-Review: passed before a failed commit";
 
 fn record_stop(root: &Path, delta: &Doc, task: &Task, base: String, failure: &Failure) {
     let ending = match failure.ending {
-        Ending::Unticked | Ending::Checked => "unticked",
+        Ending::Unticked | Ending::Unstarted | Ending::Checked => "unticked",
         Ending::Ticked => "ticked",
         Ending::Reviewed(_) => "reviewed",
     };
@@ -991,7 +1009,7 @@ fn record_stop(root: &Path, delta: &Doc, task: &Task, base: String, failure: &Fa
 fn report(failure: &Failure, task: &Task, look: &Look) {
     let ending = match &failure.ending {
         Ending::Ticked => "ticked but not committed".to_string(),
-        Ending::Unticked | Ending::Checked => "left unticked".to_string(),
+        Ending::Unticked | Ending::Unstarted | Ending::Checked => "left unticked".to_string(),
         Ending::Reviewed(why) => why.clone(),
     };
     let stopped = format!("   stopped. {} {ending}; working tree kept.", task.id);
@@ -1008,6 +1026,14 @@ fn report(failure: &Failure, task: &Task, look: &Look) {
     runner::stop_lines(&detail, stopped, transcript)
         .iter()
         .for_each(|line| println!("{line}"));
+}
+
+fn environment_error(task: &Task, failure: &Failure) -> String {
+    let why = failure.detail.first().map_or("", |line| line.trim());
+    format!(
+        "{} stopped on an environment error: {why}; rerun with --resume",
+        task.id
+    )
 }
 
 pub(crate) const DIRTY_TREE: &str = "build needs a clean working tree; commit or stash first";
@@ -1149,6 +1175,9 @@ pub fn run(
                 println!("{collapsed}");
             }
             report(&failure, task, &look);
+            if failure.is_environment() {
+                return Err(environment_error(task, &failure));
+            }
             return Ok(Outcome::Stopped);
         }
         if only.is_some() {
