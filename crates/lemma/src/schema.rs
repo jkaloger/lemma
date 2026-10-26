@@ -99,6 +99,22 @@ pub fn plan(unsettled: &[String]) -> Value {
     }))
 }
 
+/// A re-plan of one stopped task: at least one task, `settled_by` keyed by exactly the
+/// stopped task's claims, and no new claims.
+pub fn replan(claims: &[String]) -> Value {
+    let position = json!({"type": "integer", "minimum": 1});
+    let settled_by: serde_json::Map<String, Value> = claims
+        .iter()
+        .map(|id| (id.clone(), position.clone()))
+        .collect();
+    let mut tasks = array_of(object(json!({"text": task_text()})));
+    tasks["minItems"] = json!(1);
+    object(json!({
+        "tasks": tasks,
+        "settled_by": object(Value::Object(settled_by)),
+    }))
+}
+
 pub fn vibe(spec_ids: &[String]) -> Value {
     let text = json!({"type": "string"});
     object(json!({

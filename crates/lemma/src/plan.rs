@@ -1,12 +1,13 @@
 use crate::annotate::frontmatter_len;
 use crate::claims::{self, heading_level, lines_of, live_lines};
+use crate::gate::Finding;
 use crate::payload::{Doc, CLAIMS_PART, INDEX_PART, TASKS_PART};
 use crate::prompts::{self, Prompt};
 use crate::review::part_file;
 use crate::runner;
 use crate::schema;
 use crate::shape;
-use crate::tasks::{self, Tasks, FOLLOW_UPS};
+use crate::tasks::{self, Task, Tasks, FOLLOW_UPS};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -20,6 +21,13 @@ const HEADINGS: [(&str, &str); 2] = [("intent", "## Intent"), ("out of scope", "
 #[derive(Deserialize)]
 struct Reply {
     claims: Vec<PlanClaim>,
+    tasks: Vec<PlanTask>,
+    settled_by: BTreeMap<String, usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Replan {
     tasks: Vec<PlanTask>,
     settled_by: BTreeMap<String, usize>,
 }
@@ -530,4 +538,284 @@ pub fn plan(
     write_changed(root, delta, TASKS_PART, &files.tasks, &drafted.tasks)?;
     write_changed(root, delta, INDEX_PART, &files.index, &index)?;
     Ok(drafted.report)
+}
+
+fn replan_settles(stopped: &Task, reply: &Replan) -> Result<Vec<Vec<String>>, String> {
+    if reply.tasks.is_empty() {
+        return Err(format!("re-plan of {} has no tasks", stopped.id));
+    }
+    let wanted: HashSet<&str> = stopped.settles.iter().map(String::as_str).collect();
+    let got: HashSet<&str> = reply.settled_by.keys().map(String::as_str).collect();
+    if wanted != got {
+        let mut keys: Vec<&str> = got.into_iter().collect();
+        keys.sort();
+        return Err(format!(
+            "re-plan of {} must settle exactly {}, not {}",
+            stopped.id,
+            list_or_none(
+                &stopped
+                    .settles
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            ),
+            list_or_none(&keys)
+        ));
+    }
+    let mut settles = vec![Vec::new(); reply.tasks.len()];
+    for id in &stopped.settles {
+        let position = reply.settled_by[id];
+        settles[task_index(id, position, reply.tasks.len())?].push(id.clone());
+    }
+    Ok(settles)
+}
+
+fn list_or_none(ids: &[&str]) -> String {
+    match ids.is_empty() {
+        true => "no claims".to_string(),
+        false => ids.join(", "),
+    }
+}
+
+/// The stopped task's line swapped for the re-planned tasks, numbered after the highest id.
+fn replaced(tasks_text: &str, stopped: &Task, reply: &Replan) -> Result<(String, usize), String> {
+    let settles = replan_settles(stopped, reply)?;
+    let first = next_number(tasks::parse(tasks_text).tasks.iter().map(|t| t.number));
+    let new: Vec<String> = (first..)
+        .zip(reply.tasks.iter().zip(&settles))
+        .map(|(number, (task, settles))| task_entry(number, &task.text, settles))
+        .collect();
+    let lines = lines_of(tasks_text);
+    let mut out: Vec<&str> = lines[..stopped.line - 1].to_vec();
+    out.extend(new.iter().map(String::as_str));
+    out.extend(&lines[stopped.line..]);
+    Ok((out.join("\n"), new.len()))
+}
+
+fn findings_list(findings: &[Finding]) -> String {
+    match findings.is_empty() {
+        true => "None.".to_string(),
+        false => findings
+            .iter()
+            .map(|f| format!("- [{}] {}", f.basis, f.text))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// Asks the planner to replace one stopped task and writes its tasks in the stopped line's
+/// place; returns how many it wrote. Unlike `plan`, this runs on an in-progress delta.
+#[allow(dead_code)]
+pub fn replan(
+    root: &Path,
+    delta: &Doc,
+    values: &BTreeMap<&str, String>,
+    config: &runner::Config,
+    stopped: &Task,
+    findings: &[Finding],
+) -> Result<usize, Error> {
+    let tasks_text = read(root, delta, TASKS_PART);
+    let mut values = values.clone();
+    values.insert(
+        "task",
+        task_entry(stopped.number, &stopped.text, &stopped.settles),
+    );
+    values.insert("findings", findings_list(findings));
+    values.insert("tasks", tasks_text.clone());
+    let prompt = prompts::rendered(Prompt::Replan, root, &values)?;
+    let schema = schema::replan(&stopped.settles);
+    let reply = runner::tracked(
+        "re-plan",
+        &config.reviewer,
+        &prompt,
+        root,
+        &[("LEMMA_DELTA", delta.id.as_str())],
+        config.timeout,
+        Some(&schema),
+        config.mode,
+    )
+    .map_err(
+        |failed| match failed.message.starts_with(runner::CANNOT_START) {
+            true => Error::Failed(failed.message),
+            false => Error::Rejected(failed.message),
+        },
+    )?;
+    let json = reply.json().map_err(Error::Rejected)?;
+    let reply: Replan =
+        serde_json::from_value(json).map_err(|e| Error::Rejected(format!("re-plan reply: {e}")))?;
+    let (text, written) = replaced(&tasks_text, stopped, &reply).map_err(Error::Rejected)?;
+    write_changed(root, delta, TASKS_PART, &tasks_text, &text)?;
+    Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::Mode;
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    const TASKS: &str = "\
+- [x] T1 Add the type (settles AC-1)
+- [ ] T2 Serve the balance (settles AC-2, AC-3)
+- [ ] T3 Wire the route (chore)
+
+## Follow-ups
+- [ ] T7 Page the read (chore)
+";
+
+    struct Fixture {
+        root: tempfile::TempDir,
+        delta: Doc,
+        config: runner::Config,
+    }
+
+    /// A delta whose planner replies `reply` to every call.
+    fn fixture(reply: serde_json::Value) -> Fixture {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("d")).unwrap();
+        std::fs::write(root.path().join("d/tasks.md"), TASKS).unwrap();
+        let envelope = json!({"result": reply.to_string()}).to_string();
+        std::fs::write(root.path().join("reply.json"), envelope).unwrap();
+        let script = root.path().join("planner.sh");
+        std::fs::write(&script, "#!/bin/sh\ncat > stdin.txt\ncat reply.json\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let delta: Doc = serde_json::from_value(json!({
+            "id": "DELTA-001", "path": "d/index.md", "title": "t", "type": "delta",
+            "status": "in_progress", "body": "", "content_hash": "h",
+        }))
+        .unwrap();
+        let script = script.to_string_lossy().into_owned();
+        let config = runner::Config {
+            runner: script.clone(),
+            reviewer: script,
+            resume: String::new(),
+            review_rounds: 3,
+            vibe_repairs: 3,
+            timeout: Duration::from_secs(30),
+            mode: Mode::Plain,
+            check: None,
+        };
+        Fixture {
+            root,
+            delta,
+            config,
+        }
+    }
+
+    impl Fixture {
+        fn replan(&self, id: &str) -> Result<usize, Error> {
+            let parsed = tasks::parse(TASKS);
+            let stopped = parsed.named(id).unwrap();
+            let findings = [Finding {
+                text: "too big".to_string(),
+                basis: "task".to_string(),
+            }];
+            replan(
+                self.root.path(),
+                &self.delta,
+                &BTreeMap::new(),
+                &self.config,
+                stopped,
+                &findings,
+            )
+        }
+
+        fn tasks(&self) -> String {
+            std::fs::read_to_string(self.root.path().join("d/tasks.md")).unwrap()
+        }
+
+        fn prompt(&self) -> String {
+            std::fs::read_to_string(self.root.path().join("stdin.txt")).unwrap()
+        }
+    }
+
+    fn rejection(result: Result<usize, Error>) -> String {
+        match result {
+            Err(Error::Rejected(message)) => message,
+            Err(Error::Failed(message)) => panic!("failed, not rejected: {message}"),
+            Ok(written) => panic!("accepted {written} tasks"),
+        }
+    }
+
+    #[test]
+    fn replanned_tasks_are_numbered_after_the_highest_id_and_ticked_tasks_are_unchanged() {
+        let fixture = fixture(json!({
+            "tasks": [{"text": "Add the balance query"}, {"text": "Serve it over HTTP"}],
+            "settled_by": {"AC-2": 1, "AC-3": 2},
+        }));
+
+        let written = fixture.replan("T2");
+
+        assert_eq!(written.ok(), Some(2));
+        assert_eq!(
+            fixture.tasks(),
+            "\
+- [x] T1 Add the type (settles AC-1)
+- [ ] T8 Add the balance query (settles AC-2)
+- [ ] T9 Serve it over HTTP (settles AC-3)
+- [ ] T3 Wire the route (chore)
+
+## Follow-ups
+- [ ] T7 Page the read (chore)
+"
+        );
+        let prompt = fixture.prompt();
+        assert!(prompt.contains("- [ ] T2 Serve the balance (settles AC-2, AC-3)"));
+        assert!(prompt.contains("- [task] too big"));
+    }
+
+    #[test]
+    fn a_replan_proposes_no_claims_and_settles_exactly_the_stopped_tasks_claims() {
+        let schema = schema::replan(&["AC-2".to_string(), "AC-3".to_string()]);
+        assert_eq!(schema["required"], json!(["settled_by", "tasks"]));
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"]["settled_by"]["required"],
+            json!(["AC-2", "AC-3"])
+        );
+        assert_eq!(
+            schema["properties"]["settled_by"]["additionalProperties"],
+            false
+        );
+
+        for settled_by in [
+            json!({"AC-2": 1}),
+            json!({"AC-2": 1, "AC-3": 1, "AC-1": 1}),
+            json!({"AC-2": 1, "AC-4": 1}),
+        ] {
+            let fixture = fixture(json!({"tasks": [{"text": "Redo"}], "settled_by": settled_by}));
+
+            let message = rejection(fixture.replan("T2"));
+
+            assert!(
+                message.contains("must settle exactly AC-2, AC-3"),
+                "{message}"
+            );
+            assert_eq!(fixture.tasks(), TASKS);
+        }
+        let fixture = fixture(json!({
+            "tasks": [{"text": "Redo"}],
+            "settled_by": {"AC-2": 1, "AC-3": 1},
+            "claims": [{"text": "A new behaviour.", "task": 1}],
+        }));
+        rejection(fixture.replan("T2"));
+        assert_eq!(fixture.tasks(), TASKS);
+    }
+
+    #[test]
+    fn a_replan_with_no_tasks_is_invalid_and_never_drops_the_stopped_task() {
+        let schema = schema::replan(&[]);
+        assert_eq!(schema["properties"]["tasks"]["minItems"], 1);
+
+        for (id, settled_by) in [("T2", json!({"AC-2": 1, "AC-3": 1})), ("T3", json!({}))] {
+            let fixture = fixture(json!({"tasks": [], "settled_by": settled_by}));
+
+            let message = rejection(fixture.replan(id));
+
+            assert!(message.contains("has no tasks"), "{message}");
+            assert_eq!(fixture.tasks(), TASKS);
+        }
+    }
 }
