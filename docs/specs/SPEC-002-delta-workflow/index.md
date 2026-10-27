@@ -28,9 +28,7 @@ governs:
   - "crates/lemma/src/activity.rs"
 tests:
   - "crates/lemma/tests/**"
-  - "crates/lemma/src/activity.rs"
-  - "crates/lemma/src/runner.rs"
-  - "crates/lemma/src/output.rs"
+  - "crates/lemma/src/**"
 related: []
 ---
 
