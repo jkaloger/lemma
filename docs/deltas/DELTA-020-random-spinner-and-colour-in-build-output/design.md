@@ -1,0 +1,7 @@
+Touches the live-mode progress rendering in the `lemma build` command (the module that prints stage banners, the watch line and the end-of-run summary added in DELTA-018). At the start of each task the renderer picks one spinner style at random from a small built-in table of frame sets and uses it for that task's watch line. Each style in the table has a frame set disjoint from every other style's, so a frame identifies its style. Randomness is injected as a seam so unit tests can pin the pick. The CLI exposes no way to pin it, so CLI-level tests assert properties that hold for any pick: every frame shown for a task belongs to one style in the built-in table, and all frames for a task belong to the same style.
+
+Colour extends the existing banner colouring: a small palette maps task id, running/passed/failed status and ref lines to distinct colours, applied only in live mode when `NO_COLOR` is unset.
+
+Two gates, kept separate. The terminal check live mode already uses governs both spinner and colour: when stdout is not a terminal, output is plain and unchanged. `NO_COLOR` governs colour only: on a terminal with `NO_COLOR` set, the watch line still animates with the task's spinner, in the default foreground colour, and banners and summary carry no escape codes for colour.
+
+No new dependency unless the existing colour crate lacks the needed styles. No spec constraint is broken: SPEC-002 treats the watch line as the progress surface and says nothing on its look. No dictum rules change; claims are tested through the CLI boundary (TEST-3).
