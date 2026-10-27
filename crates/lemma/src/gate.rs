@@ -95,6 +95,7 @@ pub fn review(
         config.timeout,
         Some(&schema),
         config.mode,
+        config.spinner,
     )?;
     let verdict = parse(reply.json()?, &bases)?;
     Ok((verdict, reply.session))

@@ -228,6 +228,7 @@ fn draft(root: &Path, store: &Store, prompt: &str, config: &runner::Config) -> R
             config.timeout,
             Some(&schema),
             config.mode,
+            config.spinner,
         )?;
         serde_json::from_value(reply.json()?).map_err(|e| format!("draft reply: {e}"))
     };
@@ -370,6 +371,7 @@ fn revise(root: &Path, id: &str, config: &runner::Config) -> Result<(), String> 
         config.timeout,
         Some(&schema::revise()),
         config.mode,
+        config.spinner,
     )?;
     let reply: Revision =
         serde_json::from_value(reply.json()?).map_err(|e| format!("revise reply: {e}"))?;

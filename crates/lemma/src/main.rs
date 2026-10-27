@@ -23,7 +23,6 @@ mod schema;
 mod session;
 mod shape;
 mod signal;
-#[allow(dead_code)]
 mod spinners;
 mod stop;
 mod tasks;

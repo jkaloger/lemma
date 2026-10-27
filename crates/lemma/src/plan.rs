@@ -466,6 +466,7 @@ fn ask_planner(
             config.timeout,
             Some(&schema),
             config.mode,
+            config.spinner,
         )
         .map_err(
             |failed| match failed.message.starts_with(runner::CANNOT_START) {
@@ -639,6 +640,7 @@ pub fn replan(
         config.timeout,
         Some(&schema),
         config.mode,
+        config.spinner,
     )
     .map_err(
         |failed| match failed.message.starts_with(runner::CANNOT_START) {
@@ -702,6 +704,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             mode: Mode::Plain,
             check: None,
+            spinner: None,
         };
         Fixture {
             root,

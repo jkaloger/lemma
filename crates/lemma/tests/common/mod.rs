@@ -195,6 +195,33 @@ impl Repo {
         }
     }
 
+    /// Runs lemma with stdout and stderr on one pseudo-terminal; `stdout` holds both.
+    pub fn run_on_terminal(&self, args: &[&str]) -> Run {
+        let lemma = env!("CARGO_BIN_EXE_lemma");
+        let mut script = Command::new("script");
+        if cfg!(target_os = "macos") {
+            script.args(["-q", "/dev/null", lemma]).args(args);
+        } else {
+            let words: Vec<String> = std::iter::once(lemma)
+                .chain(args.iter().copied())
+                .map(|w| format!("'{w}'"))
+                .collect();
+            script.args(["-qec", &words.join(" "), "/dev/null"]);
+        }
+        let out = script
+            .env("PATH", path_with_prepended(self.fake_bin.path()))
+            .env_remove("NO_COLOR")
+            .current_dir(self.root())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        Run {
+            code: out.status.code().unwrap(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    }
+
     pub fn spec_file(&self, n: u32, status: &str, governs: &[&str], body: &str) {
         self.spec_file_with_tests(n, status, governs, &[], body);
     }

@@ -9,7 +9,7 @@ use crate::prompts::{self, Prompt};
 use crate::review::{part_file, PARTS};
 use crate::tasks::{self, Task};
 use crate::world::World;
-use crate::{builds, context, plan, project, runner, schema};
+use crate::{builds, context, plan, project, runner, schema, spinners};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -330,6 +330,7 @@ fn runner_reply(
             config.timeout,
             Some(&schema),
             config.mode,
+            config.spinner,
         ),
         None => runner::tracked(
             &label,
@@ -340,6 +341,7 @@ fn runner_reply(
             config.timeout,
             Some(&schema),
             config.mode,
+            config.spinner,
         ),
     }
     .map_err(ran)?;
@@ -1168,6 +1170,10 @@ pub fn run(
         let Some(task) = next else {
             println!("all tasks complete");
             return Ok(Outcome::Complete);
+        };
+        let config = &runner::Config {
+            spinner: Some(spinners::random()),
+            ..config.clone()
         };
         let block = Block::on_terminal();
         let built = match &stopped {

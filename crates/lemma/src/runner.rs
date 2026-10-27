@@ -1,5 +1,6 @@
 use crate::activity::{follow, Tail};
 use crate::output::Mode;
+use crate::spinners::Style;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -33,6 +34,8 @@ pub struct Config {
     pub timeout: Duration,
     pub mode: Mode,
     pub check: Option<String>,
+    /// The live watch line's spinner; `None` keeps indicatif's default frames.
+    pub spinner: Option<&'static Style>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +74,7 @@ pub fn load(root: &Path) -> Result<Config, String> {
         timeout: Duration::from_secs(raw.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
         mode: Mode::Plain,
         check: raw.check,
+        spinner: None,
     })
 }
 
@@ -258,19 +262,32 @@ fn with_session(command: &str) -> (String, Option<String>) {
     (command.replace(SESSION, &session), Some(session))
 }
 
-fn spinner(label: &str, following: bool) -> indicatif::ProgressBar {
+fn spinner(label: &str, following: bool, style: Option<&Style>) -> indicatif::ProgressBar {
     let bar =
         indicatif::ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
     let template = match following {
         true => "{spinner} {msg}",
         false => "{spinner} {msg} {elapsed}",
     };
-    bar.set_style(
-        indicatif::ProgressStyle::with_template(template).expect("the spinner template is valid"),
-    );
+    let look =
+        indicatif::ProgressStyle::with_template(template).expect("the spinner template is valid");
+    bar.set_style(match style {
+        Some(style) => look.tick_strings(&ticks(style)),
+        None => look,
+    });
     bar.set_message(label.to_string());
     bar.enable_steady_tick(Duration::from_millis(100));
     bar
+}
+
+/// indicatif shows the last tick string once finished, so the first frame closes the cycle.
+fn ticks(style: &Style) -> Vec<&'static str> {
+    style
+        .frames
+        .iter()
+        .chain(&style.frames[..1])
+        .copied()
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -283,6 +300,7 @@ pub fn tracked(
     timeout: Duration,
     schema: Option<&Value>,
     mode: Mode,
+    style: Option<&Style>,
 ) -> Result<Reply, Failed> {
     let (command, session) = with_session(command);
     announced(
@@ -296,6 +314,7 @@ pub fn tracked(
         timeout,
         schema,
         mode,
+        style,
     )
 }
 
@@ -315,6 +334,7 @@ pub fn resumed(
     timeout: Duration,
     schema: Option<&Value>,
     mode: Mode,
+    style: Option<&Style>,
 ) -> Result<Reply, Failed> {
     announced(
         &mut std::io::stdout(),
@@ -327,6 +347,7 @@ pub fn resumed(
         timeout,
         schema,
         mode,
+        style,
     )
 }
 
@@ -342,13 +363,14 @@ fn announced(
     timeout: Duration,
     schema: Option<&Value>,
     mode: Mode,
+    style: Option<&Style>,
 ) -> Result<Reply, Failed> {
     if let Some(session) = session.as_ref().filter(|_| mode == Mode::Plain) {
         let _ = writeln!(out, "{}", watch_line(root, session));
     }
     let failed_at = transcript_line(root, session.as_deref(), mode);
     let transcript = transcript(root, session.as_deref(), mode);
-    let bar = spinner(label, transcript.is_some());
+    let bar = spinner(label, transcript.is_some(), style);
     let width = (console::Term::stderr().size().1 as usize).saturating_sub(2);
     let reply = watched(
         label,
@@ -791,6 +813,7 @@ printf '{"result": "ok", "usage": {}}'"#,
             LONG,
             None,
             Mode::Plain,
+            None,
         )
         .unwrap();
 
@@ -973,6 +996,7 @@ printf '{"result": "ok", "usage": {}}'"#,
             LONG,
             None,
             Mode::Live,
+            None,
         )
         .unwrap();
 
@@ -994,6 +1018,7 @@ printf '{"result": "ok", "usage": {}}'"#,
             LONG,
             None,
             mode,
+            None,
         )
         .unwrap_err();
         (failed, session)

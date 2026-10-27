@@ -117,6 +117,7 @@ pub fn review_draft(
         config.timeout,
         Some(&schema),
         config.mode,
+        config.spinner,
     )?;
     let findings: Vec<Finding> = parse_findings(reply.json()?)?
         .into_iter()
