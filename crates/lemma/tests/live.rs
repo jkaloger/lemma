@@ -143,3 +143,43 @@ fn piped_build_output_has_no_colour_or_spinner_frames() {
         assert!(glyphs.is_empty(), "{glyphs:?} in {out}");
     }
 }
+
+/// `text` wrapped in the SGR colour `code`, as the console crate writes it.
+fn sgr(code: u8, text: &str) -> String {
+    format!("\x1b[{code}m{text}\x1b[0m")
+}
+
+#[test]
+fn live_build_colours_task_id_status_and_ref_lines_distinctly() {
+    let (cyan, yellow, green, red, blue) = (36, 33, 32, 31, 34);
+
+    let passed = two_task_build().run_on_terminal(&["build", "DELTA-001"]);
+    assert_eq!(passed.code, 0, "{}", passed.stdout);
+    let out = &passed.stdout;
+    for shown in [
+        sgr(cyan, "T1"),
+        sgr(yellow, "runner"),
+        sgr(yellow, "review"),
+        sgr(green, "✓"),
+        sgr(
+            blue,
+            "AC-1 @ref tests/store_test.rs#reopen_keeps_prior resolves",
+        ),
+    ] {
+        assert!(out.contains(&shown), "{shown:?} not in {out:?}");
+    }
+
+    let repo = two_task_build();
+    repo.write(
+        "replies/T1.json",
+        &json!({ "structured_output": { "outcome": "blocked", "reason": "no", "refs": [] } })
+            .to_string(),
+    );
+    let failed = repo.run_on_terminal(&["build", "DELTA-001"]);
+    assert_ne!(failed.code, 0, "{}", failed.stdout);
+    let out = &failed.stdout;
+    assert!(
+        out.contains(&format!("\x1b[{red}m   stopped. T1")),
+        "red stop not in {out:?}"
+    );
+}

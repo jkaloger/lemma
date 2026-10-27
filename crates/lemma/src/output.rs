@@ -103,6 +103,18 @@ impl Look {
                 None => text.to_string(),
             };
         }
+        self.marked(glyph, text, |body| body.to_string())
+    }
+
+    /// A claim's `@ref` line: the glyph keeps the status colour, the ref text its own.
+    pub fn ref_step(&self, glyph: Glyph, text: &str) -> String {
+        if self.mode == Mode::Plain {
+            return text.to_string();
+        }
+        self.marked(glyph, text, |body| self.tone(Tone::Blue, body))
+    }
+
+    fn marked(&self, glyph: Glyph, text: &str, body_of: impl Fn(&str) -> String) -> String {
         let Some(body) = text.strip_prefix(STEP_INDENT) else {
             return text.to_string();
         };
@@ -110,16 +122,26 @@ impl Look {
             return text.to_string();
         }
         format!(
-            "{STEP_INDENT}{} {body}",
-            self.tone(glyph.tone(), glyph.mark())
+            "{STEP_INDENT}{} {}",
+            self.tone(glyph.tone(), glyph.mark()),
+            body_of(body)
         )
+    }
+
+    pub fn task_id(&self, id: &str) -> String {
+        self.tone(Tone::Cyan, id)
+    }
+
+    /// The watch line label: the task id, then the running stage.
+    pub fn watch_label(&self, id: &str, stage: &str) -> String {
+        format!("{} {}", self.task_id(id), self.tone(Tone::Yellow, stage))
     }
 
     pub fn collapsed(&self, done: &Committed) -> String {
         format!(
             "{} {} {}  {} · {} · {}",
             self.tone(Glyph::Pass.tone(), Glyph::Pass.mark()),
-            done.id,
+            self.task_id(done.id),
             done.title,
             done.elapsed,
             done.review.summary(),

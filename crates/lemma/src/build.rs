@@ -179,16 +179,16 @@ pub(crate) fn elapsed_text(elapsed: Duration) -> String {
     }
 }
 
-fn heading(task: &Task) -> String {
-    match task.chore {
-        true => format!("{} {} (chore)", task.id, task.text),
-        false => format!(
-            "{} {} (settles {})",
-            task.id,
-            task.text,
-            task.settles.join(", ")
-        ),
-    }
+fn heading(task: &Task, look: &Look) -> String {
+    let rest = match task.chore {
+        true => format!("{} (chore)", task.text),
+        false => format!("{} (settles {})", task.text, task.settles.join(", ")),
+    };
+    format!(
+        "{} {}",
+        look.task_id(&task.id),
+        look.tone(Tone::Bold, &rest)
+    )
 }
 
 #[derive(Deserialize)]
@@ -316,7 +316,7 @@ fn runner_reply(
     let ran = |failed: runner::Failed| failed_call(name, failed);
     let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
     let schema = schema::build(task);
-    let label = format!("{} {name}", task.id);
+    let label = Look::current(config.mode).watch_label(&task.id, name);
     let started = std::time::Instant::now();
     let before = tree_state(root);
     let reply = match resume {
@@ -629,7 +629,7 @@ fn check_settled(
         let lines = claim_evidence(root, &tests, claim).map_err(|line| check_failed(vec![line]))?;
         lines
             .iter()
-            .for_each(|(glyph, line)| block.say(&look.step(*glyph, line)));
+            .for_each(|(glyph, line)| block.say(&look.ref_step(*glyph, line)));
     }
     Ok(())
 }
@@ -950,7 +950,7 @@ fn build_task(
 ) -> Result<(), Failure> {
     let look = &Look::current(config.mode);
     let started = std::time::Instant::now();
-    block.say(&look.tone(Tone::Bold, &heading(task)));
+    block.say(&heading(task, look));
     let (mut built, failed) = match stopped {
         Some(stopped) => resume_checks(root, store, delta, task, stopped, config, block)
             .map_err(|f| f.in_session(stopped.session.as_deref()))?,
@@ -986,7 +986,7 @@ fn retry_commit(
     block: &Block,
 ) -> Result<(), Failure> {
     let look = &Look::current(config.mode);
-    block.say(&look.tone(Tone::Bold, &heading(task)));
+    block.say(&heading(task, look));
     block.say(&look.step(Glyph::Info, "   retrying the commit"));
     commit(root, delta, task, RETRIED_TRAILER, look, block)?;
     builds::remove(root, &delta.id);

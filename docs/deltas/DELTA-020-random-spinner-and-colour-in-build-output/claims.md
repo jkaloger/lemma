@@ -4,6 +4,7 @@
   @ref crates/lemma/tests/live.rs#one_task_keeps_one_spinner_style
 - [AC-3] [intent] The spinner style is picked once per task, drawn independently of the previous task's pick, so consecutive tasks may share or differ in style.
 - [AC-4] When stdout is a terminal and `NO_COLOR` is unset, live build output colours the task id, the task status (running, passed, failed) and the claim ref lines in distinct colours.
+  @ref crates/lemma/tests/live.rs#live_build_colours_task_id_status_and_ref_lines_distinctly
 - [AC-5] When stdout is not a terminal, build output carries no colour escape codes and no spinner frames.
   @ref crates/lemma/tests/live.rs#piped_build_output_has_no_colour_or_spinner_frames
 - [AC-6] When stdout is a terminal and `NO_COLOR` is set, build output carries no colour escape codes and the watch line still shows spinner frames.

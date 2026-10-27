@@ -1,6 +1,7 @@
 use crate::build::git_run;
 use crate::claims;
 use crate::git::git_output;
+use crate::output::Look;
 use crate::payload::{Doc, CLAIMS_PART};
 use crate::prompts::{self, Prompt};
 use crate::runner::Failed;
@@ -87,7 +88,7 @@ pub fn review(
     let env = [("LEMMA_DELTA", delta.id.as_str()), ("LEMMA_TASK", &task.id)];
     let schema = schema::review_task(&bases);
     let reply = runner::tracked(
-        &format!("{} review", task.id),
+        &Look::current(config.mode).watch_label(&task.id, "review"),
         &config.reviewer,
         &prompt,
         root,
