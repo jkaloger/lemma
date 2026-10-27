@@ -605,7 +605,6 @@ fn findings_list(findings: &[Finding]) -> String {
 
 /// Asks the planner to replace one stopped task and writes its tasks in the stopped line's
 /// place; returns how many it wrote. Unlike `plan`, this runs on an in-progress delta.
-#[allow(dead_code)]
 pub fn replan(
     root: &Path,
     delta: &Doc,

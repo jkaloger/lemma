@@ -5,6 +5,7 @@ use crate::build;
 use crate::builds;
 use crate::claims::{accept_proposed, review_lines};
 use crate::context;
+use crate::git::untracked_files;
 use crate::lint;
 use crate::output::{self, Look, Mode, Tone};
 use crate::payload::{Doc, CHANGES, CLAIMS_PART, DESIGN_PART, INDEX_PART, TASKS_PART};
@@ -18,6 +19,7 @@ use crate::tasks;
 use crate::world::World;
 use lazyspec::engine::store::Store;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -501,18 +503,117 @@ fn finding_part(delta: &Doc, finding: &lint::Finding) -> &'static str {
         .unwrap_or(INDEX_PART)
 }
 
+/// A stopped task is reset and re-planned, and the build runs again, until a task at depth
+/// `vibe_repairs` stops; depths live only for this run, keyed by task id.
 fn run_build(root: &Path, id: &str, config: &runner::Config) -> Result<(), Stopped> {
-    let message = match build::run(root, id, None, false, config) {
-        Ok(build::Outcome::Complete) => return Ok(()),
-        Ok(build::Outcome::Stopped { .. }) => None,
-        Err(message) => Some(message),
-    };
+    let mut depths: HashMap<String, u32> = HashMap::new();
+    loop {
+        let untracked = untracked_files(root);
+        let (task, base) = match build::run(root, id, None, false, config) {
+            Ok(build::Outcome::Complete) => return Ok(()),
+            Ok(build::Outcome::Stopped { task, base, .. }) => (task, base),
+            Err(message) => return Err(build_stopped(root, id, Some(message))),
+        };
+        let depth = depths.get(&task).copied().unwrap_or(0);
+        if depth == config.vibe_repairs {
+            return Err(build_stopped(root, id, None));
+        }
+        reset_task(root, &base, &untracked).map_err(|m| build_stopped(root, id, Some(m)))?;
+        let replaced =
+            replan(root, id, &task, config).map_err(|m| build_stopped(root, id, Some(m)))?;
+        depths.extend(replaced.into_iter().map(|t| (t, depth + 1)));
+    }
+}
+
+fn build_stopped(root: &Path, id: &str, message: Option<String>) -> Stopped {
     let next = match builds::read(root, id) {
         Some(_) => format!("lemma build {id} --resume"),
         None => format!("lemma build {id}"),
     };
-    Err(Stopped {
+    Stopped {
         message,
         next: Some(next),
-    })
+    }
+}
+
+/// Discards the stopped task's diff: tracked files back to its base, and the untracked
+/// files it created removed, keeping those that were `before` it.
+fn reset_task(root: &Path, base: &str, before: &[String]) -> Result<(), String> {
+    build::git_run(root, &["reset", "-q", "--hard", base])
+        .map_err(|e| format!("cannot reset to {base}: {e}"))?;
+    for path in untracked_files(root) {
+        if before.contains(&path) {
+            continue;
+        }
+        std::fs::remove_file(root.join(&path)).map_err(|e| format!("cannot remove {path}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Replaces the stopped task in `tasks.md`, commits it and returns the new task ids.
+fn replan(
+    root: &Path,
+    id: &str,
+    task: &str,
+    config: &runner::Config,
+) -> Result<Vec<String>, String> {
+    let findings = builds::read(root, id)
+        .map(|s| s.findings)
+        .unwrap_or_default();
+    builds::remove(root, id);
+    let (store, delta) = build::load_delta(root, id)?;
+    let before = tasks::parse(delta.part_body(TASKS_PART));
+    let stopped = before
+        .named(task)
+        .ok_or(format!("{task} is not in {id} tasks.md"))?;
+    let values = context::assemble(&store, root, &delta);
+    plan::replan(root, &delta, &values, config, stopped, &findings)
+        .map_err(plan::Error::message)?;
+    let (_, delta) = build::load_delta(root, id)?;
+    let replaced: Vec<String> = tasks::parse(delta.part_body(TASKS_PART))
+        .tasks
+        .into_iter()
+        .filter(|t| before.named(&t.id).is_none())
+        .map(|t| t.id)
+        .collect();
+    println!("re-planned {task} as {}", replaced.join(", "));
+    let path = delta.part_path(TASKS_PART);
+    build::git_run(root, &["add", "--", &path])
+        .and_then(|_| {
+            build::git_run(
+                root,
+                &["commit", "-q", "-m", &format!("{id}: re-plan {task}")],
+            )
+        })
+        .map_err(|e| format!("re-plan of {task} not committed: {e}"))?;
+    Ok(replaced)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testgit::Repo;
+
+    #[test]
+    fn a_reset_keeps_untracked_files_from_before_the_task_and_removes_the_tasks_own() {
+        let repo = Repo::new();
+        repo.write("src/lib.rs", "pub fn a() {}\n");
+        let base = repo.commit("init");
+        repo.write("notes.txt", "mine\n");
+        let before = untracked_files(repo.root());
+        repo.write("src/lib.rs", "changed\n");
+        repo.write("scratch/new.txt", "x\n");
+
+        reset_task(repo.root(), &base, &before).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(repo.path("src/lib.rs")).unwrap(),
+            "pub fn a() {}\n"
+        );
+        assert!(!repo.path("scratch/new.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(repo.path("notes.txt")).unwrap(),
+            "mine\n"
+        );
+    }
 }

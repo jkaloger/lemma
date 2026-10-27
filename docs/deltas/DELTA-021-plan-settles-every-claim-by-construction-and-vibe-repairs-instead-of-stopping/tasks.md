@@ -9,5 +9,5 @@
 - [x] T8 Re-ask plan errors under vibe (settles AC-17)
 - [x] T9 Send gate findings to revise and rerun gate under vibe (settles AC-6, AC-10)
 - [x] T10 Add re-plan mode for one stopped task (chore)
-- [ ] T11 Reset and re-plan stopped build tasks under vibe (settles AC-7, AC-8, AC-11, AC-12, AC-13, AC-15)
+- [x] T11 Reset and re-plan stopped build tasks under vibe (settles AC-7, AC-8, AC-11, AC-12, AC-13, AC-15)
 - [ ] T12 Re-ask invalid re-plan replies up to the cap (settles AC-14)

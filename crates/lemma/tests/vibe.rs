@@ -223,7 +223,7 @@ fn a_draft_that_fails_after_create_deletes_the_delta() {
     assert!(!repo.path(DIR).exists());
 }
 
-/// Answers each prompt by its opening line, logging `draft`, `review`, `revise` or `plan` to
+/// Answers each prompt by its opening line, logging `draft`, `review`, `revise`, `plan` or `replan` to
 /// `calls.log`. Review call n replies `review-n.json`, or clean when there is none. A build
 /// task replies `built.json`; its task review is clean.
 const DISPATCH: &str = r#"#!/bin/sh
@@ -236,6 +236,7 @@ case "$(head -1 prompt.txt)" in
   if [ -e review-$n.json ]; then cat review-$n.json; else cat clean.json; fi ;;
 "You are revising"*) echo revise >> calls.log; cat revised.json ;;
 "You are planning"*) echo plan >> calls.log; cat planned.json ;;
+"You are re-planning"*) echo replan >> calls.log; cat replanned.json ;;
 "You are carrying out"*) cat built.json ;;
 "You are reviewing one task"*) echo '{"structured_output": {"stop": "", "findings": []}}' ;;
 esac
@@ -638,7 +639,9 @@ fn a_build_that_stops_a_task_exits_2_and_names_the_resume() {
         &json!({"structured_output": {"outcome": "blocked", "reason": "cannot", "refs": []}})
             .to_string(),
     );
-    repo.commit("block the task");
+    let toml = repo.read("lemma.toml");
+    repo.write("lemma.toml", &format!("{toml}vibe_repairs = 0\n"));
+    repo.commit("block the task, with no re-plan");
 
     let run = repo.run(&["vibe", "-m", "add a thing"], "");
 
@@ -825,4 +828,325 @@ fn plain_mode_vibe_output_carries_no_ansi_colour_codes() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(!run.stdout.contains('\u{1b}'), "{:?}", run.stdout);
     assert!(!run.stderr.contains('\u{1b}'), "{:?}", run.stderr);
+}
+
+/// Builds each task by its line in the prompt. A task naming `STOP`, `VETO` or `FIXME`
+/// changes a tracked file and creates `scratch/new.txt`; `STOP` then replies blocked, the
+/// task reviewer gives `VETO` a stop verdict and `FIXME` a finding every round. Any other
+/// task is done with refs for its claims, and a fix round repeats the task's reply.
+const BUILD_BY_TASK: &str = r#""You are carrying out"*)
+  task=$(sed -n 3p prompt.txt)
+  case "$task" in
+  *STOP*|*VETO*|*FIXME*) echo changed >> src/lib.rs; mkdir -p scratch; echo x > scratch/new.txt ;;
+  esac
+  case "$task" in
+  *STOP*) reply=blocked.json ;;
+  *"settles AC-1, AC-2"*) reply=ref-1-2.json ;;
+  *"settles AC-1"*) reply=ref-1.json ;;
+  *"settles AC-2"*) reply=ref-2.json ;;
+  *) reply=chore.json ;;
+  esac
+  cp $reply last.json; cat $reply ;;
+"A reviewer read your work"*) cat last.json ;;
+"You are reviewing one task"*)
+  case "$(sed -n 3p prompt.txt)" in
+  *VETO*) echo '{"structured_output": {"stop": "takes another design", "findings": []}}' ;;
+  *FIXME*) echo '{"structured_output": {"stop": "", "findings": [{"text": "still wrong", "basis": "task"}]}}' ;;
+  *) echo '{"structured_output": {"stop": "", "findings": []}}' ;;
+  esac ;;"#;
+
+fn outcome(refs: &[&str]) -> String {
+    let refs: Vec<_> = refs
+        .iter()
+        .map(|claim| json!({"claim": claim, "path": TEST_FILE, "symbol": "other_test"}))
+        .collect();
+    json!({"structured_output": {"outcome": "done", "reason": "", "refs": refs}}).to_string()
+}
+
+/// A vibe run planned as `tasks` with `settled_by`, re-planned with `replanned`, and built by
+/// `BUILD_BY_TASK`.
+fn replanning(tasks: &[&str], settled_by: serde_json::Value, replanned: serde_json::Value) -> Repo {
+    let repo = vibing(&[]);
+    let tasks: Vec<_> = tasks.iter().map(|t| json!({"text": t})).collect();
+    repo.write(
+        "planned.json",
+        &wrapped(json!({"claims": [], "tasks": tasks, "settled_by": settled_by})),
+    );
+    repo.write("replanned.json", &wrapped(replanned));
+    repo.write(
+        "blocked.json",
+        &json!({"structured_output": {"outcome": "blocked", "reason": "too big", "refs": []}})
+            .to_string(),
+    );
+    repo.write("ref-1-2.json", &outcome(&["AC-1", "AC-2"]));
+    repo.write("ref-1.json", &outcome(&["AC-1"]));
+    repo.write("ref-2.json", &outcome(&["AC-2"]));
+    repo.write("chore.json", &outcome(&[]));
+    repo.write(
+        "runner.sh",
+        &DISPATCH.replace(
+            r#""You are carrying out"*) cat built.json ;;"#,
+            BUILD_BY_TASK,
+        ),
+    );
+    repo.write(
+        ".gitignore",
+        "calls.log\nprompt.txt\nlazyspec.log\nlast.json\n",
+    );
+    repo.commit("plan for a re-plan");
+    repo
+}
+
+fn tasks_md(repo: &Repo) -> String {
+    repo.read(&format!("{DIR}/tasks.md"))
+}
+
+#[test]
+fn a_stopped_task_is_reset_replaced_by_replanned_tasks_and_build_continues() {
+    for marker in ["STOP", "VETO", "FIXME"] {
+        let repo = replanning(
+            &["Lay groundwork", &format!("{marker} here"), "Tidy up"],
+            json!({"AC-1": 1, "AC-2": 2}),
+            json!({
+                "tasks": [{"text": "Build the first half"}, {"text": "Build the second half"}],
+                "settled_by": {"AC-2": 1},
+            }),
+        );
+
+        let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+        assert_eq!(run.code, 0, "{marker}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            calls(&repo),
+            ["draft", "review", "plan", "replan"],
+            "{marker}"
+        );
+        assert!(
+            tasks_md(&repo).ends_with(
+                "\
+- [x] T1 Lay groundwork (settles AC-1)
+- [x] T4 Build the first half (settles AC-2)
+- [x] T5 Build the second half (chore)
+- [x] T3 Tidy up (chore)
+"
+            ),
+            "{marker}: {}",
+            tasks_md(&repo)
+        );
+        assert_eq!(repo.read("src/lib.rs"), "pub fn a() {}\n", "{marker}");
+        assert!(!repo.path("scratch/new.txt").exists(), "{marker}");
+        assert!(
+            subjects(&repo).contains(&"DELTA-001: re-plan T2".to_string()),
+            "{marker}: {:?}",
+            subjects(&repo)
+        );
+        assert_eq!(repo.git(&["status", "--porcelain"]), "", "{marker}");
+    }
+    let repo = replanning(
+        &["FIXME here"],
+        json!({"AC-1": 1, "AC-2": 1}),
+        json!({"tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1, "AC-2": 1}}),
+    );
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("stopped. T1 left unticked after 1 fix round; working tree kept.\nre-planned T1 as T2\n"),
+        "FIXME runs out of its review rounds: {}",
+        run.stdout
+    );
+}
+
+#[test]
+fn replanned_tasks_take_ids_after_the_highest_and_ticked_tasks_are_unchanged() {
+    let repo = replanning(
+        &["Lay groundwork", "STOP here", "Tidy up"],
+        json!({"AC-1": 1, "AC-2": 2}),
+        json!({"tasks": [{"text": "Build it"}], "settled_by": {"AC-2": 1}}),
+    );
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let replan = repo.git(&["log", "--format=%H", "--grep=re-plan T2"]);
+    let before = repo.git(&["show", &format!("{replan}~1:{DIR}/tasks.md")]);
+    let after = repo.git(&["show", &format!("{replan}:{DIR}/tasks.md")]);
+    assert!(
+        before.contains("- [x] T1 Lay groundwork (settles AC-1)\n- [ ] T2 STOP here (settles AC-2)\n- [ ] T3 Tidy up (chore)"),
+        "{before}"
+    );
+    assert!(
+        after.contains("- [x] T1 Lay groundwork (settles AC-1)\n- [ ] T4 Build it (settles AC-2)\n- [ ] T3 Tidy up (chore)"),
+        "{after}"
+    );
+}
+
+#[test]
+fn a_replan_settles_exactly_the_stopped_tasks_claims_and_proposes_none() {
+    let repo = replanning(
+        &["Lay groundwork", "STOP here"],
+        json!({"AC-1": 1, "AC-2": 2}),
+        json!({
+            "tasks": [{"text": "Build it"}],
+            "settled_by": {"AC-1": 1, "AC-2": 1},
+        }),
+    );
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr
+            .contains("must settle exactly AC-2, not AC-1, AC-2"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        tasks_md(&repo).ends_with(
+            "- [x] T1 Lay groundwork (settles AC-1)\n- [ ] T2 STOP here (settles AC-2)\n"
+        ),
+        "{}",
+        tasks_md(&repo)
+    );
+    let claims = repo.read(&format!("{DIR}/claims.md"));
+    assert!(
+        claims.contains("[AC-2]") && !claims.contains("[AC-3]"),
+        "{claims}"
+    );
+
+    let repo = replanning(
+        &["Lay groundwork", "STOP here"],
+        json!({"AC-1": 1, "AC-2": 2}),
+        json!({
+            "tasks": [{"text": "Build it"}],
+            "settled_by": {"AC-2": 1},
+            "claims": [{"text": "A thing can be removed.", "task": 1}],
+        }),
+    );
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        tasks_md(&repo).ends_with("- [ ] T2 STOP here (settles AC-2)\n"),
+        "{}",
+        tasks_md(&repo)
+    );
+    assert!(!repo
+        .read(&format!("{DIR}/claims.md"))
+        .contains("A thing can be removed."));
+}
+
+#[test]
+fn vibe_build_stops_when_a_task_at_depth_vibe_repairs_stops() {
+    let repo = replanning(
+        &["Build it", "STOP tidying"],
+        json!({"AC-1": 1, "AC-2": 1}),
+        json!({"tasks": [{"text": "STOP tidying again"}], "settled_by": {}}),
+    );
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "chores: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        ["draft", "review", "plan", "replan", "replan", "replan"],
+        "a chore line is re-planned at most 3 times"
+    );
+    assert!(
+        tasks_md(&repo).ends_with(
+            "- [x] T1 Build it (settles AC-1, AC-2)\n- [ ] T5 STOP tidying again (chore)\n"
+        ),
+        "{}",
+        tasks_md(&repo)
+    );
+    assert!(
+        run.stdout
+            .ends_with("next: lemma build DELTA-001 --resume\n"),
+        "{}",
+        run.stdout
+    );
+
+    let repo = replanning(
+        &["STOP building"],
+        json!({"AC-1": 1, "AC-2": 1}),
+        json!({"tasks": [{"text": "STOP building again"}], "settled_by": {"AC-1": 1, "AC-2": 1}}),
+    );
+    let toml = repo.read("lemma.toml");
+    repo.write("lemma.toml", &format!("{toml}vibe_repairs = 1\n"));
+    repo.commit("one repair");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "one repair: {}{}", run.stdout, run.stderr);
+    assert_eq!(calls(&repo), ["draft", "review", "plan", "replan"]);
+    assert!(
+        tasks_md(&repo).ends_with("- [ ] T2 STOP building again (settles AC-1, AC-2)\n"),
+        "{}",
+        tasks_md(&repo)
+    );
+}
+
+#[test]
+fn vibe_stops_on_an_environment_error_without_a_repair_attempt() {
+    let repo = replanning(
+        &["Build it"],
+        json!({"AC-1": 1, "AC-2": 1}),
+        json!({"tasks": [{"text": "Build it again"}], "settled_by": {"AC-1": 1, "AC-2": 1}}),
+    );
+    let toml = repo.read("lemma.toml");
+    let check = repo.path("missing-check").display().to_string();
+    repo.write("lemma.toml", &format!("{toml}check = \"{check}\"\n"));
+    repo.commit("check cannot start");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("T1 stopped on an environment error"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(calls(&repo), ["draft", "review", "plan"]);
+    assert!(
+        tasks_md(&repo).ends_with("- [ ] T1 Build it (settles AC-1, AC-2)\n"),
+        "{}",
+        tasks_md(&repo)
+    );
+    assert!(
+        run.stdout
+            .ends_with("next: lemma build DELTA-001 --resume\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_replan_with_no_tasks_never_drops_the_stopped_task() {
+    for (planned, settled_by, replan_settles, line) in [
+        (
+            vec!["Build it", "STOP tidying"],
+            json!({"AC-1": 1, "AC-2": 1}),
+            json!({}),
+            "- [ ] T2 STOP tidying (chore)\n",
+        ),
+        (
+            vec!["STOP building"],
+            json!({"AC-1": 1, "AC-2": 1}),
+            json!({"AC-1": 1, "AC-2": 1}),
+            "- [ ] T1 STOP building (settles AC-1, AC-2)\n",
+        ),
+    ] {
+        let repo = replanning(
+            &planned,
+            settled_by,
+            json!({"tasks": [], "settled_by": replan_settles}),
+        );
+
+        let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+        assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+        assert!(run.stderr.contains("has no tasks"), "{}", run.stderr);
+        assert!(tasks_md(&repo).ends_with(line), "{}", tasks_md(&repo));
+    }
 }
