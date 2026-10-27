@@ -172,7 +172,18 @@ impl Repo {
     }
 
     pub fn run(&self, args: &[&str], stdin: &str) -> Run {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_lemma"))
+        self.run_piped(Command::new(env!("CARGO_BIN_EXE_lemma")), args, stdin)
+    }
+
+    /// Runs lemma piped with `NO_COLOR` unset, so only the non-terminal gate keeps colour out.
+    pub fn run_with_colour_allowed(&self, args: &[&str], stdin: &str) -> Run {
+        let mut lemma = Command::new(env!("CARGO_BIN_EXE_lemma"));
+        lemma.env_remove("NO_COLOR");
+        self.run_piped(lemma, args, stdin)
+    }
+
+    fn run_piped(&self, mut lemma: Command, args: &[&str], stdin: &str) -> Run {
+        let mut child = lemma
             .args(args)
             .env("PATH", path_with_prepended(self.fake_bin.path()))
             .current_dir(self.root())

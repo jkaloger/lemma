@@ -123,3 +123,23 @@ fn one_task_keeps_one_spinner_style() {
         );
     }
 }
+
+#[test]
+fn piped_build_output_has_no_colour_or_spinner_frames() {
+    let repo = two_task_build();
+    let run = repo.run_with_colour_allowed(&["build", "DELTA-001"], "");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("all tasks complete"), "{}", run.stdout);
+    for out in [&run.stdout, &run.stderr] {
+        assert!(!out.contains('\x1b'), "{out:?}");
+        assert!(!out.contains('\r'), "{out:?}");
+        assert!(frames_by_task(out).is_empty(), "{out}");
+        let glyphs: Vec<&str> = STYLES
+            .iter()
+            .flat_map(|s| s.frames)
+            .filter(|f| !f.is_ascii() && out.contains(**f))
+            .copied()
+            .collect();
+        assert!(glyphs.is_empty(), "{glyphs:?} in {out}");
+    }
+}
