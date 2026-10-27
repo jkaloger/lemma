@@ -10,3 +10,4 @@
 - [AC-6] When stdout is a terminal and `NO_COLOR` is set, build output carries no colour escape codes and the watch line still shows spinner frames.
   @ref crates/lemma/tests/live.rs#no_color_on_a_terminal_drops_colour_and_keeps_the_spinner
 - [AC-7] Spinner choice and colour do not change the text of any diagnostic line or the exit code of `lemma build`.
+  @ref crates/lemma/tests/live.rs#spinner_and_colour_leave_diagnostics_and_exit_code_unchanged

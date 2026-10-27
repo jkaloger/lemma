@@ -208,3 +208,39 @@ fn no_color_on_a_terminal_drops_colour_and_keeps_the_spinner() {
         );
     }
 }
+
+/// Diagnostic lines (`path:line: severity: message`) with colour stripped.
+fn diagnostics(out: &str) -> Vec<String> {
+    let line = regex::Regex::new(r"\S+:\d+: (?:error|warning): .*").unwrap();
+    let out = console::strip_ansi_codes(out);
+    out.split(['\r', '\n'])
+        .filter_map(|l| line.find(l).map(|m| m.as_str().trim_end().to_string()))
+        .collect()
+}
+
+#[test]
+fn spinner_and_colour_leave_diagnostics_and_exit_code_unchanged() {
+    let failing = || {
+        let repo = two_task_build();
+        repo.write(
+            "replies/T1.json",
+            &json!({ "structured_output": { "outcome": "done", "reason": "", "refs": [
+                { "claim": "AC-1", "path": "tests/store_test.rs", "symbol": "no_such_test" }
+            ]}})
+            .to_string(),
+        );
+        repo
+    };
+    let piped = failing().run_with_colour_allowed(&["build", "DELTA-001"], "");
+    let live = failing().run_on_terminal(&["build", "DELTA-001"]);
+    let no_color = failing().run_on_terminal_with(&["build", "DELTA-001"], Some("1"));
+
+    let plain = diagnostics(&format!("{}{}", piped.stdout, piped.stderr));
+    assert!(!plain.is_empty(), "{}{}", piped.stdout, piped.stderr);
+    assert_ne!(piped.code, 0);
+    assert!(live.stdout.contains('\x1b'), "{:?}", live.stdout);
+    for run in [&live, &no_color] {
+        assert_eq!(run.code, piped.code, "{}", run.stdout);
+        assert_eq!(diagnostics(&run.stdout), plain, "{:?}", run.stdout);
+    }
+}
