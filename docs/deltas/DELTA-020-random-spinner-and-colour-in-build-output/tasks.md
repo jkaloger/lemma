@@ -5,4 +5,4 @@
 - [x] T4 Colour task id, status and ref lines in distinct colours in live mode (settles AC-4)
 - [x] T5 Honour NO_COLOR by dropping colour while keeping spinner animation (settles AC-6)
 - [x] T6 Keep diagnostic text and exit code unchanged under spinner and colour (settles AC-7)
-- [ ] T7 Draw each task's spinner style afresh, independent of the previous pick (settles AC-3)
+- [x] T7 Draw each task's spinner style afresh, independent of the previous pick (settles AC-3)
