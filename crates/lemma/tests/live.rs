@@ -183,3 +183,28 @@ fn live_build_colours_task_id_status_and_ref_lines_distinctly() {
         "red stop not in {out:?}"
     );
 }
+
+#[test]
+fn no_color_on_a_terminal_drops_colour_and_keeps_the_spinner() {
+    let repo = two_task_build();
+    let run = repo.run_on_terminal_with(&["build", "DELTA-001"], Some("1"));
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(run.stdout.contains("all tasks complete"), "{}", run.stdout);
+    let colour = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    let codes: Vec<&str> = colour.find_iter(&run.stdout).map(|m| m.as_str()).collect();
+    assert!(codes.is_empty(), "{codes:?} in {:?}", run.stdout);
+    let frames = frames_by_task(&run.stdout);
+    assert_eq!(
+        frames.keys().collect::<Vec<_>>(),
+        ["T1", "T2"],
+        "{}",
+        run.stdout
+    );
+    for (task, frames) in frames {
+        assert!(frames.len() > 1, "{task}: {frames:?}");
+        assert!(
+            frames.iter().all(|f| style_of(f).is_some()),
+            "{task}: {frames:?}"
+        );
+    }
+}

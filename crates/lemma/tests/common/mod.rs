@@ -208,6 +208,11 @@ impl Repo {
 
     /// Runs lemma with stdout and stderr on one pseudo-terminal; `stdout` holds both.
     pub fn run_on_terminal(&self, args: &[&str]) -> Run {
+        self.run_on_terminal_with(args, None)
+    }
+
+    /// As `run_on_terminal`, with `NO_COLOR` set to `no_color` when given.
+    pub fn run_on_terminal_with(&self, args: &[&str], no_color: Option<&str>) -> Run {
         let lemma = env!("CARGO_BIN_EXE_lemma");
         let mut script = Command::new("script");
         if cfg!(target_os = "macos") {
@@ -219,9 +224,13 @@ impl Repo {
                 .collect();
             script.args(["-qec", &words.join(" "), "/dev/null"]);
         }
-        let out = script
+        script
             .env("PATH", path_with_prepended(self.fake_bin.path()))
-            .env_remove("NO_COLOR")
+            .env_remove("NO_COLOR");
+        if let Some(value) = no_color {
+            script.env("NO_COLOR", value);
+        }
+        let out = script
             .current_dir(self.root())
             .stdin(Stdio::null())
             .output()
