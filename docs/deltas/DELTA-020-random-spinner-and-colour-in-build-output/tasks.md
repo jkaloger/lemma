@@ -1,5 +1,5 @@
 <!-- Written by `lemma review` once the review is clean; tasks you add by hand are kept. Each task settles claims or is a chore: `- [ ] T1 <text> (settles AC-1, AC-2)` or `- [ ] T2 <text> (chore)`. -->
-- [ ] T1 Add spinner style table with disjoint frames and injectable random pick (chore)
+- [x] T1 Add spinner style table with disjoint frames and injectable random pick (chore)
 - [ ] T2 Show one randomly picked spinner style per task in live watch line (settles AC-1, AC-2)
 - [ ] T3 Keep non-terminal build output free of colour codes and spinner frames (settles AC-5)
 - [ ] T4 Colour task id, status and ref lines in distinct colours in live mode (settles AC-4)
