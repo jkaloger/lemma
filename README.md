@@ -10,7 +10,7 @@ Stepping stones for LLM-assisted development.
 > [!NOTE]
 > In mathematics and other fields, a **lemma** is a generally minor proven proposition used to prove a larger statement. It is also known as a “helping theorem” or an “auxiliary theorem”. [Source: Wikipedia, “Lemma (mathematics)”](<https://en.wikipedia.org/wiki/Lemma_(mathematics)>).
 
-Lemma is my opinionated approach to using LLMs in software engineering. It prioritises small, verifiable changes over larger orchestration/software factory patterns.
+Lemma is a utility collection I use when working with LLMs in software development. It is personal tooling: built for my own workflow, it prioritises small, verifiable changes over orchestration and software-factory patterns.
 
 ```sh
 lemma [command] [options]
@@ -36,23 +36,4 @@ Lemma has three parts
 - A binary `lemma` that runs linting, reviews, planning and builds; using both LLMs and deterministic functions
 
 Lemma checks change coverage, document shape and the links between claims and tests. It does not run tests or decide whether a test proves a claim. The test runner and CI report test results.
-
-> [!WARNING]
-> `lemma` is not a vibe coding tool, and as such requires careful consideration, planning and time to use.
-> The result is much more laborious than spec driven/software factory/orchestration/vibe coding patterns, but I think results in better quality engineering outcomes.
-
-## Workflow
-
-![Lemma workflow](docs/assets/workflow.png)
-
-A **delta** is the unit of change. You write it: the intent, what is out of scope, the design, and the claims that say how you will know it works. `lemma review` annotates the draft with findings; you resolve them and review again until none remain. `lemma plan` assigns claim ids, proposes missing behaviour and breaks the delta into tasks; you accept or reject each proposal. `lemma build` works through the tasks one at a time: a fresh runner attempts each task, Lemma checks the result and gets a task review, then commits it. When every task is done, you mark the delta complete with `lazyspec update <id> --status complete`.
-
-You run every step. Each command ends with a `next:` line naming the next one.
-
-## Vibe
-
-`lemma vibe -m "<prompt>" [--rounds <n>]` runs the whole loop unattended from one sentence: an agent drafts a new delta, review and revise run for up to `--rounds` review calls (default 3), plan runs, `[proposed]` claims are accepted, and build runs to the last task.
-
-> [!WARNING]
-> Vibe trades the human gates for speed. No human writes the delta, resolves review findings or accepts proposed claims, and findings left after the last review round are stripped with a warning ([DECISION-015](docs/decisions/DECISION-015-vibe-opts-out-of-human-authorship-per-run.md)). Every task still passes the check command and the task review gate before it commits. Vibe never completes the delta; it ends with `next: lazyspec update <id> --status complete`. It refuses to start on a dirty tree.
 
