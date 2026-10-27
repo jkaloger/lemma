@@ -1,12 +1,13 @@
 ---
 title: Random spinner and colour in build output
 type: delta
-status: draft
+status: in-progress
 author: unknown
 date: 2026-10-23
 tags: []
 related:
 - changes: SPEC-002
+reviewed: 0bc279ca2ae3fc347c9ecc9dab7e2829e61e88f8
 ---
 
 ## Intent
