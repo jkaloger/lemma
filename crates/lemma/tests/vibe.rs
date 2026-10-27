@@ -1150,3 +1150,94 @@ fn a_replan_with_no_tasks_never_drops_the_stopped_task() {
         assert!(tasks_md(&repo).ends_with(line), "{}", tasks_md(&repo));
     }
 }
+
+/// Re-plan call n saves its prompt to `replan-n.prompt` and replies `replanned-n.json`, or
+/// `replanned.json` when there is none.
+fn replanning_by_call(replies: &[serde_json::Value], last: serde_json::Value) -> Repo {
+    let repo = replanning(&["STOP building"], json!({"AC-1": 1, "AC-2": 1}), last);
+    for (n, reply) in replies.iter().enumerate() {
+        repo.write(
+            &format!("replanned-{}.json", n + 1),
+            &wrapped(reply.clone()),
+        );
+    }
+    let runner = repo.read("runner.sh").replace(
+        r#""You are re-planning"*) echo replan >> calls.log; cat replanned.json ;;"#,
+        r#""You are re-planning"*)
+  echo replan >> calls.log
+  n=$(grep -c '^replan$' calls.log)
+  cp prompt.txt replan-$n.prompt
+  if [ -e replanned-$n.json ]; then cat replanned-$n.json; else cat replanned.json; fi ;;"#,
+    );
+    repo.write("runner.sh", &runner);
+    let ignore = repo.read(".gitignore");
+    repo.write(".gitignore", &format!("{ignore}*.prompt\n"));
+    repo.commit("re-plan replies by call");
+    repo
+}
+
+#[test]
+fn an_invalid_replan_reply_is_asked_again_with_the_error_up_to_vibe_repairs() {
+    let invalid = json!({"tasks": [{"text": "STOP again"}], "settled_by": {"AC-1": 1}});
+    let repo = replanning_by_call(
+        std::slice::from_ref(&invalid),
+        json!({"tasks": [{"text": "Build it"}], "settled_by": {"AC-1": 1, "AC-2": 1}}),
+    );
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 0, "recovers: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        ["draft", "review", "plan", "replan", "replan"]
+    );
+    let error = "must settle exactly AC-1, AC-2, not AC-1";
+    assert!(!repo.read("replan-1.prompt").contains(error));
+    assert!(
+        repo.read("replan-2.prompt").contains(&format!(
+            "Your last reply was rejected: re-plan of T1 {error}"
+        )),
+        "{}",
+        repo.read("replan-2.prompt")
+    );
+    assert!(
+        tasks_md(&repo).ends_with("- [x] T2 Build it (settles AC-1, AC-2)\n"),
+        "{}",
+        tasks_md(&repo)
+    );
+
+    let repo = replanning_by_call(&[], invalid.clone());
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "default cap: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        ["draft", "review", "plan", "replan", "replan", "replan", "replan"],
+        "one ask and 3 re-asks"
+    );
+    assert!(run.stderr.contains(error), "{}", run.stderr);
+    assert!(
+        run.stdout.ends_with("next: lemma build DELTA-001\n"),
+        "vibe stops at build: {}",
+        run.stdout
+    );
+    assert!(
+        tasks_md(&repo).ends_with("- [ ] T1 STOP building (settles AC-1, AC-2)\n"),
+        "{}",
+        tasks_md(&repo)
+    );
+
+    let repo = replanning_by_call(&[], invalid);
+    let toml = repo.read("lemma.toml");
+    repo.write("lemma.toml", &format!("{toml}vibe_repairs = 1\n"));
+    repo.commit("one repair");
+
+    let run = repo.run(&["vibe", "-m", "add a thing"], "");
+
+    assert_eq!(run.code, 2, "one repair: {}{}", run.stdout, run.stderr);
+    assert_eq!(
+        calls(&repo),
+        ["draft", "review", "plan", "replan", "replan"]
+    );
+}

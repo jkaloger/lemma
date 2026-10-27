@@ -567,8 +567,27 @@ fn replan(
         .named(task)
         .ok_or(format!("{task} is not in {id} tasks.md"))?;
     let values = context::assemble(&store, root, &delta);
-    plan::replan(root, &delta, &values, config, stopped, &findings)
-        .map_err(plan::Error::message)?;
+    let mut repairs = 0;
+    let mut rejected = None;
+    loop {
+        match plan::replan(
+            root,
+            &delta,
+            &values,
+            config,
+            stopped,
+            &findings,
+            rejected.as_deref(),
+        ) {
+            Ok(_) => break,
+            Err(plan::Error::Failed(message)) => return Err(message),
+            Err(plan::Error::Rejected(message)) if repairs == config.vibe_repairs => {
+                return Err(message)
+            }
+            Err(plan::Error::Rejected(message)) => rejected = Some(message),
+        }
+        repairs += 1;
+    }
     let (_, delta) = build::load_delta(root, id)?;
     let replaced: Vec<String> = tasks::parse(delta.part_body(TASKS_PART))
         .tasks

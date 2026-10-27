@@ -605,6 +605,7 @@ fn findings_list(findings: &[Finding]) -> String {
 
 /// Asks the planner to replace one stopped task and writes its tasks in the stopped line's
 /// place; returns how many it wrote. Unlike `plan`, this runs on an in-progress delta.
+/// `rejected` is the error from the last attempt, shown to the planner.
 pub fn replan(
     root: &Path,
     delta: &Doc,
@@ -612,6 +613,7 @@ pub fn replan(
     config: &runner::Config,
     stopped: &Task,
     findings: &[Finding],
+    rejected: Option<&str>,
 ) -> Result<usize, Error> {
     let tasks_text = read(root, delta, TASKS_PART);
     let mut values = values.clone();
@@ -621,7 +623,12 @@ pub fn replan(
     );
     values.insert("findings", findings_list(findings));
     values.insert("tasks", tasks_text.clone());
-    let prompt = prompts::rendered(Prompt::Replan, root, &values)?;
+    let mut prompt = prompts::rendered(Prompt::Replan, root, &values)?;
+    if let Some(rejection) = rejected {
+        prompt.push_str(&format!(
+            "\n\nYour last reply was rejected: {rejection}. Reply again.\n"
+        ));
+    }
     let schema = schema::replan(&stopped.settles);
     let reply = runner::tracked(
         "re-plan",
@@ -718,6 +725,7 @@ mod tests {
                 &self.config,
                 stopped,
                 &findings,
+                None,
             )
         }
 

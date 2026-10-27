@@ -29,6 +29,7 @@
 - [AC-13] vibe stops on an environment error (runner or check command can't start) without a repair attempt.
   @ref crates/lemma/tests/vibe.rs#vibe_stops_on_an_environment_error_without_a_repair_attempt
 - [AC-14] An invalid re-plan reply is re-asked with the error, up to `vibe_repairs` times per re-plan of one task, and then vibe stops at build.
+  @ref crates/lemma/tests/vibe.rs#an_invalid_replan_reply_is_asked_again_with_the_error_up_to_vibe_repairs
 - [AC-15] A re-plan reply with no tasks is invalid, so a stopped task, chore or not, is never dropped from `tasks.md`.
   @ref crates/lemma/tests/vibe.rs#a_replan_with_no_tasks_never_drops_the_stopped_task
 - [AC-16] A runner or check command that can't start, or a failed git commit, makes `lemma build` return an error rather than a task stop, and the stop record still lets `--resume` pick it up.
